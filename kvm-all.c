@@ -2479,9 +2479,11 @@ static const TypeInfo kvm_accel_type = {
     .instance_size = sizeof(KVMState),
 };
 
+//注册kvm类型
 static void kvm_type_init(void)
 {
     type_register_static(&kvm_accel_type);
 }
 
+//我们将此函数定义为construct时自动载入
 type_init(kvm_type_init);

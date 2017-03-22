@@ -956,6 +956,7 @@ static int (* const net_client_init_fun[NET_CLIENT_DRIVER__MAX])(
 #endif
         [NET_CLIENT_DRIVER_HUBPORT]   = net_init_hubport,
 #ifdef CONFIG_VHOST_NET_USED
+		//针对vhost_user的初始化函数
         [NET_CLIENT_DRIVER_VHOST_USER] = net_init_vhost_user,
 #endif
 #ifdef CONFIG_L2TPV3
@@ -977,6 +978,7 @@ static int net_client_init1(const void *object, bool is_netdev, Error **errp)
 
         if (netdev->type == NET_CLIENT_DRIVER_DUMP ||
             netdev->type == NET_CLIENT_DRIVER_NIC ||
+			//依据netdev在类型，调用不同的网络设备初始化函数
             !net_client_init_fun[netdev->type]) {
             error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "type",
                        "a netdev backend type");
