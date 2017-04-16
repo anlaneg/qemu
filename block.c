@@ -218,6 +218,7 @@ void bdrv_get_full_backing_filename(BlockDriverState *bs, char *dest, size_t sz,
                                                  dest, sz, errp);
 }
 
+//注册块驱动，块驱动将被加入一bdrv_drivers链上
 void bdrv_register(BlockDriver *bdrv)
 {
     QLIST_INSERT_HEAD(&bdrv_drivers, bdrv, list);
@@ -244,6 +245,7 @@ BlockDriverState *bdrv_new(void)
     return bs;
 }
 
+//在bdrv_drivers中查找format_name名称的blockDriver
 static BlockDriver *bdrv_do_find_format(const char *format_name)
 {
     BlockDriver *drv1;
@@ -257,17 +259,21 @@ static BlockDriver *bdrv_do_find_format(const char *format_name)
     return NULL;
 }
 
+//查找名称为format_name的块设备
 BlockDriver *bdrv_find_format(const char *format_name)
 {
     BlockDriver *drv1;
     int i;
 
+    //查找format_name指定的格式名称，例如'raw'类型
     drv1 = bdrv_do_find_format(format_name);
     if (drv1) {
         return drv1;
     }
 
     /* The driver isn't registered, maybe we need to load a module */
+    //block_driver_module是一个自动生成的数组，如果我们要查找到format在此数且内，
+    //将尝试加载此块设备
     for (i = 0; i < (int)ARRAY_SIZE(block_driver_modules); ++i) {
         if (!strcmp(block_driver_modules[i].format_name, format_name)) {
             block_module_load_one(block_driver_modules[i].library_name);
@@ -275,6 +281,7 @@ BlockDriver *bdrv_find_format(const char *format_name)
         }
     }
 
+    //加载后，重新查找
     return bdrv_do_find_format(format_name);
 }
 
@@ -474,6 +481,7 @@ static BlockDriver *find_hdev_driver(const char *filename)
     BlockDriver *drv = NULL, *d;
 
     QLIST_FOREACH(d, &bdrv_drivers, list) {
+    		//只有有bdrv_probe_device的driver才有被选择的可能
         if (d->bdrv_probe_device) {
             score = d->bdrv_probe_device(filename);
             if (score > score_max) {
@@ -518,6 +526,7 @@ BlockDriver *bdrv_find_protocol(const char *filename,
      * Thanks to the brain-dead persistent naming schemes on udev-
      * based Linux systems those actually are quite common.
      */
+    //找此文件对应的驱动
     drv1 = find_hdev_driver(filename);
     if (drv1) {
         return drv1;
@@ -2807,6 +2816,7 @@ void bdrv_iterate_format(void (*it)(void *opaque, const char *name),
     int i;
     const char **formats = NULL;
 
+    //针对bdrv_drivers收集名称
     QLIST_FOREACH(drv, &bdrv_drivers, list) {
         if (drv->format_name) {
             bool found = false;
@@ -2816,12 +2826,14 @@ void bdrv_iterate_format(void (*it)(void *opaque, const char *name),
             }
 
             if (!found) {
+            		//如果在formats中没有找到format_name,则存放入formats中
                 formats = g_renew(const char *, formats, count + 1);
                 formats[count++] = drv->format_name;
             }
         }
     }
 
+    //针对block_driver_modules收集名称
     for (i = 0; i < (int)ARRAY_SIZE(block_driver_modules); i++) {
         const char *format_name = block_driver_modules[i].format_name;
 
@@ -2842,6 +2854,7 @@ void bdrv_iterate_format(void (*it)(void *opaque, const char *name),
 
     qsort(formats, count, sizeof(formats[0]), qsort_strcmp);
 
+    //针对每个名称，进行遍历
     for (i = 0; i < count; i++) {
         it(opaque, formats[i]);
     }
@@ -3211,6 +3224,7 @@ int bdrv_get_backing_file_depth(BlockDriverState *bs)
     return 1 + bdrv_get_backing_file_depth(bs->backing->bs);
 }
 
+//调用MODULE_INIT_BLOCK类型的初始化
 void bdrv_init(void)
 {
     module_call_init(MODULE_INIT_BLOCK);
@@ -3497,6 +3511,7 @@ bool bdrv_op_blocker_is_empty(BlockDriverState *bs)
     return true;
 }
 
+//filename是要创建的文件名称，mft是文件对应的格式
 void bdrv_img_create(const char *filename, const char *fmt,
                      const char *base_filename, const char *base_fmt,
                      char *options, uint64_t img_size, int flags,
@@ -3511,8 +3526,10 @@ void bdrv_img_create(const char *filename, const char *fmt,
     int ret = 0;
 
     /* Find driver and parse its options */
+    //通过格式找驱动
     drv = bdrv_find_format(fmt);
     if (!drv) {
+    		//找不到driver,失败
         error_setg(errp, "Unknown file format '%s'", fmt);
         return;
     }
@@ -3522,6 +3539,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
         return;
     }
 
+    //如果驱动没有create操作，则报错
     if (!drv->create_opts) {
         error_setg(errp, "Format driver '%s' does not support image creation",
                    drv->format_name);

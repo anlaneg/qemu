@@ -127,7 +127,7 @@ void loc_set_file(const char *fname, int lno)
     }
 }
 
-static const char *progname;
+static const char *progname;//不含路径符号的程序名称
 
 /*
  * Set the program name for error_print_loc().

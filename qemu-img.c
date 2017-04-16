@@ -43,12 +43,13 @@
 #include "trace/control.h"
 #include <getopt.h>
 
+//qemu-img版本条
 #define QEMU_IMG_VERSION "qemu-img version " QEMU_VERSION QEMU_PKGVERSION \
                           "\n" QEMU_COPYRIGHT "\n"
 
 typedef struct img_cmd_t {
-    const char *name;
-    int (*handler)(int argc, char **argv);
+    const char *name;//命令名
+    int (*handler)(int argc, char **argv);//命令处理函数
 } img_cmd_t;
 
 enum {
@@ -103,7 +104,7 @@ static void QEMU_NORETURN help(void)
            "\n"
            "Command syntax:\n"
 #define DEF(option, callback, arg_string)        \
-           "  " arg_string "\n"
+           "  " arg_string "\n" //显示命令参数说明
 #include "qemu-img-cmds.h"
 #undef DEF
 #undef GEN_DOCS
@@ -368,6 +369,7 @@ static int add_old_style_options(const char *fmt, QemuOpts *opts,
     return 0;
 }
 
+//qemu-img create命令执行
 static int img_create(int argc, char **argv)
 {
     int c;
@@ -394,7 +396,7 @@ static int img_create(int argc, char **argv)
         switch(c) {
         case '?':
         case 'h':
-            help();
+            help();//帮助信息
             break;
         case 'F':
             base_fmt = optarg;
@@ -481,6 +483,7 @@ static int img_create(int argc, char **argv)
         error_exit("Unexpected argument: %s", argv[optind]);
     }
 
+    //参数准备齐全了，这里开始处理
     bdrv_img_create(filename, fmt, base_filename, base_fmt,
                     options, img_size, 0, &local_err, quiet);
     if (local_err) {
@@ -4149,9 +4152,9 @@ out:
 
 
 static const img_cmd_t img_cmds[] = {
-#define DEF(option, callback, arg_string)        \
+#define DEF(option, callback, arg_string)        \
     { option, callback },
-#include "qemu-img-cmds.h"
+#include "qemu-img-cmds.h" //取出各option及其回调函数
 #undef DEF
 #undef GEN_DOCS
     { NULL, NULL, },
@@ -4172,7 +4175,7 @@ int main(int argc, char **argv)
     };
 
 #ifdef CONFIG_POSIX
-    signal(SIGPIPE, SIG_IGN);
+    signal(SIGPIPE, SIG_IGN);//忽略pipe信号（当服务器端关闭时仍写，将触发）
 #endif
 
     module_call_init(MODULE_INIT_TRACE);
@@ -4211,9 +4214,10 @@ int main(int argc, char **argv)
         }
     }
 
-    cmdname = argv[optind];
+    cmdname = argv[optind];//取出命令名称
 
     /* reset getopt_long scanning */
+    //调整命令对应的参数个数，及参数值
     argc -= optind;
     if (argc < 1) {
         return 0;
@@ -4230,6 +4234,7 @@ int main(int argc, char **argv)
     /* find the command */
     for (cmd = img_cmds; cmd->name != NULL; cmd++) {
         if (!strcmp(cmdname, cmd->name)) {
+        	    //找出命令，执行回调，处理命令
             return cmd->handler(argc, argv);
         }
     }

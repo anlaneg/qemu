@@ -1040,6 +1040,7 @@ static QemuOptsList qcow_create_opts = {
     }
 };
 
+//qcow块设备格式
 static BlockDriver bdrv_qcow = {
     .format_name	= "qcow",
     .instance_size	= sizeof(BDRVQcowState),

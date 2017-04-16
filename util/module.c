@@ -34,6 +34,7 @@ static ModuleTypeList init_type_list[MODULE_INIT_MAX];
 
 static ModuleTypeList dso_init_list;
 
+//初始化
 static void init_lists(void)
 {
     static int inited;
@@ -52,7 +53,7 @@ static void init_lists(void)
     inited = 1;
 }
 
-
+//通过type查找初始化函数列表
 static ModuleTypeList *find_type(module_init_type type)
 {
     init_lists();
@@ -60,6 +61,7 @@ static ModuleTypeList *find_type(module_init_type type)
     return &init_type_list[type];
 }
 
+//注册模块回调
 void register_module_init(void (*fn)(void), module_init_type type)
 {
     ModuleEntry *e;
@@ -74,6 +76,7 @@ void register_module_init(void (*fn)(void), module_init_type type)
     QTAILQ_INSERT_TAIL(l, e, node);
 }
 
+//dso模块初始化注册函数
 void register_dso_module_init(void (*fn)(void), module_init_type type)
 {
     ModuleEntry *e;
@@ -87,6 +90,7 @@ void register_dso_module_init(void (*fn)(void), module_init_type type)
     QTAILQ_INSERT_TAIL(&dso_init_list, e, node);
 }
 
+//调用指定type的所有init函数
 void module_call_init(module_init_type type)
 {
     ModuleTypeList *l;

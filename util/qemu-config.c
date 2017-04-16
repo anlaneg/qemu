@@ -8,6 +8,7 @@
 static QemuOptsList *vm_config_groups[48];
 static QemuOptsList *drive_config_groups[5];
 
+//在给出的lists数组中查找名称为group的lists,找不到返回NULL
 static QemuOptsList *find_list(QemuOptsList **lists, const char *group,
                                Error **errp)
 {
@@ -23,6 +24,7 @@ static QemuOptsList *find_list(QemuOptsList **lists, const char *group,
     return lists[i];
 }
 
+//查找opt
 QemuOptsList *qemu_find_opts(const char *group)
 {
     QemuOptsList *ret;
@@ -294,6 +296,7 @@ void qemu_add_opts(QemuOptsList *list)
     entries = ARRAY_SIZE(vm_config_groups);
     entries--; /* keep list NULL terminated */
     for (i = 0; i < entries; i++) {
+    		//找一个空闲的位置，初始化此位置的值为list
         if (vm_config_groups[i] == NULL) {
             vm_config_groups[i] = list;
             return;

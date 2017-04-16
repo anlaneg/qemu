@@ -19,30 +19,34 @@
 
 struct Error
 {
-    char *msg;
-    ErrorClass err_class;
-    const char *src, *func;
-    int line;
+    char *msg;//错误消息
+    ErrorClass err_class;//错误类型
+    const char *src, *func;//错误发生时文件名称，错误发生时函数名称
+    int line;//错误发生时行号
     GString *hint;
 };
 
 Error *error_abort;
 Error *error_fatal;
 
+//对两类错误的处理
 static void error_handle_fatal(Error **errp, Error *err)
 {
     if (errp == &error_abort) {
+    		//如果传入的errp是error_abort，特别处理
         fprintf(stderr, "Unexpected error in %s() at %s:%d:\n",
                 err->func, err->src, err->line);
         error_report_err(err);
         abort();
     }
     if (errp == &error_fatal) {
+    		//传入的地址为error_fatal时，特别处理为exit
         error_report_err(err);
         exit(1);
     }
 }
 
+//构造error
 static void error_setv(Error **errp,
                        const char *src, int line, const char *func,
                        ErrorClass err_class, const char *fmt, va_list ap,
@@ -52,12 +56,13 @@ static void error_setv(Error **errp,
     int saved_errno = errno;
 
     if (errp == NULL) {
-        return;
+        return;//如果不收集errp，则直接返回
     }
-    assert(*errp == NULL);
+    assert(*errp == NULL);//errp不能指向数据
 
-    err = g_malloc0(sizeof(*err));
-    err->msg = g_strdup_vprintf(fmt, ap);
+    err = g_malloc0(sizeof(*err));//新建error
+    err->msg = g_strdup_vprintf(fmt, ap);//格式化错误信息
+    //考虑添加后缀
     if (suffix) {
         char *msg = err->msg;
         err->msg = g_strdup_printf("%s: %s", msg, suffix);
@@ -71,7 +76,7 @@ static void error_setv(Error **errp,
     error_handle_fatal(errp, err);
     *errp = err;
 
-    errno = saved_errno;
+    errno = saved_errno;//还原errno
 }
 
 void error_set_internal(Error **errp,
@@ -85,6 +90,8 @@ void error_set_internal(Error **errp,
     va_end(ap);
 }
 
+//设置错误信息，errp为出参，是设置的目的地，src是错误来源文件名称，line是错误对应的行号
+//func是出错函数名称，fmt是格式串，...是格式串的参数
 void error_setg_internal(Error **errp,
                          const char *src, int line, const char *func,
                          const char *fmt, ...)
@@ -92,6 +99,7 @@ void error_setg_internal(Error **errp,
     va_list ap;
 
     va_start(ap, fmt);
+    //将format的参数构造为ap传入下层
     error_setv(errp, src, line, func, ERROR_CLASS_GENERIC_ERROR, fmt, ap, NULL);
     va_end(ap);
 }

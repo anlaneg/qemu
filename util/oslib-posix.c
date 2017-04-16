@@ -261,7 +261,7 @@ void qemu_set_tty_echo(int fd, bool echo)
     tcsetattr(fd, TCSANOW, &tty);
 }
 
-static char exec_dir[PATH_MAX];
+static char exec_dir[PATH_MAX];//存放可执行程序的目录名称
 
 void qemu_init_exec_dir(const char *argv0)
 {
@@ -273,6 +273,7 @@ void qemu_init_exec_dir(const char *argv0)
 
 #if defined(__linux__)
     {
+    		//读取当前进程可执行程序所在的位置
         int len;
         len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
         if (len > 0) {
@@ -304,6 +305,7 @@ void qemu_init_exec_dir(const char *argv0)
             return;
         }
     }
+    //返回可执行程序的目录
     dir = g_path_get_dirname(p);
 
     pstrcpy(exec_dir, sizeof(exec_dir), dir);
@@ -311,6 +313,7 @@ void qemu_init_exec_dir(const char *argv0)
     g_free(dir);
 }
 
+//返回可执行程序目录名称
 char *qemu_get_exec_dir(void)
 {
     return g_strdup(exec_dir);

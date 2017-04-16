@@ -482,9 +482,11 @@ BlockDriver bdrv_raw = {
     .bdrv_has_zero_init   = &raw_has_zero_init
 };
 
+//注册raw设备
 static void bdrv_raw_init(void)
 {
     bdrv_register(&bdrv_raw);
 }
 
+//raw块设备,启动时注册
 block_init(bdrv_raw_init);
