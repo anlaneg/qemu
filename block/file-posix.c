@@ -2260,6 +2260,7 @@ static coroutine_fn int hdev_co_pwrite_zeroes(BlockDriverState *bs,
     return -ENOTSUP;
 }
 
+//普通硬盘的块设备创建函数
 static int hdev_create(const char *filename, QemuOpts *opts,
                        Error **errp)
 {

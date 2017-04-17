@@ -30,16 +30,16 @@
 #include "qemu/error-report.h"
 
 struct QemuOpt {
-    char *name;
-    char *str;
+    char *name;//操作名称
+    char *str;//操作取值的字符串形式
 
-    const QemuOptDesc *desc;
+    const QemuOptDesc *desc;//操作描述信息
     union {
         bool boolean;
         uint64_t uint;
-    } value;
+    } value;//操作取值
 
-    QemuOpts     *opts;
+    QemuOpts     *opts;//从属于哪个opts
     QTAILQ_ENTRY(QemuOpt) next;
 };
 

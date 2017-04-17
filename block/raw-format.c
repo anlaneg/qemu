@@ -373,6 +373,7 @@ static int raw_has_zero_init(BlockDriverState *bs)
     return bdrv_has_zero_init(bs->file->bs);
 }
 
+//raw格式创建
 static int raw_create(const char *filename, QemuOpts *opts, Error **errp)
 {
     return bdrv_create_file(filename, opts, errp);

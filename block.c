@@ -354,6 +354,7 @@ int bdrv_create(BlockDriver *drv, const char* filename,
         .err = NULL,
     };
 
+    //如果没有bdrv_create函数如果不存在，则报错
     if (!drv->bdrv_create) {
         error_setg(errp, "Driver '%s' does not support image creation", drv->format_name);
         ret = -ENOTSUP;
@@ -385,6 +386,7 @@ out:
     return ret;
 }
 
+//采用filename获取driver,用driver来创建
 int bdrv_create_file(const char *filename, QemuOpts *opts, Error **errp)
 {
     BlockDriver *drv;
@@ -3534,6 +3536,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
         return;
     }
 
+    //通过文件路径，找协议驱动（cdrom等）
     proto_drv = bdrv_find_protocol(filename, true, errp);
     if (!proto_drv) {
         return;
@@ -3552,11 +3555,13 @@ void bdrv_img_create(const char *filename, const char *fmt,
         return;
     }
 
+    //将dvr->create_opts,proto_drv->create_opts串连在一起
     create_opts = qemu_opts_append(create_opts, drv->create_opts);
     create_opts = qemu_opts_append(create_opts, proto_drv->create_opts);
 
     /* Create parameter list with default values */
     opts = qemu_opts_create(create_opts, NULL, 0, &error_abort);
+    //存入'size'参数
     qemu_opt_set_number(opts, BLOCK_OPT_SIZE, img_size, &error_abort);
 
     /* Parse -o options */
@@ -3657,6 +3662,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
         puts("");
     }
 
+    //走创建流程
     ret = bdrv_create(drv, filename, opts, &local_err);
 
     if (ret == -EFBIG) {

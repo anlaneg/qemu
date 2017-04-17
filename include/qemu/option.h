@@ -61,7 +61,7 @@ struct QemuOptsList {
     const char *implied_opt_name;
     bool merge_lists;  /* Merge multiple uses of option into a single list? */
     QTAILQ_HEAD(, QemuOpts) head;
-    QemuOptDesc desc[];
+    QemuOptDesc desc[];//以‘NULL’结尾的数组
 };
 
 const char *qemu_opt_get(QemuOpts *opts, const char *name);

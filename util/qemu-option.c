@@ -160,6 +160,7 @@ static void parse_option_number(const char *name, const char *value,
     }
 }
 
+//通过名称查找desc
 static const QemuOptDesc *find_desc_by_name(const QemuOptDesc *desc,
                                             const char *name)
 {
@@ -587,14 +588,17 @@ void qemu_opt_set_number(QemuOpts *opts, const char *name, int64_t val,
     QemuOpt *opt;
     const QemuOptDesc *desc = opts->list->desc;
 
+    //创建opt
     opt = g_malloc0(sizeof(*opt));
     opt->desc = find_desc_by_name(desc, name);
     if (!opt->desc && !opts_accepts_any(opts)) {
+    		//没有找到，且opts首个name不为空，报错
         error_setg(errp, QERR_INVALID_PARAMETER, name);
         g_free(opt);
         return;
     }
 
+    //构造相应的opt
     opt->name = g_strdup(name);
     opt->opts = opts;
     opt->value.uint = val;
@@ -667,6 +671,8 @@ QemuOpts *qemu_opts_create(QemuOptsList *list, const char *id,
             return opts;
         }
     }
+
+    //生成opts
     opts = g_malloc0(sizeof(*opts));
     opts->id = g_strdup(id);
     opts->list = list;
@@ -795,8 +801,8 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
     Error *local_err = NULL;
 
     for (p = params; *p != '\0'; p++) {
-        pe = strchr(p, '=');
-        pc = strchr(p, ',');
+        pe = strchr(p, '=');//检查选项中是否有'='号
+        pc = strchr(p, ',');//检查选项中是否有','号
         if (!pe || (pc && pc < pe)) {
             /* found "foo,more" */
             if (p == params && firstname) {
@@ -1123,13 +1129,14 @@ int qemu_opts_foreach(QemuOptsList *list, qemu_opts_loopfunc func,
     return rc;
 }
 
+//描述信息数组list->desc大小
 static size_t count_opts_list(QemuOptsList *list)
 {
     QemuOptDesc *desc = NULL;
     size_t num_opts = 0;
 
     if (!list) {
-        return 0;
+        return 0;//list为空时，返回0
     }
 
     desc = list->desc;
@@ -1151,6 +1158,7 @@ void qemu_opts_free(QemuOptsList *list)
  * The lifetime of dst must be shorter than the input list because the
  * QemuOptDesc->name, ->help, and ->def_value_str strings are shared.
  */
+//合并list到dst中
 QemuOptsList *qemu_opts_append(QemuOptsList *dst,
                                QemuOptsList *list)
 {
@@ -1160,6 +1168,7 @@ QemuOptsList *qemu_opts_append(QemuOptsList *dst,
     bool need_head_update;
 
     if (!list) {
+    		//如果list为空，就直接返回dst
         return dst;
     }
 
@@ -1167,6 +1176,7 @@ QemuOptsList *qemu_opts_append(QemuOptsList *dst,
      * before adding options to it.
      */
     if (!dst) {
+    		//如果dst为空，则need_init为true.s
         need_init = true;
         need_head_update = true;
     } else {
@@ -1179,13 +1189,17 @@ QemuOptsList *qemu_opts_append(QemuOptsList *dst,
     num_opts = count_opts_list(dst);
     num_dst_opts = num_opts;
     num_opts += count_opts_list(list);
+    //保留dst,并扩大内存
     dst = g_realloc(dst, sizeof(QemuOptsList) +
                     (num_opts + 1) * sizeof(QemuOptDesc));
     if (need_init) {
+    		//dst需要初始化
         dst->name = NULL;
         dst->implied_opt_name = NULL;
         dst->merge_lists = false;
     }
+
+    //是否需要初始化head
     if (need_head_update) {
         QTAILQ_INIT(&dst->head);
     }
@@ -1193,6 +1207,7 @@ QemuOptsList *qemu_opts_append(QemuOptsList *dst,
 
     /* append list->desc to dst->desc */
     if (list) {
+    		//添加list->desc的值到dst中
         desc = list->desc;
         while (desc && desc->name) {
             if (find_desc_by_name(dst->desc, desc->name) == NULL) {
