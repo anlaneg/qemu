@@ -75,20 +75,20 @@ const char *get_opt_value(char *buf, int buf_size, const char *p)
     char *q;
 
     q = buf;
-    while (*p != '\0') {
+    while (*p != '\0') {//未达到字符串结尾
         if (*p == ',') {
             if (*(p + 1) != ',')
-                break;
+                break;//如果后面不是','号，则分割
             p++;
         }
         if (q && (q - buf) < buf_size - 1)
-            *q++ = *p;
+            *q++ = *p;//存入的是非‘，’号分割字符串
         p++;
     }
     if (q)
         *q = '\0';
 
-    return p;
+    return p;//返回下一个开始
 }
 
 int get_next_param_value(char *buf, int buf_size,
@@ -217,6 +217,7 @@ void parse_option_size(const char *name, const char *value,
     }
 }
 
+//检查param中是否有help选项
 bool has_help_option(const char *param)
 {
     size_t buflen = strlen(param) + 1;
@@ -227,9 +228,10 @@ bool has_help_option(const char *param)
     while (*p) {
         p = get_opt_value(buf, buflen, p);
         if (*p) {
-            p++;
+            p++;//跳过','号
         }
 
+        //是否为help option ,如 -o ?或者-o help
         if (is_help_option(buf)) {
             result = true;
             goto out;
@@ -241,20 +243,23 @@ out:
     return result;
 }
 
+//检查list是否是有效的
 bool is_valid_option_list(const char *param)
 {
-    size_t buflen = strlen(param) + 1;
+    size_t buflen = strlen(param) + 1;//参数长度
     char *buf = g_malloc(buflen);
     const char *p = param;
     bool result = true;
 
     while (*p) {
+    		//从p中解析中第一个，选项值，取入buf中,返回新头
         p = get_opt_value(buf, buflen, p);
         if (*p && !*++p) {
             result = false;
             goto out;
         }
 
+        //buffer没有值，说明解析完了。
         if (!*buf || *buf == ',') {
             result = false;
             goto out;
@@ -868,10 +873,10 @@ static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
 
     if (strncmp(params, "id=", 3) == 0) {
         get_opt_value(value, sizeof(value), params+3);
-        id = value;
+        id = value;//从开始位置提取id值
     } else if ((p = strstr(params, ",id=")) != NULL) {
         get_opt_value(value, sizeof(value), p+4);
-        id = value;
+        id = value;//从中间位置提取id值
     }
 
     /*

@@ -213,7 +213,7 @@ static int GCC_FMT_ATTR(2, 3) qprintf(bool quiet, const char *fmt, ...)
     return ret;
 }
 
-
+//显示格式fmt支持哪些选项
 static int print_block_option_help(const char *filename, const char *fmt)
 {
     BlockDriver *drv, *proto_drv;
@@ -402,10 +402,16 @@ static int img_create(int argc, char **argv)
             base_fmt = optarg;
             break;
         case 'b':
+        		//如果“-o”选项中使用了backing_file这个选项来指定其后端镜像文件，
+        		//那么这个创建的镜像文件仅记录与后端镜像文件的差异部分。后端镜像
+        		//文件不会被修改，除非在QEMU monitor中使用“commit”命令或者使用
+        		//“qemu-img commit”命令去手动提交这些改动。这种情况下，
+        		//size参数不是必须需的，其值默认为后端镜像文件的大小。另外，
+        		//直接使用“-b backfile”参数也与“-o backing_file=backfile”效果相同。
             base_filename = optarg;
             break;
         case 'f':
-            fmt = optarg;
+            fmt = optarg;//指明采用哪种格式img
             break;
         case 'e':
             error_report("option -e is deprecated, please use \'-o "
@@ -421,17 +427,19 @@ static int img_create(int argc, char **argv)
                 goto fail;
             }
             if (!options) {
+            		//如果之前没有设置过options,则设置
                 options = g_strdup(optarg);
             } else {
+            		//如果已设置，则合并options
                 char *old_options = options;
                 options = g_strdup_printf("%s,%s", options, optarg);
                 g_free(old_options);
             }
             break;
-        case 'q':
+        case 'q'://安静标记
             quiet = true;
             break;
-        case OPTION_OBJECT: {
+        case OPTION_OBJECT: {//--object参数
             QemuOpts *opts;
             opts = qemu_opts_parse_noisily(&qemu_object_opts,
                                            optarg, true);
@@ -444,6 +452,7 @@ static int img_create(int argc, char **argv)
 
     /* Get the filename */
     filename = (optind < argc) ? argv[optind] : NULL;
+    //如果有选项，且选项是有help的，则显示此格式支持的选项
     if (options && has_help_option(options)) {
         g_free(options);
         return print_block_option_help(filename, fmt);
@@ -461,6 +470,7 @@ static int img_create(int argc, char **argv)
     }
 
     /* Get image size, if specified */
+    //如果optind如查仍小于argc,则考虑指定了image的size,这里解析image的size
     if (optind < argc) {
         int64_t sval;
         char *end;
@@ -477,13 +487,15 @@ static int img_create(int argc, char **argv)
             }
             goto fail;
         }
+        //设置镜像大小
         img_size = (uint64_t)sval;
     }
     if (optind != argc) {
         error_exit("Unexpected argument: %s", argv[optind]);
     }
 
-    //参数准备齐全了，这里开始处理
+    //参数准备齐全了，这里开始处理（文件名，镜像格式，后端image文件名，后端image文件类型
+    //，选项，镜像大小
     bdrv_img_create(filename, fmt, base_filename, base_fmt,
                     options, img_size, 0, &local_err, quiet);
     if (local_err) {
