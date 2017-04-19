@@ -64,6 +64,7 @@ static QTAILQ_HEAD(, BlockDriverState) graph_bdrv_states =
 static QTAILQ_HEAD(, BlockDriverState) all_bdrv_states =
     QTAILQ_HEAD_INITIALIZER(all_bdrv_states);
 
+//定义并初始化双链表指针，用于挂接块设备driver
 static QLIST_HEAD(, BlockDriver) bdrv_drivers =
     QLIST_HEAD_INITIALIZER(bdrv_drivers);
 
@@ -135,6 +136,7 @@ int path_has_protocol(const char *path)
     return *p == ':';
 }
 
+//是否绝对路径
 int path_is_absolute(const char *path)
 {
 #ifdef _WIN32
@@ -161,14 +163,15 @@ void path_combine(char *dest, int dest_size,
     if (dest_size <= 0)
         return;
     if (path_is_absolute(filename)) {
+    		//如果filename是绝对路径，则将filename填充进dest中
         pstrcpy(dest, dest_size, filename);
     } else {
         p = strchr(base_path, ':');
         if (p)
-            p++;
+            p++;//移动到':'后面
         else
             p = base_path;
-        p1 = strrchr(base_path, '/');
+        p1 = strrchr(base_path, '/');//查最后一层目录分界
 #ifdef _WIN32
         {
             const char *p2;
@@ -178,9 +181,9 @@ void path_combine(char *dest, int dest_size,
         }
 #endif
         if (p1)
-            p1++;
+            p1++;//指向最后一层目录或文件。
         else
-            p1 = base_path;
+            p1 = base_path;//无目录符。
         if (p1 > p)
             p = p1;
         len = p - base_path;
@@ -221,6 +224,7 @@ void bdrv_get_full_backing_filename(BlockDriverState *bs, char *dest, size_t sz,
 //注册块驱动，块驱动将被加入一bdrv_drivers链上
 void bdrv_register(BlockDriver *bdrv)
 {
+	//将bdrv加入到bdrv_drviers链表上
     QLIST_INSERT_HEAD(&bdrv_drivers, bdrv, list);
 }
 

@@ -38,21 +38,23 @@ void strpadcpy(char *buf, int buf_size, const char *str, char pad)
     memset(buf + len, pad, buf_size - len);
 }
 
+//将str填充进buf,最多填充buf_size字节，结尾加'\0'
 void pstrcpy(char *buf, int buf_size, const char *str)
 {
     int c;
     char *q = buf;
 
     if (buf_size <= 0)
-        return;
+        return;//如果为负数，则直接返回
 
+    //一个字节，一个字节copy到q中，检查长度，检查str是否到达结尾
     for(;;) {
         c = *str++;
         if (c == 0 || q >= buf + buf_size - 1)
             break;
         *q++ = c;
     }
-    *q = '\0';
+    *q = '\0';//加结尾
 }
 
 /* strcat and truncate. */
@@ -61,6 +63,7 @@ char *pstrcat(char *buf, int buf_size, const char *s)
     int len;
     len = strlen(buf);
     if (len < buf_size)
+    		//最多补齐到buf_size
         pstrcpy(buf + len, buf_size - len, s);
     return buf;
 }

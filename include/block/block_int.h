@@ -83,7 +83,7 @@ typedef struct BdrvTrackedRequest {
 } BdrvTrackedRequest;
 
 struct BlockDriver {
-    const char *format_name;
+    const char *format_name;//支持的格式名称
     int instance_size;
 
     /* set to true if the BlockDriver is a block filter */
@@ -320,7 +320,7 @@ struct BlockDriver {
     void (*bdrv_del_child)(BlockDriverState *parent, BdrvChild *child,
                            Error **errp);
 
-    QLIST_ENTRY(BlockDriver) list;
+    QLIST_ENTRY(BlockDriver) list;//用于挂接在driver链上
 };
 
 typedef struct BlockLimits {
