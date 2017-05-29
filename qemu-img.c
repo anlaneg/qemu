@@ -374,7 +374,7 @@ static int img_create(int argc, char **argv)
 {
     int c;
     uint64_t img_size = -1;
-    const char *fmt = "raw";
+    const char *fmt = "raw";//默认是raw类型
     const char *base_fmt = NULL;
     const char *filename;
     const char *base_filename = NULL;
