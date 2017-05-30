@@ -196,15 +196,15 @@ void qmp_cont(Error **errp)
     }
 
     /* Continuing after completed migration. Images have been inactivated to
-     * allow the destination to take control. Need to get control back now. */
-    if (runstate_check(RUN_STATE_FINISH_MIGRATE) ||
-        runstate_check(RUN_STATE_POSTMIGRATE))
-    {
-        bdrv_invalidate_cache_all(&local_err);
-        if (local_err) {
-            error_propagate(errp, local_err);
-            return;
-        }
+     * allow the destination to take control. Need to get control back now.
+     *
+     * If there are no inactive block nodes (e.g. because the VM was just
+     * paused rather than completing a migration), bdrv_inactivate_all() simply
+     * doesn't do anything. */
+    bdrv_invalidate_cache_all(&local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
+        return;
     }
 
     if (runstate_check(RUN_STATE_INMIGRATE)) {
@@ -542,11 +542,6 @@ DevicePropertyInfoList *qmp_device_list_properties(const char *typename,
         return NULL;
     }
 
-    if (DEVICE_CLASS(klass)->cannot_destroy_with_object_finalize_yet) {
-        error_setg(errp, "Can't list properties of device '%s'", typename);
-        return NULL;
-    }
-
     obj = object_new(typename);
 
     object_property_iter_init(&iter, obj);
@@ -675,7 +670,7 @@ void qmp_object_add(const char *type, const char *id,
         pdict = qdict_new();
     }
 
-    v = qobject_input_visitor_new(QOBJECT(pdict), true);
+    v = qobject_input_visitor_new(QOBJECT(pdict));
     obj = user_creatable_add_type(type, id, pdict, v, errp);
     visit_free(v);
     if (obj) {

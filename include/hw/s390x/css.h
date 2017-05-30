@@ -23,9 +23,12 @@
 #define MAX_CSSID 255
 #define MAX_CHPID 255
 
+#define MAX_ISC 7
+
 #define MAX_CIWS 62
 
 #define VIRTUAL_CSSID 0xfe
+#define VIRTIO_CCW_CHPID 0   /* used by convention */
 
 typedef struct CIW {
     uint8_t type;
@@ -113,6 +116,7 @@ bool css_devno_used(uint8_t cssid, uint8_t ssid, uint16_t devno);
 void css_subch_assign(uint8_t cssid, uint8_t ssid, uint16_t schid,
                       uint16_t devno, SubchDev *sch);
 void css_sch_build_virtual_schib(SubchDev *sch, uint8_t chpid, uint8_t type);
+unsigned int css_find_free_chpid(uint8_t cssid);
 uint16_t css_build_subchannel_id(SubchDev *sch);
 void css_reset(void);
 void css_reset_sch(SubchDev *sch);
@@ -124,9 +128,15 @@ void css_generate_css_crws(uint8_t cssid);
 void css_clear_sei_pending(void);
 void css_adapter_interrupt(uint8_t isc);
 
-#define CSS_IO_ADAPTER_VIRTIO 1
-int css_register_io_adapter(uint8_t type, uint8_t isc, bool swap,
-                            bool maskable, uint32_t *id);
+typedef enum {
+    CSS_IO_ADAPTER_VIRTIO = 0,
+    CSS_IO_ADAPTER_PCI = 1,
+    CSS_IO_ADAPTER_TYPE_NUMS,
+} CssIoAdapterType;
+
+uint32_t css_get_adapter_id(CssIoAdapterType type, uint8_t isc);
+void css_register_io_adapters(CssIoAdapterType type, bool swap, bool maskable,
+                              Error **errp);
 
 #ifndef CONFIG_USER_ONLY
 SubchDev *css_find_subch(uint8_t m, uint8_t cssid, uint8_t ssid,
@@ -171,6 +181,11 @@ extern PropertyInfo css_devid_propinfo;
 
 #define DEFINE_PROP_CSS_DEV_ID(_n, _s, _f) \
     DEFINE_PROP(_n, _s, _f, css_devid_propinfo, CssDevId)
+
+extern PropertyInfo css_devid_ro_propinfo;
+
+#define DEFINE_PROP_CSS_DEV_ID_RO(_n, _s, _f) \
+    DEFINE_PROP(_n, _s, _f, css_devid_ro_propinfo, CssDevId)
 
 /**
  * Create a subchannel for the given bus id.

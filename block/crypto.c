@@ -59,8 +59,8 @@ static ssize_t block_crypto_read_func(QCryptoBlock *block,
                                       size_t offset,
                                       uint8_t *buf,
                                       size_t buflen,
-                                      Error **errp,
-                                      void *opaque)
+                                      void *opaque,
+                                      Error **errp)
 {
     BlockDriverState *bs = opaque;
     ssize_t ret;
@@ -86,8 +86,8 @@ static ssize_t block_crypto_write_func(QCryptoBlock *block,
                                        size_t offset,
                                        const uint8_t *buf,
                                        size_t buflen,
-                                       Error **errp,
-                                       void *opaque)
+                                       void *opaque,
+                                       Error **errp)
 {
     struct BlockCryptoCreateData *data = opaque;
     ssize_t ret;
@@ -103,8 +103,8 @@ static ssize_t block_crypto_write_func(QCryptoBlock *block,
 
 static ssize_t block_crypto_init_func(QCryptoBlock *block,
                                       size_t headerlen,
-                                      Error **errp,
-                                      void *opaque)
+                                      void *opaque,
+                                      Error **errp)
 {
     struct BlockCryptoCreateData *data = opaque;
     int ret;
@@ -300,6 +300,12 @@ static int block_crypto_open_generic(QCryptoBlockFormat format,
     QCryptoBlockOpenOptions *open_opts = NULL;
     unsigned int cflags = 0;
 
+    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_file,
+                               false, errp);
+    if (!bs->file) {
+        return -EINVAL;
+    }
+
     opts = qemu_opts_create(opts_spec, NULL, 0, &error_abort);
     qemu_opts_absorb_qdict(opts, options, &local_err);
     if (local_err) {
@@ -375,7 +381,8 @@ static int block_crypto_create_generic(QCryptoBlockFormat format,
     return ret;
 }
 
-static int block_crypto_truncate(BlockDriverState *bs, int64_t offset)
+static int block_crypto_truncate(BlockDriverState *bs, int64_t offset,
+                                 Error **errp)
 {
     BlockCrypto *crypto = bs->opaque;
     size_t payload_offset =
@@ -383,7 +390,7 @@ static int block_crypto_truncate(BlockDriverState *bs, int64_t offset)
 
     offset += payload_offset;
 
-    return bdrv_truncate(bs->file->bs, offset);
+    return bdrv_truncate(bs->file, offset, errp);
 }
 
 static void block_crypto_close(BlockDriverState *bs)
@@ -622,6 +629,7 @@ BlockDriver bdrv_crypto_luks = {
     .bdrv_probe         = block_crypto_probe_luks,
     .bdrv_open          = block_crypto_open_luks,
     .bdrv_close         = block_crypto_close,
+    .bdrv_child_perm    = bdrv_format_default_perms,
     .bdrv_create        = block_crypto_create_luks,
     .bdrv_truncate      = block_crypto_truncate,
     .create_opts        = &block_crypto_create_opts_luks,

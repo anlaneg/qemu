@@ -35,6 +35,13 @@ static int compare_cmdname(const void *a, const void *b)
 
 void qemuio_add_command(const cmdinfo_t *ci)
 {
+    /* ci->perm assumes a file is open, but the GLOBAL and NOFILE_OK
+     * flags allow it not to be, so that combination is invalid.
+     * Catch it now rather than letting it manifest as a crash if a
+     * particular set of command line options are used.
+     */
+    assert(ci->perm == 0 ||
+           (ci->flags & (CMD_FLAG_GLOBAL | CMD_NOFILE_OK)) == 0);
     cmdtab = g_renew(cmdinfo_t, cmdtab, ++ncmds);
     cmdtab[ncmds - 1] = *ci;
     qsort(cmdtab, ncmds, sizeof(*cmdtab), compare_cmdname);
@@ -83,6 +90,29 @@ static int command(BlockBackend *blk, const cmdinfo_t *ct, int argc,
         }
         return 0;
     }
+
+    /* Request additional permissions if necessary for this command. The caller
+     * is responsible for restoring the original permissions afterwards if this
+     * is what it wants. */
+    if (ct->perm && blk_is_available(blk)) {
+        uint64_t orig_perm, orig_shared_perm;
+        blk_get_perm(blk, &orig_perm, &orig_shared_perm);
+
+        if (ct->perm & ~orig_perm) {
+            uint64_t new_perm;
+            Error *local_err = NULL;
+            int ret;
+
+            new_perm = orig_perm | ct->perm;
+
+            ret = blk_set_perm(blk, new_perm, orig_shared_perm, &local_err);
+            if (ret < 0) {
+                error_report_err(local_err);
+                return 0;
+            }
+        }
+    }
+
     optind = 0;
     return ct->cfunc(blk, argc, argv);
 }
@@ -137,15 +167,17 @@ static char **breakline(char *input, int *count)
 
 static int64_t cvtnum(const char *s)
 {
-    char *end;
-    int64_t ret;
+    int err;
+    uint64_t value;
 
-    ret = qemu_strtosz_suffix(s, &end, QEMU_STRTOSZ_DEFSUFFIX_B);
-    if (*end != '\0') {
-        /* Detritus at the end of the string */
-        return -EINVAL;
+    err = qemu_strtosz(s, NULL, &value);
+    if (err < 0) {
+        return err;
     }
-    return ret;
+    if (value > INT64_MAX) {
+        return -ERANGE;
+    }
+    return value;
 }
 
 static void print_cvtnum_err(int64_t rc, const char *arg)
@@ -388,9 +420,15 @@ create_iovec(BlockBackend *blk, QEMUIOVector *qiov, char **argv, int nr_iov,
             goto fail;
         }
 
-        if (len > SIZE_MAX) {
-            printf("Argument '%s' exceeds maximum size %llu\n", arg,
-                   (unsigned long long)SIZE_MAX);
+        if (len > BDRV_REQUEST_MAX_BYTES) {
+            printf("Argument '%s' exceeds maximum size %" PRIu64 "\n", arg,
+                   (uint64_t)BDRV_REQUEST_MAX_BYTES);
+            goto fail;
+        }
+
+        if (count > BDRV_REQUEST_MAX_BYTES - len) {
+            printf("The total number of bytes exceed the maximum size %" PRIu64
+                   "\n", (uint64_t)BDRV_REQUEST_MAX_BYTES);
             goto fail;
         }
 
@@ -483,7 +521,7 @@ static int do_co_pwrite_zeroes(BlockBackend *blk, int64_t offset,
     }
 
     co = qemu_coroutine_create(co_pwrite_zeroes_entry, &data);
-    qemu_coroutine_enter(co);
+    bdrv_coroutine_enter(blk_bs(blk), co);
     while (!data.done) {
         aio_poll(blk_get_aio_context(blk), true);
     }
@@ -682,9 +720,9 @@ static int read_f(BlockBackend *blk, int argc, char **argv)
     if (count < 0) {
         print_cvtnum_err(count, argv[optind]);
         return 0;
-    } else if (count > SIZE_MAX) {
+    } else if (count > BDRV_REQUEST_MAX_BYTES) {
         printf("length cannot exceed %" PRIu64 ", given %s\n",
-               (uint64_t) SIZE_MAX, argv[optind]);
+               (uint64_t)BDRV_REQUEST_MAX_BYTES, argv[optind]);
         return 0;
     }
 
@@ -702,13 +740,13 @@ static int read_f(BlockBackend *blk, int argc, char **argv)
     }
 
     if (bflag) {
-        if (offset & 0x1ff) {
-            printf("offset %" PRId64 " is not sector aligned\n",
+        if (!QEMU_IS_ALIGNED(offset, BDRV_SECTOR_SIZE)) {
+            printf("%" PRId64 " is not a sector-aligned value for 'offset'\n",
                    offset);
             return 0;
         }
-        if (count & 0x1ff) {
-            printf("count %"PRId64" is not sector aligned\n",
+        if (!QEMU_IS_ALIGNED(count, BDRV_SECTOR_SIZE)) {
+            printf("%"PRId64" is not a sector-aligned value for 'count'\n",
                    count);
             return 0;
         }
@@ -910,6 +948,7 @@ static const cmdinfo_t write_cmd = {
     .name       = "write",
     .altname    = "w",
     .cfunc      = write_f,
+    .perm       = BLK_PERM_WRITE,
     .argmin     = 2,
     .argmax     = -1,
     .args       = "[-bcCfquz] [-P pattern] off len",
@@ -1004,21 +1043,21 @@ static int write_f(BlockBackend *blk, int argc, char **argv)
     if (count < 0) {
         print_cvtnum_err(count, argv[optind]);
         return 0;
-    } else if (count > SIZE_MAX) {
+    } else if (count > BDRV_REQUEST_MAX_BYTES) {
         printf("length cannot exceed %" PRIu64 ", given %s\n",
-               (uint64_t) SIZE_MAX, argv[optind]);
+               (uint64_t)BDRV_REQUEST_MAX_BYTES, argv[optind]);
         return 0;
     }
 
     if (bflag || cflag) {
-        if (offset & 0x1ff) {
-            printf("offset %" PRId64 " is not sector aligned\n",
+        if (!QEMU_IS_ALIGNED(offset, BDRV_SECTOR_SIZE)) {
+            printf("%" PRId64 " is not a sector-aligned value for 'offset'\n",
                    offset);
             return 0;
         }
 
-        if (count & 0x1ff) {
-            printf("count %"PRId64" is not sector aligned\n",
+        if (!QEMU_IS_ALIGNED(count, BDRV_SECTOR_SIZE)) {
+            printf("%"PRId64" is not a sector-aligned value for 'count'\n",
                    count);
             return 0;
         }
@@ -1085,6 +1124,7 @@ static int writev_f(BlockBackend *blk, int argc, char **argv);
 static const cmdinfo_t writev_cmd = {
     .name       = "writev",
     .cfunc      = writev_f,
+    .perm       = BLK_PERM_WRITE,
     .argmin     = 2,
     .argmax     = -1,
     .args       = "[-Cfq] [-P pattern] off len [len..]",
@@ -1384,6 +1424,7 @@ static int aio_write_f(BlockBackend *blk, int argc, char **argv);
 static const cmdinfo_t aio_write_cmd = {
     .name       = "aio_write",
     .cfunc      = aio_write_f,
+    .perm       = BLK_PERM_WRITE,
     .argmin     = 2,
     .argmax     = -1,
     .args       = "[-Cfiquz] [-P pattern] off len [len..]",
@@ -1526,6 +1567,7 @@ static const cmdinfo_t flush_cmd = {
 
 static int truncate_f(BlockBackend *blk, int argc, char **argv)
 {
+    Error *local_err = NULL;
     int64_t offset;
     int ret;
 
@@ -1535,9 +1577,9 @@ static int truncate_f(BlockBackend *blk, int argc, char **argv)
         return 0;
     }
 
-    ret = blk_truncate(blk, offset);
+    ret = blk_truncate(blk, offset, &local_err);
     if (ret < 0) {
-        printf("truncate: %s\n", strerror(-ret));
+        error_report_err(local_err);
         return 0;
     }
 
@@ -1548,6 +1590,7 @@ static const cmdinfo_t truncate_cmd = {
     .name       = "truncate",
     .altname    = "t",
     .cfunc      = truncate_f,
+    .perm       = BLK_PERM_WRITE | BLK_PERM_RESIZE,
     .argmin     = 1,
     .argmax     = 1,
     .args       = "off",
@@ -1645,6 +1688,7 @@ static const cmdinfo_t discard_cmd = {
     .name       = "discard",
     .altname    = "d",
     .cfunc      = discard_f,
+    .perm       = BLK_PERM_WRITE,
     .argmin     = 2,
     .argmax     = -1,
     .args       = "[-Cq] off len",
@@ -1716,7 +1760,7 @@ out:
 static int alloc_f(BlockBackend *blk, int argc, char **argv)
 {
     BlockDriverState *bs = blk_bs(blk);
-    int64_t offset, sector_num, nb_sectors, remaining;
+    int64_t offset, sector_num, nb_sectors, remaining, count;
     char s1[64];
     int num, ret;
     int64_t sum_alloc;
@@ -1725,25 +1769,31 @@ static int alloc_f(BlockBackend *blk, int argc, char **argv)
     if (offset < 0) {
         print_cvtnum_err(offset, argv[1]);
         return 0;
-    } else if (offset & 0x1ff) {
-        printf("offset %" PRId64 " is not sector aligned\n",
+    } else if (!QEMU_IS_ALIGNED(offset, BDRV_SECTOR_SIZE)) {
+        printf("%" PRId64 " is not a sector-aligned value for 'offset'\n",
                offset);
         return 0;
     }
 
     if (argc == 3) {
-        nb_sectors = cvtnum(argv[2]);
-        if (nb_sectors < 0) {
-            print_cvtnum_err(nb_sectors, argv[2]);
+        count = cvtnum(argv[2]);
+        if (count < 0) {
+            print_cvtnum_err(count, argv[2]);
             return 0;
-        } else if (nb_sectors > INT_MAX) {
-            printf("length argument cannot exceed %d, given %s\n",
-                   INT_MAX, argv[2]);
+        } else if (count > INT_MAX * BDRV_SECTOR_SIZE) {
+            printf("length argument cannot exceed %llu, given %s\n",
+                   INT_MAX * BDRV_SECTOR_SIZE, argv[2]);
             return 0;
         }
     } else {
-        nb_sectors = 1;
+        count = BDRV_SECTOR_SIZE;
     }
+    if (!QEMU_IS_ALIGNED(count, BDRV_SECTOR_SIZE)) {
+        printf("%" PRId64 " is not a sector-aligned value for 'count'\n",
+               count);
+        return 0;
+    }
+    nb_sectors = count >> BDRV_SECTOR_BITS;
 
     remaining = nb_sectors;
     sum_alloc = 0;
@@ -1767,8 +1817,8 @@ static int alloc_f(BlockBackend *blk, int argc, char **argv)
 
     cvtstr(offset, s1, sizeof(s1));
 
-    printf("%"PRId64"/%"PRId64" sectors allocated at offset %s\n",
-           sum_alloc, nb_sectors, s1);
+    printf("%"PRId64"/%"PRId64" bytes allocated at offset %s\n",
+           sum_alloc << BDRV_SECTOR_BITS, nb_sectors << BDRV_SECTOR_BITS, s1);
     return 0;
 }
 
@@ -1778,8 +1828,8 @@ static const cmdinfo_t alloc_cmd = {
     .argmin     = 1,
     .argmax     = 2,
     .cfunc      = alloc_f,
-    .args       = "off [sectors]",
-    .oneline    = "checks if a sector is present in the file",
+    .args       = "offset [count]",
+    .oneline    = "checks if offset is allocated in the file",
 };
 
 
@@ -1818,7 +1868,7 @@ static int map_f(BlockBackend *blk, int argc, char **argv)
 {
     int64_t offset;
     int64_t nb_sectors, total_sectors;
-    char s1[64];
+    char s1[64], s2[64];
     int64_t num;
     int ret;
     const char *retstr;
@@ -1844,10 +1894,11 @@ static int map_f(BlockBackend *blk, int argc, char **argv)
         }
 
         retstr = ret ? "    allocated" : "not allocated";
-        cvtstr(offset << 9ULL, s1, sizeof(s1));
-        printf("[% 24" PRId64 "] % 8" PRId64 "/% 8" PRId64 " sectors %s "
-               "at offset %s (%d)\n",
-               offset << 9ULL, num, nb_sectors, retstr, s1, ret);
+        cvtstr(num << BDRV_SECTOR_BITS, s1, sizeof(s1));
+        cvtstr(offset << BDRV_SECTOR_BITS, s2, sizeof(s2));
+        printf("%s (0x%" PRIx64 ") bytes %s at offset %s (0x%" PRIx64 ")\n",
+               s1, num << BDRV_SECTOR_BITS, retstr,
+               s2, offset << BDRV_SECTOR_BITS);
 
         offset += num;
         nb_sectors -= num;

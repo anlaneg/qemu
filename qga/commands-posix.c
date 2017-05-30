@@ -15,6 +15,7 @@
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <dirent.h>
+#include <utmpx.h>
 #include "qga/guest-agent-core.h"
 #include "qga-qmp-commands.h"
 #include "qapi/qmp/qerror.h"
@@ -999,7 +1000,9 @@ static void build_guest_fsinfo_for_virtual_device(char const *syspath,
     dirpath = g_strdup_printf("%s/slaves", syspath);
     dir = opendir(dirpath);
     if (!dir) {
-        error_setg_errno(errp, errno, "opendir(\"%s\")", dirpath);
+        if (errno != ENOENT) {
+            error_setg_errno(errp, errno, "opendir(\"%s\")", dirpath);
+        }
         g_free(dirpath);
         return;
     }
@@ -1243,6 +1246,9 @@ int64_t qmp_guest_fsfreeze_freeze_list(bool has_mountpoints,
          * filesystems may not implement fsfreeze for less obvious reasons.
          * these will report EOPNOTSUPP. we simply ignore these when tallying
          * the number of frozen filesystems.
+         * if a filesystem is mounted more than once (aka bind mount) a
+         * consecutive attempt to freeze an already frozen filesystem will
+         * return EBUSY.
          *
          * any other error means a failure to freeze a filesystem we
          * expect to be freezable, so return an error in those cases
@@ -1250,7 +1256,7 @@ int64_t qmp_guest_fsfreeze_freeze_list(bool has_mountpoints,
          */
         ret = ioctl(fd, FIFREEZE);
         if (ret == -1) {
-            if (errno != EOPNOTSUPP) {
+            if (errno != EOPNOTSUPP && errno != EBUSY) {
                 error_setg_errno(errp, errno, "failed to freeze %s",
                                  mount->dirname);
                 close(fd);
@@ -2119,9 +2125,11 @@ static void transfer_memory_block(GuestMemoryBlock *mem_blk, bool sys2memblk,
          * we think this VM does not support online/offline memory block,
          * any other solution?
          */
-        if (!dp && errno == ENOENT) {
-            result->response =
-                GUEST_MEMORY_BLOCK_RESPONSE_TYPE_OPERATION_NOT_SUPPORTED;
+        if (!dp) {
+            if (errno == ENOENT) {
+                result->response =
+                    GUEST_MEMORY_BLOCK_RESPONSE_TYPE_OPERATION_NOT_SUPPORTED;
+            }
             goto out1;
         }
         closedir(dp);
@@ -2511,4 +2519,63 @@ void ga_command_state_init(GAState *s, GACommandState *cs)
 #if defined(CONFIG_FSFREEZE)
     ga_command_state_add(cs, NULL, guest_fsfreeze_cleanup);
 #endif
+}
+
+#define QGA_MICRO_SECOND_TO_SECOND 1000000
+
+static double ga_get_login_time(struct utmpx *user_info)
+{
+    double seconds = (double)user_info->ut_tv.tv_sec;
+    double useconds = (double)user_info->ut_tv.tv_usec;
+    useconds /= QGA_MICRO_SECOND_TO_SECOND;
+    return seconds + useconds;
+}
+
+GuestUserList *qmp_guest_get_users(Error **err)
+{
+    GHashTable *cache = NULL;
+    GuestUserList *head = NULL, *cur_item = NULL;
+    struct utmpx *user_info = NULL;
+    gpointer value = NULL;
+    GuestUser *user = NULL;
+    GuestUserList *item = NULL;
+    double login_time = 0;
+
+    cache = g_hash_table_new(g_str_hash, g_str_equal);
+    setutxent();
+
+    for (;;) {
+        user_info = getutxent();
+        if (user_info == NULL) {
+            break;
+        } else if (user_info->ut_type != USER_PROCESS) {
+            continue;
+        } else if (g_hash_table_contains(cache, user_info->ut_user)) {
+            value = g_hash_table_lookup(cache, user_info->ut_user);
+            user = (GuestUser *)value;
+            login_time = ga_get_login_time(user_info);
+            /* We're ensuring the earliest login time to be sent */
+            if (login_time < user->login_time) {
+                user->login_time = login_time;
+            }
+            continue;
+        }
+
+        item = g_new0(GuestUserList, 1);
+        item->value = g_new0(GuestUser, 1);
+        item->value->user = g_strdup(user_info->ut_user);
+        item->value->login_time = ga_get_login_time(user_info);
+
+        g_hash_table_insert(cache, item->value->user, item->value);
+
+        if (!cur_item) {
+            head = cur_item = item;
+        } else {
+            cur_item->next = item;
+            cur_item = item;
+        }
+    }
+    endutxent();
+    g_hash_table_destroy(cache);
+    return head;
 }

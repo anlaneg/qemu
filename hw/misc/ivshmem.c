@@ -25,7 +25,7 @@
 #include "hw/pci/msi.h"
 #include "hw/pci/msix.h"
 #include "sysemu/kvm.h"
-#include "migration/migration.h"
+#include "migration/blocker.h"
 #include "qemu/error-report.h"
 #include "qemu/event_notifier.h"
 #include "qom/object_interfaces.h"
@@ -1267,10 +1267,11 @@ static void ivshmem_realize(PCIDevice *dev, Error **errp)
     if (s->sizearg == NULL) {
         s->legacy_size = 4 << 20; /* 4 MB default */
     } else {
-        char *end;
-        int64_t size = qemu_strtosz(s->sizearg, &end);
-        if (size < 0 || (size_t)size != size || *end != '\0'
-            || !is_power_of_2(size)) {
+        int ret;
+        uint64_t size;
+
+        ret = qemu_strtosz_MiB(s->sizearg, NULL, &size);
+        if (ret < 0 || (size_t)size != size || !is_power_of_2(size)) {
             error_setg(errp, "Invalid size %s", s->sizearg);
             return;
         }

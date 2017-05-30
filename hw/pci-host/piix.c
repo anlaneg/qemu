@@ -58,12 +58,6 @@ typedef struct I440FXState {
 #define XEN_PIIX_NUM_PIRQS      128ULL
 #define PIIX_PIRQC              0x60
 
-/*
- * Reset Control Register: PCI-accessible ISA-Compatible Register at address
- * 0xcf9, provided by the PCI/ISA bridge (PIIX3 PCI function 0, 8086:7000).
- */
-#define RCR_IOPORT 0xcf9
-
 typedef struct PIIX3State {
     PCIDevice dev;
 
@@ -691,7 +685,7 @@ static void pci_piix3_class_init(ObjectClass *klass, void *data)
      * Reason: part of PIIX3 southbridge, needs to be wired up by
      * pc_piix.c's pc_init1()
      */
-    dc->cannot_instantiate_with_device_add_yet = true;
+    dc->user_creatable = false;
 }
 
 static const TypeInfo piix3_pci_type_info = {
@@ -745,7 +739,7 @@ static void i440fx_class_init(ObjectClass *klass, void *data)
      * PCI-facing part of the host bridge, not usable without the
      * host-facing part, which can't be device_add'ed, yet.
      */
-    dc->cannot_instantiate_with_device_add_yet = true;
+    dc->user_creatable = false;
     dc->hotpluggable   = false;
 }
 
@@ -874,7 +868,7 @@ static void i440fx_pcihost_class_init(ObjectClass *klass, void *data)
     dc->fw_name = "pci";
     dc->props = i440fx_props;
     /* Reason: needs to be wired up by pc_init1 */
-    dc->cannot_instantiate_with_device_add_yet = true;
+    dc->user_creatable = false;
 }
 
 static const TypeInfo i440fx_pcihost_info = {

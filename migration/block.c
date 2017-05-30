@@ -26,6 +26,8 @@
 #include "migration/block.h"
 #include "migration/migration.h"
 #include "sysemu/blockdev.h"
+#include "migration/qemu-file.h"
+#include "migration/vmstate.h"
 #include "sysemu/block-backend.h"
 
 #define BLOCK_SIZE                       (1 << 20)
@@ -94,9 +96,6 @@ typedef struct BlkMigBlock {
 } BlkMigBlock;
 
 typedef struct BlkMigState {
-    /* Written during setup phase.  Can be read without a lock.  */
-    int blk_enable;
-    int shared_base;
     QSIMPLEQ_HEAD(bmds_list, BlkMigDevState) bmds_list;
     int64_t total_sector_sum;
     bool zero_blocks;
@@ -276,6 +275,8 @@ static int mig_save_device_bulk(QEMUFile *f, BlkMigDevState *bmds)
     if (bmds->shared_base) {
         qemu_mutex_lock_iothread();
         aio_context_acquire(blk_get_aio_context(bb));
+        /* Skip unallocated sectors; intentionally treats failure as
+         * an allocated sector */
         while (cur_sector < total_sectors &&
                !bdrv_is_allocated(blk_bs(bb), cur_sector,
                                   MAX_IS_ALLOCATED_SEARCH, &nr_sectors)) {
@@ -379,7 +380,7 @@ static void unset_dirty_tracking(void)
     }
 }
 
-static void init_blk_migration(QEMUFile *f)
+static int init_blk_migration(QEMUFile *f)
 {
     BlockDriverState *bs;
     BlkMigDevState *bmds;
@@ -390,6 +391,8 @@ static void init_blk_migration(QEMUFile *f)
         BlkMigDevState *bmds;
         BlockDriverState *bs;
     } *bmds_bs;
+    Error *local_err = NULL;
+    int ret;
 
     block_mig_state.submitted = 0;
     block_mig_state.read_done = 0;
@@ -411,16 +414,17 @@ static void init_blk_migration(QEMUFile *f)
 
         sectors = bdrv_nb_sectors(bs);
         if (sectors <= 0) {
+            ret = sectors;
             goto out;
         }
 
         bmds = g_new0(BlkMigDevState, 1);
-        bmds->blk = blk_new();
+        bmds->blk = blk_new(BLK_PERM_CONSISTENT_READ, BLK_PERM_ALL);
         bmds->blk_name = g_strdup(bdrv_get_device_name(bs));
         bmds->bulk_completed = 0;
         bmds->total_sectors = sectors;
         bmds->completed_sectors = 0;
-        bmds->shared_base = block_mig_state.shared_base;
+        bmds->shared_base = migrate_use_block_incremental();
 
         assert(i < num_bs);
         bmds_bs[i].bmds = bmds;
@@ -445,7 +449,11 @@ static void init_blk_migration(QEMUFile *f)
         BlockDriverState *bs = bmds_bs[i].bs;
 
         if (bmds) {
-            blk_insert_bs(bmds->blk, bs);
+            ret = blk_insert_bs(bmds->blk, bs, &local_err);
+            if (ret < 0) {
+                error_report_err(local_err);
+                goto out;
+            }
 
             alloc_aio_bitmap(bmds);
             error_setg(&bmds->blocker, "block device is in use by migration");
@@ -453,8 +461,10 @@ static void init_blk_migration(QEMUFile *f)
         }
     }
 
+    ret = 0;
 out:
     g_free(bmds_bs);
+    return ret;
 }
 
 /* Called with no lock taken.  */
@@ -565,6 +575,9 @@ static int mig_save_device_dirty(QEMUFile *f, BlkMigDevState *bmds,
             }
 
             bdrv_reset_dirty_bitmap(bmds->dirty_bitmap, sector, nr_sectors);
+            sector += nr_sectors;
+            bmds->cur_dirty = sector;
+
             break;
         }
         sector += BDRV_SECTORS_PER_DIRTY_CHUNK;
@@ -705,7 +718,11 @@ static int block_save_setup(QEMUFile *f, void *opaque)
             block_mig_state.submitted, block_mig_state.transferred);
 
     qemu_mutex_lock_iothread();
-    init_blk_migration(f);
+    ret = init_blk_migration(f);
+    if (ret < 0) {
+        qemu_mutex_unlock_iothread();
+        return ret;
+    }
 
     /* start track dirty blocks */
     ret = set_dirty_tracking();
@@ -867,6 +884,8 @@ static int block_load(QEMUFile *f, void *opaque, int version_id)
     int64_t total_sectors = 0;
     int nr_sectors;
     int ret;
+    BlockDriverInfo bdi;
+    int cluster_size = BLOCK_SIZE;
 
     do {
         addr = qemu_get_be64(f);
@@ -901,6 +920,15 @@ static int block_load(QEMUFile *f, void *opaque, int version_id)
                     error_report_err(local_err);
                     return -EINVAL;
                 }
+
+                ret = bdrv_get_info(blk_bs(blk), &bdi);
+                if (ret == 0 && bdi.cluster_size > 0 &&
+                    bdi.cluster_size <= BLOCK_SIZE &&
+                    BLOCK_SIZE % bdi.cluster_size == 0) {
+                    cluster_size = bdi.cluster_size;
+                } else {
+                    cluster_size = BLOCK_SIZE;
+                }
             }
 
             if (total_sectors - addr < BDRV_SECTORS_PER_DIRTY_CHUNK) {
@@ -914,10 +942,30 @@ static int block_load(QEMUFile *f, void *opaque, int version_id)
                                         nr_sectors * BDRV_SECTOR_SIZE,
                                         BDRV_REQ_MAY_UNMAP);
             } else {
+                int i;
+                int64_t cur_addr;
+                uint8_t *cur_buf;
+
                 buf = g_malloc(BLOCK_SIZE);
                 qemu_get_buffer(f, buf, BLOCK_SIZE);
-                ret = blk_pwrite(blk, addr * BDRV_SECTOR_SIZE, buf,
-                                 nr_sectors * BDRV_SECTOR_SIZE, 0);
+                for (i = 0; i < BLOCK_SIZE / cluster_size; i++) {
+                    cur_addr = addr * BDRV_SECTOR_SIZE + i * cluster_size;
+                    cur_buf = buf + i * cluster_size;
+
+                    if ((!block_mig_state.zero_blocks ||
+                        cluster_size < BLOCK_SIZE) &&
+                        buffer_is_zero(cur_buf, cluster_size)) {
+                        ret = blk_pwrite_zeroes(blk, cur_addr,
+                                                cluster_size,
+                                                BDRV_REQ_MAY_UNMAP);
+                    } else {
+                        ret = blk_pwrite(blk, cur_addr, cur_buf,
+                                         cluster_size, 0);
+                    }
+                    if (ret < 0) {
+                        break;
+                    }
+                }
                 g_free(buf);
             }
 
@@ -945,22 +993,12 @@ static int block_load(QEMUFile *f, void *opaque, int version_id)
     return 0;
 }
 
-static void block_set_params(const MigrationParams *params, void *opaque)
-{
-    block_mig_state.blk_enable = params->blk;
-    block_mig_state.shared_base = params->shared;
-
-    /* shared base means that blk_enable = 1 */
-    block_mig_state.blk_enable |= params->shared;
-}
-
 static bool block_is_active(void *opaque)
 {
-    return block_mig_state.blk_enable == 1;
+    return migrate_use_block();
 }
 
 static SaveVMHandlers savevm_block_handlers = {
-    .set_params = block_set_params,
     .save_live_setup = block_save_setup,
     .save_live_iterate = block_save_iterate,
     .save_live_complete_precopy = block_save_complete,

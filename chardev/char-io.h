@@ -29,7 +29,7 @@
 #include "sysemu/char.h"
 
 /* Can only be used for read */
-guint io_add_watch_poll(Chardev *chr,
+GSource *io_add_watch_poll(Chardev *chr,
                         QIOChannel *ioc,
                         IOCanReadHandler *fd_can_read,
                         QIOChannelFunc fd_read,

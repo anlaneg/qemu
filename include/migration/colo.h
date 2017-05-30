@@ -14,7 +14,6 @@
 #define QEMU_COLO_H
 
 #include "qemu-common.h"
-#include "migration/migration.h"
 #include "qemu/coroutine_int.h"
 #include "qemu/thread.h"
 #include "qemu/main-loop.h"
@@ -35,4 +34,6 @@ COLOMode get_colo_mode(void);
 
 /* failover */
 void colo_do_failover(MigrationState *s);
+
+void colo_checkpoint_notify(void *opaque);
 #endif

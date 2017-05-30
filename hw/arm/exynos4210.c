@@ -24,6 +24,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu-common.h"
+#include "qemu/log.h"
 #include "cpu.h"
 #include "hw/boards.h"
 #include "sysemu/sysemu.h"
@@ -31,6 +32,7 @@
 #include "hw/arm/arm.h"
 #include "hw/loader.h"
 #include "hw/arm/exynos4210.h"
+#include "hw/sd/sd.h"
 #include "hw/usb/hcd-ehci.h"
 
 #define EXYNOS4210_CHIPID_ADDR         0x10000000
@@ -71,8 +73,18 @@
 #define EXYNOS4210_EXT_COMBINER_BASE_ADDR   0x10440000
 #define EXYNOS4210_INT_COMBINER_BASE_ADDR   0x10448000
 
+/* SD/MMC host controllers */
+#define EXYNOS4210_SDHCI_CAPABILITIES       0x05E80080
+#define EXYNOS4210_SDHCI_BASE_ADDR          0x12510000
+#define EXYNOS4210_SDHCI_ADDR(n)            (EXYNOS4210_SDHCI_BASE_ADDR + \
+                                                0x00010000 * (n))
+#define EXYNOS4210_SDHCI_NUMBER             4
+
 /* PMU SFR base address */
 #define EXYNOS4210_PMU_BASE_ADDR            0x10020000
+
+/* Clock controller SFR base address */
+#define EXYNOS4210_CLK_BASE_ADDR            0x10030000
 
 /* Display controllers (FIMD) */
 #define EXYNOS4210_FIMD0_BASE_ADDR          0x11C00000
@@ -138,6 +150,16 @@ void exynos4210_write_secondary(ARMCPU *cpu,
                        info->smp_loader_start);
 }
 
+static uint64_t exynos4210_calc_affinity(int cpu)
+{
+    uint64_t mp_affinity;
+
+    /* Exynos4210 has 0x9 as cluster ID */
+    mp_affinity = (0x9 << ARM_AFF1_SHIFT) | cpu;
+
+    return mp_affinity;
+}
+
 Exynos4210State *exynos4210_init(MemoryRegion *system_mem,
         unsigned long ram_size)
 {
@@ -163,6 +185,8 @@ Exynos4210State *exynos4210_init(MemoryRegion *system_mem,
         }
 
         s->cpu[n] = ARM_CPU(cpuobj);
+        object_property_set_int(cpuobj, exynos4210_calc_affinity(n),
+                                "mp-affinity", &error_abort);
         object_property_set_int(cpuobj, EXYNOS4210_SMP_PRIVATE_BASE_ADDR,
                                 "reset-cbar", &error_abort);
         object_property_set_bool(cpuobj, true, "realized", &error_fatal);
@@ -297,6 +321,8 @@ Exynos4210State *exynos4210_init(MemoryRegion *system_mem,
     */
     sysbus_create_simple("exynos4210.pmu", EXYNOS4210_PMU_BASE_ADDR, NULL);
 
+    sysbus_create_simple("exynos4210.clk", EXYNOS4210_CLK_BASE_ADDR, NULL);
+
     /* PWM */
     sysbus_create_varargs("exynos4210.pwm", EXYNOS4210_PWM_BASE_ADDR,
                           s->irq_table[exynos4210_get_irq(22, 0)],
@@ -363,6 +389,27 @@ Exynos4210State *exynos4210_init(MemoryRegion *system_mem,
     exynos4210_uart_create(EXYNOS4210_UART3_BASE_ADDR,
                            EXYNOS4210_UART3_FIFO_SIZE, 3, NULL,
                   s->irq_table[exynos4210_get_irq(EXYNOS4210_UART_INT_GRP, 3)]);
+
+    /*** SD/MMC host controllers ***/
+    for (n = 0; n < EXYNOS4210_SDHCI_NUMBER; n++) {
+        DeviceState *carddev;
+        BlockBackend *blk;
+        DriveInfo *di;
+
+        dev = qdev_create(NULL, "generic-sdhci");
+        qdev_prop_set_uint32(dev, "capareg", EXYNOS4210_SDHCI_CAPABILITIES);
+        qdev_init_nofail(dev);
+
+        busdev = SYS_BUS_DEVICE(dev);
+        sysbus_mmio_map(busdev, 0, EXYNOS4210_SDHCI_ADDR(n));
+        sysbus_connect_irq(busdev, 0, s->irq_table[exynos4210_get_irq(29, n)]);
+
+        di = drive_get(IF_SD, 0, n);
+        blk = di ? blk_by_legacy_dinfo(di) : NULL;
+        carddev = qdev_create(qdev_get_child_bus(dev, "sd-bus"), TYPE_SD_CARD);
+        qdev_prop_set_drive(carddev, "drive", blk, &error_abort);
+        qdev_init_nofail(carddev);
+    }
 
     /*** Display controller (FIMD) ***/
     sysbus_create_varargs("exynos4210.fimd", EXYNOS4210_FIMD0_BASE_ADDR,

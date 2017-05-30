@@ -21,6 +21,7 @@
  */
 #include "qemu/osdep.h"
 #include "hw/i386/amd_iommu.h"
+#include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "trace.h"
 
@@ -572,8 +573,7 @@ static uint64_t amdvi_mmio_read(void *opaque, hwaddr addr, unsigned size)
 
     uint64_t val = -1;
     if (addr + size > AMDVI_MMIO_SIZE) {
-        trace_amdvi_mmio_read("error: addr outside region: max ",
-                (uint64_t)AMDVI_MMIO_SIZE, addr, size);
+        trace_amdvi_mmio_read_invalid(AMDVI_MMIO_SIZE, addr, size);
         return (uint64_t)-1;
     }
 
@@ -1138,7 +1138,19 @@ static void amdvi_realize(DeviceState *dev, Error **err)
     int ret = 0;
     AMDVIState *s = AMD_IOMMU_DEVICE(dev);
     X86IOMMUState *x86_iommu = X86_IOMMU_DEVICE(dev);
-    PCIBus *bus = PC_MACHINE(qdev_get_machine())->bus;
+    MachineState *ms = MACHINE(qdev_get_machine());
+    MachineClass *mc = MACHINE_GET_CLASS(ms);
+    PCMachineState *pcms =
+        PC_MACHINE(object_dynamic_cast(OBJECT(ms), TYPE_PC_MACHINE));
+    PCIBus *bus;
+
+    if (!pcms) {
+        error_setg(err, "Machine-type '%s' not supported by amd-iommu",
+                   mc->name);
+        return;
+    }
+
+    bus = pcms->bus;
     s->iotlb = g_hash_table_new_full(amdvi_uint64_hash,
                                      amdvi_uint64_equal, g_free, g_free);
 
@@ -1187,6 +1199,8 @@ static void amdvi_class_init(ObjectClass *klass, void* data)
     dc->vmsd = &vmstate_amdvi;
     dc->hotpluggable = false;
     dc_class->realize = amdvi_realize;
+    /* Supported by the pc-q35-* machine types */
+    dc->user_creatable = true;
 }
 
 static const TypeInfo amdvi = {

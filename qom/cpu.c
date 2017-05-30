@@ -113,9 +113,19 @@ static void cpu_common_get_memory_mapping(CPUState *cpu,
     error_setg(errp, "Obtaining memory mappings is unsupported on this CPU.");
 }
 
+/* Resetting the IRQ comes from across the code base so we take the
+ * BQL here if we need to.  cpu_interrupt assumes it is held.*/
 void cpu_reset_interrupt(CPUState *cpu, int mask)
 {
+    bool need_lock = !qemu_mutex_iothread_locked();
+
+    if (need_lock) {
+        qemu_mutex_lock_iothread();
+    }
     cpu->interrupt_request &= ~mask;
+    if (need_lock) {
+        qemu_mutex_unlock_iothread();
+    }
 }
 
 void cpu_exit(CPUState *cpu)
@@ -123,7 +133,7 @@ void cpu_exit(CPUState *cpu)
     atomic_set(&cpu->exit_request, 1);
     /* Ensure cpu_exec will see the exit request after TCG has exited.  */
     smp_wmb();
-    atomic_set(&cpu->tcg_exit_req, 1);
+    atomic_set(&cpu->icount_decr.u16.high, -1);
 }
 
 int cpu_write_elf32_qemunote(WriteCoreDumpFunction f, CPUState *cpu,
@@ -216,6 +226,17 @@ static void cpu_common_noop(CPUState *cpu)
 static bool cpu_common_exec_interrupt(CPUState *cpu, int int_req)
 {
     return false;
+}
+
+GuestPanicInformation *cpu_get_crash_info(CPUState *cpu)
+{
+    CPUClass *cc = CPU_GET_CLASS(cpu);
+    GuestPanicInformation *res = NULL;
+
+    if (cc->get_crash_info) {
+        res = cc->get_crash_info(cpu);
+    }
+    return res;
 }
 
 void cpu_dump_state(CPUState *cpu, FILE *f, fprintf_function cpu_fprintf,
@@ -361,6 +382,7 @@ static void cpu_common_unrealizefn(DeviceState *dev, Error **errp)
 
 static void cpu_common_initfn(Object *obj)
 {
+    uint32_t count;
     CPUState *cpu = CPU(obj);
     CPUClass *cc = CPU_GET_CLASS(obj);
 
@@ -375,7 +397,10 @@ static void cpu_common_initfn(Object *obj)
     QTAILQ_INIT(&cpu->breakpoints);
     QTAILQ_INIT(&cpu->watchpoints);
 
-    cpu->trace_dstate = bitmap_new(trace_get_vcpu_event_count());
+    count = trace_get_vcpu_event_count();
+    if (count) {
+        cpu->trace_dstate = bitmap_new(count);
+    }
 
     cpu_exec_initfn(cpu);
 }
@@ -389,6 +414,11 @@ static void cpu_common_finalize(Object *obj)
 static int64_t cpu_common_get_arch_id(CPUState *cpu)
 {
     return cpu->cpu_index;
+}
+
+static vaddr cpu_adjust_watchpoint_address(CPUState *cpu, vaddr addr, int len)
+{
+    return addr;
 }
 
 static void cpu_class_init(ObjectClass *klass, void *data)
@@ -415,6 +445,7 @@ static void cpu_class_init(ObjectClass *klass, void *data)
     k->cpu_exec_enter = cpu_common_noop;
     k->cpu_exec_exit = cpu_common_noop;
     k->cpu_exec_interrupt = cpu_common_exec_interrupt;
+    k->adjust_watchpoint_address = cpu_adjust_watchpoint_address;
     set_bit(DEVICE_CATEGORY_CPU, dc->categories);
     dc->realize = cpu_common_realizefn;
     dc->unrealize = cpu_common_unrealizefn;
@@ -422,7 +453,7 @@ static void cpu_class_init(ObjectClass *klass, void *data)
      * Reason: CPUs still need special care by board code: wiring up
      * IRQs, adding reset handlers, halting non-first CPUs, ...
      */
-    dc->cannot_instantiate_with_device_add_yet = true;
+    dc->user_creatable = false;
 }
 
 static const TypeInfo cpu_type_info = {

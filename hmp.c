@@ -19,6 +19,7 @@
 #include "net/eth.h"
 #include "sysemu/char.h"
 #include "sysemu/block-backend.h"
+#include "sysemu/sysemu.h"
 #include "qemu/config-file.h"
 #include "qemu/option.h"
 #include "qemu/timer.h"
@@ -28,15 +29,18 @@
 #include "monitor/qdev.h"
 #include "qapi/opts-visitor.h"
 #include "qapi/qmp/qerror.h"
+#include "qapi/string-input-visitor.h"
 #include "qapi/string-output-visitor.h"
 #include "qapi/util.h"
 #include "qapi-visit.h"
 #include "qom/object_interfaces.h"
 #include "ui/console.h"
+#include "block/nbd.h"
 #include "block/qapi.h"
 #include "qemu-io.h"
 #include "qemu/cutils.h"
 #include "qemu/error-report.h"
+#include "exec/ramlist.h"
 #include "hw/intc/intc.h"
 
 #ifdef CONFIG_SPICE
@@ -215,6 +219,9 @@ void hmp_info_migrate(Monitor *mon, const QDict *qdict)
                        info->ram->normal_bytes >> 10);
         monitor_printf(mon, "dirty sync count: %" PRIu64 "\n",
                        info->ram->dirty_sync_count);
+        monitor_printf(mon, "page size: %" PRIu64 " kbytes\n",
+                       info->ram->page_size >> 10);
+
         if (info->ram->dirty_pages_rate) {
             monitor_printf(mon, "dirty pages rate: %" PRIu64 " pages\n",
                            info->ram->dirty_pages_rate);
@@ -265,13 +272,11 @@ void hmp_info_migrate_capabilities(Monitor *mon, const QDict *qdict)
     caps = qmp_query_migrate_capabilities(NULL);
 
     if (caps) {
-        monitor_printf(mon, "capabilities: ");
         for (cap = caps; cap; cap = cap->next) {
-            monitor_printf(mon, "%s: %s ",
+            monitor_printf(mon, "%s: %s\n",
                            MigrationCapability_lookup[cap->value->capability],
                            cap->value->state ? "on" : "off");
         }
-        monitor_printf(mon, "\n");
     }
 
     qapi_free_MigrationCapabilityStatusList(caps);
@@ -284,46 +289,48 @@ void hmp_info_migrate_parameters(Monitor *mon, const QDict *qdict)
     params = qmp_query_migrate_parameters(NULL);
 
     if (params) {
-        monitor_printf(mon, "parameters:");
         assert(params->has_compress_level);
-        monitor_printf(mon, " %s: %" PRId64,
+        monitor_printf(mon, "%s: %" PRId64 "\n",
             MigrationParameter_lookup[MIGRATION_PARAMETER_COMPRESS_LEVEL],
             params->compress_level);
         assert(params->has_compress_threads);
-        monitor_printf(mon, " %s: %" PRId64,
+        monitor_printf(mon, "%s: %" PRId64 "\n",
             MigrationParameter_lookup[MIGRATION_PARAMETER_COMPRESS_THREADS],
             params->compress_threads);
         assert(params->has_decompress_threads);
-        monitor_printf(mon, " %s: %" PRId64,
+        monitor_printf(mon, "%s: %" PRId64 "\n",
             MigrationParameter_lookup[MIGRATION_PARAMETER_DECOMPRESS_THREADS],
             params->decompress_threads);
         assert(params->has_cpu_throttle_initial);
-        monitor_printf(mon, " %s: %" PRId64,
+        monitor_printf(mon, "%s: %" PRId64 "\n",
             MigrationParameter_lookup[MIGRATION_PARAMETER_CPU_THROTTLE_INITIAL],
             params->cpu_throttle_initial);
         assert(params->has_cpu_throttle_increment);
-        monitor_printf(mon, " %s: %" PRId64,
+        monitor_printf(mon, "%s: %" PRId64 "\n",
             MigrationParameter_lookup[MIGRATION_PARAMETER_CPU_THROTTLE_INCREMENT],
             params->cpu_throttle_increment);
-        monitor_printf(mon, " %s: '%s'",
+        monitor_printf(mon, "%s: '%s'\n",
             MigrationParameter_lookup[MIGRATION_PARAMETER_TLS_CREDS],
             params->has_tls_creds ? params->tls_creds : "");
-        monitor_printf(mon, " %s: '%s'",
+        monitor_printf(mon, "%s: '%s'\n",
             MigrationParameter_lookup[MIGRATION_PARAMETER_TLS_HOSTNAME],
             params->has_tls_hostname ? params->tls_hostname : "");
         assert(params->has_max_bandwidth);
-        monitor_printf(mon, " %s: %" PRId64 " bytes/second",
+        monitor_printf(mon, "%s: %" PRId64 " bytes/second\n",
             MigrationParameter_lookup[MIGRATION_PARAMETER_MAX_BANDWIDTH],
             params->max_bandwidth);
         assert(params->has_downtime_limit);
-        monitor_printf(mon, " %s: %" PRId64 " milliseconds",
+        monitor_printf(mon, "%s: %" PRId64 " milliseconds\n",
             MigrationParameter_lookup[MIGRATION_PARAMETER_DOWNTIME_LIMIT],
             params->downtime_limit);
         assert(params->has_x_checkpoint_delay);
-        monitor_printf(mon, " %s: %" PRId64,
+        monitor_printf(mon, "%s: %" PRId64 "\n",
             MigrationParameter_lookup[MIGRATION_PARAMETER_X_CHECKPOINT_DELAY],
             params->x_checkpoint_delay);
-        monitor_printf(mon, "\n");
+        assert(params->has_block_incremental);
+        monitor_printf(mon, "%s: %s\n",
+            MigrationParameter_lookup[MIGRATION_PARAMETER_BLOCK_INCREMENTAL],
+                       params->block_incremental ? "on" : "off");
     }
 
     qapi_free_MigrationParameters(params);
@@ -1014,8 +1021,14 @@ void hmp_memsave(Monitor *mon, const QDict *qdict)
     const char *filename = qdict_get_str(qdict, "filename");
     uint64_t addr = qdict_get_int(qdict, "val");
     Error *err = NULL;
+    int cpu_index = monitor_get_cpu_index();
 
-    qmp_memsave(addr, size, filename, true, monitor_get_cpu_index(), &err);
+    if (cpu_index < 0) {
+        monitor_printf(mon, "No CPU available\n");
+        return;
+    }
+
+    qmp_memsave(addr, size, filename, true, cpu_index, &err);
     hmp_handle_error(mon, &err);
 }
 
@@ -1263,6 +1276,184 @@ void hmp_snapshot_delete_blkdev_internal(Monitor *mon, const QDict *qdict)
     hmp_handle_error(mon, &err);
 }
 
+void hmp_loadvm(Monitor *mon, const QDict *qdict)
+{
+    int saved_vm_running  = runstate_is_running();
+    const char *name = qdict_get_str(qdict, "name");
+    Error *err = NULL;
+
+    vm_stop(RUN_STATE_RESTORE_VM);
+
+    if (load_vmstate(name, &err) == 0 && saved_vm_running) {
+        vm_start();
+    }
+    hmp_handle_error(mon, &err);
+}
+
+void hmp_savevm(Monitor *mon, const QDict *qdict)
+{
+    Error *err = NULL;
+
+    save_vmstate(qdict_get_try_str(qdict, "name"), &err);
+    hmp_handle_error(mon, &err);
+}
+
+void hmp_delvm(Monitor *mon, const QDict *qdict)
+{
+    BlockDriverState *bs;
+    Error *err;
+    const char *name = qdict_get_str(qdict, "name");
+
+    if (bdrv_all_delete_snapshot(name, &bs, &err) < 0) {
+        error_reportf_err(err,
+                          "Error while deleting snapshot on device '%s': ",
+                          bdrv_get_device_name(bs));
+    }
+}
+
+void hmp_info_snapshots(Monitor *mon, const QDict *qdict)
+{
+    BlockDriverState *bs, *bs1;
+    BdrvNextIterator it1;
+    QEMUSnapshotInfo *sn_tab, *sn;
+    bool no_snapshot = true;
+    int nb_sns, i;
+    int total;
+    int *global_snapshots;
+    AioContext *aio_context;
+
+    typedef struct SnapshotEntry {
+        QEMUSnapshotInfo sn;
+        QTAILQ_ENTRY(SnapshotEntry) next;
+    } SnapshotEntry;
+
+    typedef struct ImageEntry {
+        const char *imagename;
+        QTAILQ_ENTRY(ImageEntry) next;
+        QTAILQ_HEAD(, SnapshotEntry) snapshots;
+    } ImageEntry;
+
+    QTAILQ_HEAD(, ImageEntry) image_list =
+        QTAILQ_HEAD_INITIALIZER(image_list);
+
+    ImageEntry *image_entry, *next_ie;
+    SnapshotEntry *snapshot_entry;
+
+    bs = bdrv_all_find_vmstate_bs();
+    if (!bs) {
+        monitor_printf(mon, "No available block device supports snapshots\n");
+        return;
+    }
+    aio_context = bdrv_get_aio_context(bs);
+
+    aio_context_acquire(aio_context);
+    nb_sns = bdrv_snapshot_list(bs, &sn_tab);
+    aio_context_release(aio_context);
+
+    if (nb_sns < 0) {
+        monitor_printf(mon, "bdrv_snapshot_list: error %d\n", nb_sns);
+        return;
+    }
+
+    for (bs1 = bdrv_first(&it1); bs1; bs1 = bdrv_next(&it1)) {
+        int bs1_nb_sns = 0;
+        ImageEntry *ie;
+        SnapshotEntry *se;
+        AioContext *ctx = bdrv_get_aio_context(bs1);
+
+        aio_context_acquire(ctx);
+        if (bdrv_can_snapshot(bs1)) {
+            sn = NULL;
+            bs1_nb_sns = bdrv_snapshot_list(bs1, &sn);
+            if (bs1_nb_sns > 0) {
+                no_snapshot = false;
+                ie = g_new0(ImageEntry, 1);
+                ie->imagename = bdrv_get_device_name(bs1);
+                QTAILQ_INIT(&ie->snapshots);
+                QTAILQ_INSERT_TAIL(&image_list, ie, next);
+                for (i = 0; i < bs1_nb_sns; i++) {
+                    se = g_new0(SnapshotEntry, 1);
+                    se->sn = sn[i];
+                    QTAILQ_INSERT_TAIL(&ie->snapshots, se, next);
+                }
+            }
+            g_free(sn);
+        }
+        aio_context_release(ctx);
+    }
+
+    if (no_snapshot) {
+        monitor_printf(mon, "There is no snapshot available.\n");
+        return;
+    }
+
+    global_snapshots = g_new0(int, nb_sns);
+    total = 0;
+    for (i = 0; i < nb_sns; i++) {
+        SnapshotEntry *next_sn;
+        if (bdrv_all_find_snapshot(sn_tab[i].name, &bs1) == 0) {
+            global_snapshots[total] = i;
+            total++;
+            QTAILQ_FOREACH(image_entry, &image_list, next) {
+                QTAILQ_FOREACH_SAFE(snapshot_entry, &image_entry->snapshots,
+                                    next, next_sn) {
+                    if (!strcmp(sn_tab[i].name, snapshot_entry->sn.name)) {
+                        QTAILQ_REMOVE(&image_entry->snapshots, snapshot_entry,
+                                      next);
+                        g_free(snapshot_entry);
+                    }
+                }
+            }
+        }
+    }
+
+    monitor_printf(mon, "List of snapshots present on all disks:\n");
+
+    if (total > 0) {
+        bdrv_snapshot_dump((fprintf_function)monitor_printf, mon, NULL);
+        monitor_printf(mon, "\n");
+        for (i = 0; i < total; i++) {
+            sn = &sn_tab[global_snapshots[i]];
+            /* The ID is not guaranteed to be the same on all images, so
+             * overwrite it.
+             */
+            pstrcpy(sn->id_str, sizeof(sn->id_str), "--");
+            bdrv_snapshot_dump((fprintf_function)monitor_printf, mon, sn);
+            monitor_printf(mon, "\n");
+        }
+    } else {
+        monitor_printf(mon, "None\n");
+    }
+
+    QTAILQ_FOREACH(image_entry, &image_list, next) {
+        if (QTAILQ_EMPTY(&image_entry->snapshots)) {
+            continue;
+        }
+        monitor_printf(mon,
+                       "\nList of partial (non-loadable) snapshots on '%s':\n",
+                       image_entry->imagename);
+        bdrv_snapshot_dump((fprintf_function)monitor_printf, mon, NULL);
+        monitor_printf(mon, "\n");
+        QTAILQ_FOREACH(snapshot_entry, &image_entry->snapshots, next) {
+            bdrv_snapshot_dump((fprintf_function)monitor_printf, mon,
+                               &snapshot_entry->sn);
+            monitor_printf(mon, "\n");
+        }
+    }
+
+    QTAILQ_FOREACH_SAFE(image_entry, &image_list, next, next_ie) {
+        SnapshotEntry *next_sn;
+        QTAILQ_FOREACH_SAFE(snapshot_entry, &image_entry->snapshots, next,
+                            next_sn) {
+            g_free(snapshot_entry);
+        }
+        g_free(image_entry);
+    }
+    g_free(sn_tab);
+    g_free(global_snapshots);
+
+}
+
 void hmp_migrate_cancel(Monitor *mon, const QDict *qdict)
 {
     qmp_migrate_cancel(NULL);
@@ -1338,12 +1529,13 @@ void hmp_migrate_set_parameter(Monitor *mon, const QDict *qdict)
 {
     const char *param = qdict_get_str(qdict, "parameter");
     const char *valuestr = qdict_get_str(qdict, "value");
-    int64_t valuebw = 0;
-    long valueint = 0;
-    char *endp;
+    Visitor *v = string_input_visitor_new(valuestr);
+    uint64_t valuebw = 0;
+    int64_t valueint = 0;
+    bool valuebool = false;
     Error *err = NULL;
     bool use_int_value = false;
-    int i;
+    int i, ret;
 
     for (i = 0; i < MIGRATION_PARAMETER__MAX; i++) {
         if (strcmp(param, MigrationParameter_lookup[i]) == 0) {
@@ -1379,9 +1571,9 @@ void hmp_migrate_set_parameter(Monitor *mon, const QDict *qdict)
                 break;
             case MIGRATION_PARAMETER_MAX_BANDWIDTH:
                 p.has_max_bandwidth = true;
-                valuebw = qemu_strtosz(valuestr, &endp);
-                if (valuebw < 0 || (size_t)valuebw != valuebw
-                    || *endp != '\0') {
+                ret = qemu_strtosz_MiB(valuestr, NULL, &valuebw);
+                if (ret < 0 || valuebw > INT64_MAX
+                    || (size_t)valuebw != valuebw) {
                     error_setg(&err, "Invalid size %s", valuestr);
                     goto cleanup;
                 }
@@ -1395,12 +1587,19 @@ void hmp_migrate_set_parameter(Monitor *mon, const QDict *qdict)
                 p.has_x_checkpoint_delay = true;
                 use_int_value = true;
                 break;
+            case MIGRATION_PARAMETER_BLOCK_INCREMENTAL:
+                p.has_block_incremental = true;
+                visit_type_bool(v, param, &valuebool, &err);
+                if (err) {
+                    goto cleanup;
+                }
+                p.block_incremental = valuebool;
+                break;
             }
 
             if (use_int_value) {
-                if (qemu_strtol(valuestr, NULL, 10, &valueint) < 0) {
-                    error_setg(&err, "Unable to parse '%s' as an int",
-                               valuestr);
+                visit_type_int(v, param, &valueint, &err);
+                if (err) {
                     goto cleanup;
                 }
                 /* Set all integers; only one has_FOO will be set, and
@@ -1424,6 +1623,7 @@ void hmp_migrate_set_parameter(Monitor *mon, const QDict *qdict)
     }
 
  cleanup:
+    visit_free(v);
     if (err) {
         error_report_err(err);
     }
@@ -1552,6 +1752,7 @@ void hmp_block_set_io_throttle(Monitor *mon, const QDict *qdict)
 {
     Error *err = NULL;
     BlockIOThrottle throttle = {
+        .has_device = true,
         .device = (char *) qdict_get_str(qdict, "device"),
         .bps = qdict_get_int(qdict, "bps"),
         .bps_rd = qdict_get_int(qdict, "bps_rd"),
@@ -1942,7 +2143,7 @@ void hmp_nbd_server_start(Monitor *mon, const QDict *qdict)
         goto exit;
     }
 
-    qmp_nbd_server_start(addr, false, NULL, &local_err);
+    nbd_server_start(addr, NULL, &local_err);
     qapi_free_SocketAddress(addr);
     if (local_err != NULL) {
         goto exit;
@@ -2039,13 +2240,17 @@ void hmp_qemu_io(Monitor *mon, const QDict *qdict)
     const char* device = qdict_get_str(qdict, "device");
     const char* command = qdict_get_str(qdict, "command");
     Error *err = NULL;
+    int ret;
 
     blk = blk_by_name(device);
     if (!blk) {
         BlockDriverState *bs = bdrv_lookup_bs(NULL, device, &err);
         if (bs) {
-            blk = local_blk = blk_new();
-            blk_insert_bs(blk, bs);
+            blk = local_blk = blk_new(0, BLK_PERM_ALL);
+            ret = blk_insert_bs(blk, bs, &err);
+            if (ret < 0) {
+                goto fail;
+            }
         } else {
             goto fail;
         }
@@ -2054,6 +2259,31 @@ void hmp_qemu_io(Monitor *mon, const QDict *qdict)
     aio_context = blk_get_aio_context(blk);
     aio_context_acquire(aio_context);
 
+    /*
+     * Notably absent: Proper permission management. This is sad, but it seems
+     * almost impossible to achieve without changing the semantics and thereby
+     * limiting the use cases of the qemu-io HMP command.
+     *
+     * In an ideal world we would unconditionally create a new BlockBackend for
+     * qemuio_command(), but we have commands like 'reopen' and want them to
+     * take effect on the exact BlockBackend whose name the user passed instead
+     * of just on a temporary copy of it.
+     *
+     * Another problem is that deleting the temporary BlockBackend involves
+     * draining all requests on it first, but some qemu-iotests cases want to
+     * issue multiple aio_read/write requests and expect them to complete in
+     * the background while the monitor has already returned.
+     *
+     * This is also what prevents us from saving the original permissions and
+     * restoring them later: We can't revoke permissions until all requests
+     * have completed, and we don't know when that is nor can we really let
+     * anything else run before we have revoken them to avoid race conditions.
+     *
+     * What happens now is that command() in qemu-io-cmds.c can extend the
+     * permissions if necessary for the qemu-io command. And they simply stay
+     * extended, possibly resulting in a read-only guest device keeping write
+     * permissions. Ugly, but it appears to be the lesser evil.
+     */
     qemuio_command(blk, command);
 
     aio_context_release(aio_context);
@@ -2148,10 +2378,15 @@ void hmp_info_iothreads(Monitor *mon, const QDict *qdict)
 {
     IOThreadInfoList *info_list = qmp_query_iothreads(NULL);
     IOThreadInfoList *info;
+    IOThreadInfo *value;
 
     for (info = info_list; info; info = info->next) {
-        monitor_printf(mon, "%s: thread_id=%" PRId64 "\n",
-                       info->value->id, info->value->thread_id);
+        value = info->value;
+        monitor_printf(mon, "%s:\n", value->id);
+        monitor_printf(mon, "  thread_id=%" PRId64 "\n", value->thread_id);
+        monitor_printf(mon, "  poll-max-ns=%" PRId64 "\n", value->poll_max_ns);
+        monitor_printf(mon, "  poll-grow=%" PRId64 "\n", value->poll_grow);
+        monitor_printf(mon, "  poll-shrink=%" PRId64 "\n", value->poll_shrink);
     }
 
     qapi_free_IOThreadInfoList(info_list);
@@ -2524,6 +2759,11 @@ void hmp_info_dump(Monitor *mon, const QDict *qdict)
     qapi_free_DumpQueryResult(result);
 }
 
+void hmp_info_ramblock(Monitor *mon, const QDict *qdict)
+{
+    ram_block_dump(mon);
+}
+
 void hmp_hotpluggable_cpus(Monitor *mon, const QDict *qdict)
 {
     Error *err = NULL;
@@ -2564,4 +2804,15 @@ void hmp_hotpluggable_cpus(Monitor *mon, const QDict *qdict)
     }
 
     qapi_free_HotpluggableCPUList(saved);
+}
+
+void hmp_info_vm_generation_id(Monitor *mon, const QDict *qdict)
+{
+    Error *err = NULL;
+    GuidInfo *info = qmp_query_vm_generation_id(&err);
+    if (info) {
+        monitor_printf(mon, "%s\n", info->guid);
+    }
+    hmp_handle_error(mon, &err);
+    qapi_free_GuidInfo(info);
 }

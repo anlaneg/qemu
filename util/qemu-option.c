@@ -128,36 +128,33 @@ int get_param_value(char *buf, int buf_size,
 static void parse_option_bool(const char *name, const char *value, bool *ret,
                               Error **errp)
 {
-    if (value != NULL) {
-        if (!strcmp(value, "on")) {
-            *ret = 1;
-        } else if (!strcmp(value, "off")) {
-            *ret = 0;
-        } else {
-            error_setg(errp, QERR_INVALID_PARAMETER_VALUE,
-                       name, "'on' or 'off'");
-        }
-    } else {
+    if (!strcmp(value, "on")) {
         *ret = 1;
+    } else if (!strcmp(value, "off")) {
+        *ret = 0;
+    } else {
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE,
+                   name, "'on' or 'off'");
     }
 }
 
 static void parse_option_number(const char *name, const char *value,
                                 uint64_t *ret, Error **errp)
 {
-    char *postfix;
     uint64_t number;
+    int err;
 
-    if (value != NULL) {
-        number = strtoull(value, &postfix, 0);
-        if (*postfix != '\0') {
-            error_setg(errp, QERR_INVALID_PARAMETER_VALUE, name, "a number");
-            return;
-        }
-        *ret = number;
-    } else {
-        error_setg(errp, QERR_INVALID_PARAMETER_VALUE, name, "a number");
+    err = qemu_strtou64(value, NULL, 0, &number);
+    if (err == -ERANGE) {
+        error_setg(errp, "Value '%s' is too large for parameter '%s'",
+                   value, name);
+        return;
     }
+    if (err) {
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE, name, "a number");
+        return;
+    }
+    *ret = number;
 }
 
 //通过名称查找desc
@@ -178,43 +175,24 @@ static const QemuOptDesc *find_desc_by_name(const QemuOptDesc *desc,
 void parse_option_size(const char *name, const char *value,
                        uint64_t *ret, Error **errp)
 {
-    char *postfix;
-    double sizef;
+    uint64_t size;
+    int err;
 
-    if (value != NULL) {
-        sizef = strtod(value, &postfix);
-        if (sizef < 0 || sizef > UINT64_MAX) {
-            error_setg(errp, QERR_INVALID_PARAMETER_VALUE, name,
-                             "a non-negative number below 2^64");
-            return;
-        }
-        switch (*postfix) {
-        case 'T':
-            sizef *= 1024;
-            /* fall through */
-        case 'G':
-            sizef *= 1024;
-            /* fall through */
-        case 'M':
-            sizef *= 1024;
-            /* fall through */
-        case 'K':
-        case 'k':
-            sizef *= 1024;
-            /* fall through */
-        case 'b':
-        case '\0':
-            *ret = (uint64_t) sizef;
-            break;
-        default:
-            error_setg(errp, QERR_INVALID_PARAMETER_VALUE, name, "a size");
-            error_append_hint(errp, "You may use k, M, G or T suffixes for "
-                    "kilobytes, megabytes, gigabytes and terabytes.\n");
-            return;
-        }
-    } else {
-        error_setg(errp, QERR_INVALID_PARAMETER_VALUE, name, "a size");
+    err = qemu_strtosz(value, NULL, &size);
+    if (err == -ERANGE) {
+        error_setg(errp, "Value '%s' is out of range for parameter '%s'",
+                   value, name);
+        return;
     }
+    if (err) {
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE, name,
+                   "a non-negative number below 2^64");
+        error_append_hint(errp, "Optional suffix k, M, G, T, P or E means"
+                          " kilo-, mega-, giga-, tera-, peta-\n"
+                          "and exabytes, respectively.\n");
+        return;
+    }
+    *ret = size;
 }
 
 //检查param中是否有help选项
@@ -336,6 +314,25 @@ const char *qemu_opt_get(QemuOpts *opts, const char *name)
         }
     }
     return opt ? opt->str : NULL;
+}
+
+void qemu_opt_iter_init(QemuOptsIter *iter, QemuOpts *opts, const char *name)
+{
+    iter->opts = opts;
+    iter->opt = QTAILQ_FIRST(&opts->head);
+    iter->name = name;
+}
+
+const char *qemu_opt_iter_next(QemuOptsIter *iter)
+{
+    QemuOpt *ret = iter->opt;
+    if (iter->name) {
+        while (ret && !g_str_equal(iter->name, ret->name)) {
+            ret = QTAILQ_NEXT(ret, next);
+        }
+    }
+    iter->opt = ret ? QTAILQ_NEXT(ret, next) : NULL;
+    return ret ? ret->str : NULL;
 }
 
 /* Get a known option (or its default) and remove it from the list
@@ -553,6 +550,7 @@ static void opt_set(QemuOpts *opts, const char *name, const char *value,
     }
     opt->desc = desc;
     opt->str = g_strdup(value);
+    assert(opt->str);
     qemu_opt_parse(opt, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
@@ -1067,17 +1065,15 @@ void qemu_opts_absorb_qdict(QemuOpts *opts, QDict *qdict, Error **errp)
 QDict *qemu_opts_to_qdict(QemuOpts *opts, QDict *qdict)
 {
     QemuOpt *opt;
-    QObject *val;
 
     if (!qdict) {
         qdict = qdict_new();
     }
     if (opts->id) {
-        qdict_put(qdict, "id", qstring_from_str(opts->id));
+        qdict_put_str(qdict, "id", opts->id);
     }
     QTAILQ_FOREACH(opt, &opts->head, next) {
-        val = QOBJECT(qstring_from_str(opt->str));
-        qdict_put_obj(qdict, opt->name, val);
+        qdict_put_str(qdict, opt->name, opt->str);
     }
     return qdict;
 }

@@ -129,7 +129,7 @@ static int char_pty_chr_write(Chardev *chr, const uint8_t *buf, int len)
         /* guest sends data, check for (re-)connect */
         pty_chr_update_read_handler_locked(chr);
         if (!s->connected) {
-            return 0;
+            return len;
         }
     }
     return io_channel_send(s->ioc, buf, len);
@@ -185,7 +185,7 @@ static gboolean qemu_chr_be_generic_open_func(gpointer opaque)
     PtyChardev *s = PTY_CHARDEV(opaque);
 
     s->open_tag = 0;
-    qemu_chr_be_generic_open(chr);
+    qemu_chr_be_event(chr, CHR_EVENT_OPENED);
     return FALSE;
 }
 
@@ -215,8 +215,8 @@ static void pty_chr_state(Chardev *chr, int connected)
             s->connected = 1;
             s->open_tag = g_idle_add(qemu_chr_be_generic_open_func, chr);
         }
-        if (!chr->fd_in_tag) {
-            chr->fd_in_tag = io_add_watch_poll(chr, s->ioc,
+        if (!chr->gsource) {
+            chr->gsource = io_add_watch_poll(chr, s->ioc,
                                                pty_chr_read_poll,
                                                pty_chr_read,
                                                chr, NULL);
