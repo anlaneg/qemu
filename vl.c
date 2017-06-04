@@ -62,6 +62,7 @@ int main(int argc, char **argv)
 #include "hw/usb.h"
 #include "hw/i386/pc.h"
 #include "hw/isa/isa.h"
+#include "hw/scsi/scsi.h"
 #include "hw/bt.h"
 #include "sysemu/watchdog.h"
 #include "hw/smbios/smbios.h"
@@ -88,12 +89,16 @@ int main(int argc, char **argv)
 #include "migration/block.h"
 #include "sysemu/tpm.h"
 #include "sysemu/dma.h"
+#include "hw/audio/soundhw.h"
 #include "audio/audio.h"
 #include "migration/migration.h"
 #include "sysemu/cpus.h"
 #include "migration/colo.h"
 #include "sysemu/kvm.h"
 #include "sysemu/hax.h"
+#include "qapi/qobject-input-visitor.h"
+#include "qapi/qobject-input-visitor.h"
+#include "qapi-visit.h"
 #include "qapi/qmp/qjson.h"
 #include "qemu/option.h"
 #include "qemu/config-file.h"
@@ -201,6 +206,7 @@ static NotifierList machine_init_done_notifiers =
 bool xen_allowed;
 uint32_t xen_domid;
 enum xen_mode xen_mode = XEN_EMULATE;
+bool xen_domid_restrict;
 
 static int has_defaults = 1;
 static int default_serial = 1;
@@ -226,6 +232,7 @@ static struct {
     { .driver = "ide-hd",               .flag = &default_cdrom     },
     { .driver = "ide-drive",            .flag = &default_cdrom     },
     { .driver = "scsi-cd",              .flag = &default_cdrom     },
+    { .driver = "scsi-hd",              .flag = &default_cdrom     },
     { .driver = "virtio-serial-pci",    .flag = &default_virtcon   },
     { .driver = "virtio-serial",        .flag = &default_virtcon   },
     { .driver = "VGA",                  .flag = &default_vga       },
@@ -296,6 +303,26 @@ static QemuOptsList qemu_machine_opts = {
          * when setting machine properties
          */
         { }
+    },
+};
+
+static QemuOptsList qemu_accel_opts = {
+    .name = "accel",
+    .implied_opt_name = "accel",
+    .head = QTAILQ_HEAD_INITIALIZER(qemu_accel_opts.head),
+    .merge_lists = true,
+    .desc = {
+        {
+            .name = "accel",
+            .type = QEMU_OPT_STRING,
+            .help = "Select the type of accelerator",
+        },
+        {
+            .name = "thread",
+            .type = QEMU_OPT_STRING,
+            .help = "Enable/disable multi-threaded TCG",
+        },
+        { /* end of list */ }
     },
 };
 
@@ -724,7 +751,7 @@ StatusInfo *qmp_query_status(Error **errp)
     return info;
 }
 
-static bool qemu_vmstop_requested(RunState *r)
+bool qemu_vmstop_requested(RunState *r)
 {
     qemu_mutex_lock(&vmstop_lock);
     *r = vmstop_requested;
@@ -744,34 +771,6 @@ void qemu_system_vmstop_request(RunState state)
     qemu_mutex_unlock(&vmstop_lock);
     qemu_notify_event();
 }
-
-void vm_start(void)
-{
-    RunState requested;
-
-    qemu_vmstop_requested(&requested);
-    if (runstate_is_running() && requested == RUN_STATE__MAX) {
-        return;
-    }
-
-    /* Ensure that a STOP/RESUME pair of events is emitted if a
-     * vmstop request was pending.  The BLOCK_IO_ERROR event, for
-     * example, according to documentation is always followed by
-     * the STOP event.
-     */
-    if (runstate_is_running()) {
-        qapi_event_send_stop(&error_abort);
-    } else {
-        replay_enable_events();
-        cpu_enable_ticks();
-        runstate_set(RUN_STATE_RUNNING);
-        vm_state_notify(1, RUN_STATE_RUNNING);
-        resume_all_vcpus();
-    }
-
-    qapi_event_send_resume(&error_abort);
-}
-
 
 /***********************************************************/
 /* real time host monotonic timer */
@@ -1519,7 +1518,7 @@ MachineInfoList *qmp_query_machines(Error **errp)
 
         info->name = g_strdup(mc->name);
         info->cpu_max = !mc->max_cpus ? 1 : mc->max_cpus;
-        info->hotpluggable_cpus = !!mc->query_hotpluggable_cpus;
+        info->hotpluggable_cpus = mc->has_hotpluggable_cpus;
 
         entry = g_malloc0(sizeof(*entry));
         entry->value = info;
@@ -1707,17 +1706,33 @@ void qemu_system_reset(bool report)
     cpu_synchronize_all_post_reset();
 }
 
-void qemu_system_guest_panicked(void)
+void qemu_system_guest_panicked(GuestPanicInformation *info)
 {
+    qemu_log_mask(LOG_GUEST_ERROR, "Guest crashed\n");
+
     if (current_cpu) {
         current_cpu->crash_occurred = true;
     }
-    qapi_event_send_guest_panicked(GUEST_PANIC_ACTION_PAUSE, &error_abort);
+    qapi_event_send_guest_panicked(GUEST_PANIC_ACTION_PAUSE,
+                                   !!info, info, &error_abort);
     vm_stop(RUN_STATE_GUEST_PANICKED);
     if (!no_shutdown) {
         qapi_event_send_guest_panicked(GUEST_PANIC_ACTION_POWEROFF,
-                                       &error_abort);
+                                       !!info, info, &error_abort);
         qemu_system_shutdown_request();
+    }
+
+    if (info) {
+        if (info->type == GUEST_PANIC_INFORMATION_TYPE_HYPER_V) {
+            qemu_log_mask(LOG_GUEST_ERROR, "HV crash parameters: (%#"PRIx64
+                          " %#"PRIx64" %#"PRIx64" %#"PRIx64" %#"PRIx64")\n",
+                          info->u.hyper_v.arg1,
+                          info->u.hyper_v.arg2,
+                          info->u.hyper_v.arg3,
+                          info->u.hyper_v.arg4,
+                          info->u.hyper_v.arg5);
+        }
+        qapi_free_GuestPanicInformation(info);
     }
 }
 
@@ -1875,17 +1890,14 @@ static bool main_loop_should_exit(void)
 
 static void main_loop(void)
 {
-    bool nonblocking;
-    int last_io = 0;
 #ifdef CONFIG_PROFILER
     int64_t ti;
 #endif
     do {
-        nonblocking = tcg_enabled() && last_io > 0;
 #ifdef CONFIG_PROFILER
         ti = profile_getclock();
 #endif
-        last_io = main_loop_wait(nonblocking);
+        main_loop_wait(false);
 #ifdef CONFIG_PROFILER
         dev_time += profile_getclock() - ti;
 #endif
@@ -2039,6 +2051,7 @@ typedef enum DisplayType {
     DT_SDL,
     DT_COCOA,
     DT_GTK,
+    DT_EGL,
     DT_NONE,
 } DisplayType;
 
@@ -2116,6 +2129,15 @@ static DisplayType select_display(const char *p)
             error_report("VNC requires a display argument vnc=<display>");
             exit(1);
         }
+    } else if (strstart(p, "egl-headless", &opts)) {
+#ifdef CONFIG_OPENGL_DMABUF
+        request_opengl = 1;
+        display_opengl = 1;
+        display = DT_EGL;
+#else
+        fprintf(stderr, "egl support is disabled\n");
+        exit(1);
+#endif
     } else if (strstart(p, "curses", &opts)) {
 #ifdef CONFIG_CURSES
         display = DT_CURSES;
@@ -2939,7 +2961,8 @@ int main(int argc, char **argv, char **envp)
     const char *boot_once = NULL;
     DisplayState *ds;
     int cyls, heads, secs, translation;
-    QemuOpts *hda_opts = NULL, *opts, *machine_opts, *icount_opts = NULL;
+    QemuOpts *opts, *machine_opts;
+    QemuOpts *hda_opts = NULL, *icount_opts = NULL, *accel_opts = NULL;
     QemuOptsList *olist;
     int optind;
     const char *optarg;
@@ -2965,6 +2988,13 @@ int main(int argc, char **argv, char **envp)
     Error *main_loop_err = NULL;
     Error *err = NULL;
     bool list_data_dirs = false;
+    typedef struct BlockdevOptions_queue {
+        BlockdevOptions *bdo;
+        Location loc;
+        QSIMPLEQ_ENTRY(BlockdevOptions_queue) entry;
+    } BlockdevOptions_queue;
+    QSIMPLEQ_HEAD(, BlockdevOptions_queue) bdo_queue
+        = QSIMPLEQ_HEAD_INITIALIZER(bdo_queue);
 
     module_call_init(MODULE_INIT_TRACE);
 
@@ -2977,7 +3007,7 @@ int main(int argc, char **argv, char **envp)
     qemu_init_exec_dir(argv[0]);
 
     module_call_init(MODULE_INIT_QOM);
-    module_call_init(MODULE_INIT_QAPI);
+    monitor_init_qmp_commands();
 
     qemu_add_opts(&qemu_drive_opts);
     qemu_add_drive_opts(&qemu_legacy_drive_opts);
@@ -2994,6 +3024,7 @@ int main(int argc, char **argv, char **envp)
     qemu_add_opts(&qemu_trace_opts);
     qemu_add_opts(&qemu_option_rom_opts);
     qemu_add_opts(&qemu_machine_opts);
+    qemu_add_opts(&qemu_accel_opts);
     qemu_add_opts(&qemu_mem_opts);
     qemu_add_opts(&qemu_smp_opts);
     qemu_add_opts(&qemu_boot_opts);
@@ -3106,6 +3137,25 @@ int main(int argc, char **argv, char **envp)
                 drive_add(IF_DEFAULT, popt->index - QEMU_OPTION_hda, optarg,
                           HD_OPTS);
                 break;
+            case QEMU_OPTION_blockdev:
+                {
+                    Visitor *v;
+                    BlockdevOptions_queue *bdo;
+
+                    v = qobject_input_visitor_new_str(optarg, "driver", &err);
+                    if (!v) {
+                        error_report_err(err);
+                        exit(1);
+                    }
+
+                    bdo = g_new(BlockdevOptions_queue, 1);
+                    visit_type_BlockdevOptions(v, NULL, &bdo->bdo,
+                                               &error_fatal);
+                    visit_free(v);
+                    loc_save(&bdo->loc);
+                    QSIMPLEQ_INSERT_TAIL(&bdo_queue, bdo, entry);
+                    break;
+                }
             case QEMU_OPTION_drive:
                 if (drive_def(optarg) == NULL) {
                     exit(1);
@@ -3192,6 +3242,8 @@ int main(int argc, char **argv, char **envp)
                         }
                     }
                 }
+                error_report("'-hdachs' is deprecated, please use '-device"
+                             " ide-hd,cyls=c,heads=h,secs=s,...' instead");
                 break;
             case QEMU_OPTION_numa:
                 opts = qemu_opts_parse_noisily(qemu_find_opts("numa"),
@@ -3483,10 +3535,11 @@ int main(int argc, char **argv, char **envp)
                     exit(1);
                 }
                 fsdev = qemu_opts_create(qemu_find_opts("fsdev"),
+                                         qemu_opts_id(opts) ?:
                                          qemu_opt_get(opts, "mount_tag"),
                                          1, NULL);
                 if (!fsdev) {
-                    error_report("duplicate fsdev id: %s",
+                    error_report("duplicate or invalid fsdev id: %s",
                                  qemu_opt_get(opts, "mount_tag"));
                     exit(1);
                 }
@@ -3524,7 +3577,7 @@ int main(int argc, char **argv, char **envp)
                                           &error_abort);
                 qemu_opt_set(device, "driver", "virtio-9p-pci", &error_abort);
                 qemu_opt_set(device, "fsdev",
-                             qemu_opt_get(opts, "mount_tag"), &error_abort);
+                             qemu_opts_id(fsdev), &error_abort);
                 qemu_opt_set(device, "mount_tag",
                              qemu_opt_get(opts, "mount_tag"), &error_abort);
                 break;
@@ -3684,6 +3737,21 @@ int main(int argc, char **argv, char **envp)
                 error_report("warning: deprecated, replaced by "
                              "-global kvm-pit.lost_tick_policy=discard");
                 qdev_prop_register_global(&kvm_pit_lost_tick_policy);
+                break;
+            }
+            case QEMU_OPTION_accel: {
+                QemuOpts *accel_opts;
+
+                accel_opts = qemu_opts_parse_noisily(qemu_find_opts("accel"),
+                                                     optarg, true);
+                optarg = qemu_opt_get(accel_opts, "accel");
+                if (!optarg || is_help_option(optarg)) {
+                    error_printf("Possible accelerators: kvm, xen, hax, tcg\n");
+                    exit(1);
+                }
+                accel_opts = qemu_opts_create(qemu_find_opts("machine"), NULL,
+                                              false, &error_abort);
+                qemu_opt_set(accel_opts, "accel", optarg, &error_abort);
                 break;
             }
             case QEMU_OPTION_usb:
@@ -3874,6 +3942,13 @@ int main(int argc, char **argv, char **envp)
                     exit(1);
                 }
                 xen_mode = XEN_ATTACH;
+                break;
+            case QEMU_OPTION_xen_domid_restrict:
+                if (!(xen_available())) {
+                    error_report("Option not supported for this target");
+                    exit(1);
+                }
+                xen_domid_restrict = true;
                 break;
             case QEMU_OPTION_trace:
                 g_free(trace_file);
@@ -4272,6 +4347,7 @@ int main(int argc, char **argv, char **envp)
         exit(1);
     }
 
+    //针对每一个chardev选项，执行init
     if (qemu_opts_foreach(qemu_find_opts("chardev"),
                           chardev_init_func, NULL, NULL)) {
         exit(1);
@@ -4365,6 +4441,8 @@ int main(int argc, char **argv, char **envp)
         qemu_opts_del(icount_opts);
     }
 
+    qemu_tcg_configure(accel_opts, &error_fatal);
+
     if (default_net) {
         QemuOptsList *net = qemu_find_opts("net");
         qemu_opts_set(net, NULL, "type", "nic", &error_abort);
@@ -4414,6 +4492,16 @@ int main(int argc, char **argv, char **envp)
     }
 
     /* open the virtual block devices */
+    while (!QSIMPLEQ_EMPTY(&bdo_queue)) {
+        BlockdevOptions_queue *bdo = QSIMPLEQ_FIRST(&bdo_queue);
+
+        QSIMPLEQ_REMOVE_HEAD(&bdo_queue, entry);
+        loc_push_restore(&bdo->loc);
+        qmp_blockdev_add(bdo->bdo, &error_fatal);
+        loc_pop(&bdo->loc);
+        qapi_free_BlockdevOptions(bdo->bdo);
+        g_free(bdo);
+    }
     if (snapshot || replay_mode != REPLAY_MODE_NONE) {
         qemu_opts_foreach(qemu_find_opts("drive"), drive_enable_snapshot,
                           NULL, NULL);
@@ -4428,7 +4516,7 @@ int main(int argc, char **argv, char **envp)
     default_drive(default_floppy, snapshot, IF_FLOPPY, 0, FD_OPTS);
     default_drive(default_sdcard, snapshot, IF_SD, 0, SD_OPTS);
 
-    parse_numa_opts(machine_class);
+    parse_numa_opts(current_machine);
 
     if (qemu_opts_foreach(qemu_find_opts("mon"),
                           mon_init_func, NULL, NULL)) {
@@ -4484,13 +4572,11 @@ int main(int argc, char **argv, char **envp)
     current_machine->boot_order = boot_order;
     current_machine->cpu_model = cpu_model;
 
-    machine_class->init(current_machine);
+    machine_run_board_init(current_machine);
 
     realtime_init();
 
-    audio_init();
-
-    cpu_synchronize_all_post_init();
+    soundhw_init();
 
     if (hax_enabled()) {
         hax_sync_vcpus();
@@ -4517,9 +4603,18 @@ int main(int argc, char **argv, char **envp)
         exit(1);
     }
 
-    numa_post_machine_init();
+    cpu_synchronize_all_post_init();
 
     rom_reset_order_override();
+
+    /*
+     * Create frontends for -drive if=scsi leftovers.
+     * Normally, frontends for -drive get created by machine
+     * initialization for onboard SCSI HBAs.  However, we create a few
+     * more ever since SCSI qdevification, but this is pretty much an
+     * implementation accident, and deprecated.
+     */
+    scsi_legacy_handle_cmdline();
 
     /* Did we create any drives that we failed to create a device for? */
     drive_check_orphaned();
@@ -4575,6 +4670,12 @@ int main(int argc, char **argv, char **envp)
         qemu_spice_display_init();
     }
 
+#ifdef CONFIG_OPENGL_DMABUF
+    if (display_type == DT_EGL) {
+        egl_headless_init();
+    }
+#endif
+
     if (foreach_device_config(DEV_GDB, gdbserver_start) < 0) {
         exit(1);
     }
@@ -4602,7 +4703,9 @@ int main(int argc, char **argv, char **envp)
     if (replay_mode != REPLAY_MODE_NONE) {
         replay_vmstate_init();
     } else if (loadvm) {
-        if (load_vmstate(loadvm) < 0) {
+        Error *local_err = NULL;
+        if (load_vmstate(loadvm, &local_err) < 0) {
+            error_report_err(local_err);
             autostart = 0;
         }
     }
@@ -4640,6 +4743,7 @@ int main(int argc, char **argv, char **envp)
     audio_cleanup();
     monitor_cleanup();
     qemu_chr_cleanup();
+    /* TODO: unref root container, check all devices are ok */
 
     return 0;
 }

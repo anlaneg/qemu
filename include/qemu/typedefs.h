@@ -23,6 +23,7 @@ typedef struct CPUAddressSpace CPUAddressSpace;
 typedef struct CPUState CPUState;
 typedef struct DeviceListener DeviceListener;
 typedef struct DeviceState DeviceState;
+typedef struct DirtyBitmapSnapshot DirtyBitmapSnapshot;
 typedef struct DisplayChangeListener DisplayChangeListener;
 typedef struct DisplayState DisplayState;
 typedef struct DisplaySurface DisplaySurface;
@@ -48,7 +49,6 @@ typedef struct MemoryRegion MemoryRegion;
 typedef struct MemoryRegionCache MemoryRegionCache;
 typedef struct MemoryRegionSection MemoryRegionSection;
 typedef struct MigrationIncomingState MigrationIncomingState;
-typedef struct MigrationParams MigrationParams;
 typedef struct MigrationState MigrationState;
 typedef struct Monitor Monitor;
 typedef struct MonitorDef MonitorDef;
@@ -96,5 +96,6 @@ typedef struct SSIBus SSIBus;
 typedef struct uWireSlave uWireSlave;
 typedef struct VirtIODevice VirtIODevice;
 typedef struct Visitor Visitor;
+typedef struct node_info NodeInfo;
 
 #endif /* QEMU_TYPEDEFS_H */

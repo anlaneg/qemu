@@ -45,7 +45,7 @@ struct QemuOpt {
 
 struct QemuOpts {
     char *id;
-    QemuOptsList *list;
+    QemuOptsList *list;//选项对应的描述信息（元数据信息）？
     Location loc;
     QTAILQ_HEAD(QemuOptHead, QemuOpt) head;
     QTAILQ_ENTRY(QemuOpts) next;

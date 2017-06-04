@@ -284,6 +284,15 @@ void qemu_anon_ram_free(void *ptr, size_t size);
 
 #endif
 
+#if defined(CONFIG_LINUX)
+#ifndef BUS_MCEERR_AR
+#define BUS_MCEERR_AR 4
+#endif
+#ifndef BUS_MCEERR_AO
+#define BUS_MCEERR_AO 5
+#endif
+#endif
+
 #if defined(__linux__) && \
     (defined(__x86_64__) || defined(__arm__) || defined(__aarch64__))
    /* Use 2 MiB alignment so transparent hugepages can be used by KVM.
@@ -297,6 +306,34 @@ void qemu_anon_ram_free(void *ptr, size_t size);
 #  define QEMU_VMALLOC_ALIGN getpagesize()
 #endif
 
+#ifdef CONFIG_POSIX
+struct qemu_signalfd_siginfo {
+    uint32_t ssi_signo;   /* Signal number */
+    int32_t  ssi_errno;   /* Error number (unused) */
+    int32_t  ssi_code;    /* Signal code */
+    uint32_t ssi_pid;     /* PID of sender */
+    uint32_t ssi_uid;     /* Real UID of sender */
+    int32_t  ssi_fd;      /* File descriptor (SIGIO) */
+    uint32_t ssi_tid;     /* Kernel timer ID (POSIX timers) */
+    uint32_t ssi_band;    /* Band event (SIGIO) */
+    uint32_t ssi_overrun; /* POSIX timer overrun count */
+    uint32_t ssi_trapno;  /* Trap number that caused signal */
+    int32_t  ssi_status;  /* Exit status or signal (SIGCHLD) */
+    int32_t  ssi_int;     /* Integer sent by sigqueue(2) */
+    uint64_t ssi_ptr;     /* Pointer sent by sigqueue(2) */
+    uint64_t ssi_utime;   /* User CPU time consumed (SIGCHLD) */
+    uint64_t ssi_stime;   /* System CPU time consumed (SIGCHLD) */
+    uint64_t ssi_addr;    /* Address that generated signal
+                             (for hardware-generated signals) */
+    uint8_t  pad[48];     /* Pad size to 128 bytes (allow for
+                             additional fields in the future) */
+};
+
+int qemu_signalfd(const sigset_t *mask);
+void sigaction_invoke(struct sigaction *action,
+                      struct qemu_signalfd_siginfo *info);
+#endif
+
 int qemu_madvise(void *addr, size_t len, int advice);
 
 int qemu_open(const char *name, int flags, ...);
@@ -304,6 +341,9 @@ int qemu_close(int fd);
 #ifndef _WIN32
 int qemu_dup(int fd);
 #endif
+int qemu_lock_fd(int fd, int64_t start, int64_t len, bool exclusive);
+int qemu_unlock_fd(int fd, int64_t start, int64_t len);
+int qemu_lock_fd_test(int fd, int64_t start, int64_t len, bool exclusive);
 
 #if defined(__HAIKU__) && defined(__i386__)
 #define FMT_pid "%ld"
@@ -401,7 +441,8 @@ unsigned long qemu_getauxval(unsigned long type);
 
 void qemu_set_tty_echo(int fd, bool echo);
 
-void os_mem_prealloc(int fd, char *area, size_t sz, Error **errp);
+void os_mem_prealloc(int fd, char *area, size_t sz, int smp_cpus,
+                     Error **errp);
 
 int qemu_read_password(char *buf, int buf_size);
 

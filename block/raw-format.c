@@ -327,21 +327,23 @@ static void raw_refresh_limits(BlockDriverState *bs, Error **errp)
     }
 }
 
-static int raw_truncate(BlockDriverState *bs, int64_t offset)
+static int raw_truncate(BlockDriverState *bs, int64_t offset, Error **errp)
 {
     BDRVRawState *s = bs->opaque;
 
     if (s->has_size) {
+        error_setg(errp, "Cannot resize fixed-size raw disks");
         return -ENOTSUP;
     }
 
     if (INT64_MAX - offset < s->offset) {
+        error_setg(errp, "Disk size too large for the chosen offset");
         return -EINVAL;
     }
 
     s->size = offset;
     offset += s->offset;
-    return bdrv_truncate(bs->file->bs, offset);
+    return bdrv_truncate(bs->file, offset, errp);
 }
 
 static int raw_media_changed(BlockDriverState *bs)
@@ -384,6 +386,12 @@ static int raw_open(BlockDriverState *bs, QDict *options, int flags,
 {
     BDRVRawState *s = bs->opaque;
     int ret;
+
+    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_file,
+                               false, errp);
+    if (!bs->file) {
+        return -EINVAL;
+    }
 
     bs->sg = bs->file->bs->sg;
     bs->supported_write_flags = BDRV_REQ_FUA &
@@ -462,6 +470,7 @@ BlockDriver bdrv_raw = {
     .bdrv_reopen_abort    = &raw_reopen_abort,
     .bdrv_open            = &raw_open,
     .bdrv_close           = &raw_close,
+    .bdrv_child_perm      = bdrv_filter_default_perms,
     .bdrv_create          = &raw_create,
     .bdrv_co_preadv       = &raw_co_preadv,
     .bdrv_co_pwritev      = &raw_co_pwritev,

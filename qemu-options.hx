@@ -31,7 +31,7 @@ DEF("machine", HAS_ARG, QEMU_OPTION_machine, \
     "-machine [type=]name[,prop[=value][,...]]\n"
     "                selects emulated machine ('-machine help' for list)\n"
     "                property accel=accel1[:accel2[:...]] selects accelerator\n"
-    "                supported accelerators are kvm, xen, tcg (default: tcg)\n"
+    "                supported accelerators are kvm, xen, hax or tcg (default: tcg)\n"
     "                kernel_irqchip=on|off|split controls accelerated irqchip support (default=off)\n"
     "                vmport=on|off|auto controls emulation of vmport (default: auto)\n"
     "                kvm_shadow_mem=size of KVM shadow MMU in bytes\n"
@@ -52,9 +52,9 @@ available machines. Supported machine properties are:
 @table @option
 @item accel=@var{accels1}[:@var{accels2}[:...]]
 This is used to enable an accelerator. Depending on the target architecture,
-kvm, xen, or tcg can be available. By default, tcg is used. If there is more
-than one accelerator specified, the next one is used if the previous one fails
-to initialize.
+kvm, xen, hax or tcg can be available. By default, tcg is used. If there is
+more than one accelerator specified, the next one is used if the previous one
+fails to initialize.
 @item kernel_irqchip=on|off
 Controls in-kernel irqchip support for the chosen accelerator when available.
 @item gfx_passthru=on|off
@@ -95,6 +95,26 @@ STEXI
 Select CPU model (@code{-cpu help} for list and additional feature selection)
 ETEXI
 
+DEF("accel", HAS_ARG, QEMU_OPTION_accel,
+    "-accel [accel=]accelerator[,thread=single|multi]\n"
+    "                select accelerator (kvm, xen, hax or tcg; use 'help' for a list)\n"
+    "                thread=single|multi (enable multi-threaded TCG)", QEMU_ARCH_ALL)
+STEXI
+@item -accel @var{name}[,prop=@var{value}[,...]]
+@findex -accel
+This is used to enable an accelerator. Depending on the target architecture,
+kvm, xen, hax or tcg can be available. By default, tcg is used. If there is
+more than one accelerator specified, the next one is used if the previous one
+fails to initialize.
+@table @option
+@item thread=single|multi
+Controls number of TCG threads. When the TCG is multi-threaded there will be one
+thread per vCPU therefor taking advantage of additional host cores. The default
+is to enable multi-threading where both the back-end and front-ends support it and
+no incompatible TCG features have been enabled (e.g. icount/replay).
+@end table
+ETEXI
+
 DEF("smp", HAS_ARG, QEMU_OPTION_smp,
     "-smp [cpus=]n[,maxcpus=cpus][,cores=cores][,threads=threads][,sockets=sockets]\n"
     "                set the number of CPUs to 'n' [default=1]\n"
@@ -119,21 +139,73 @@ ETEXI
 
 DEF("numa", HAS_ARG, QEMU_OPTION_numa,
     "-numa node[,mem=size][,cpus=firstcpu[-lastcpu]][,nodeid=node]\n"
-    "-numa node[,memdev=id][,cpus=firstcpu[-lastcpu]][,nodeid=node]\n", QEMU_ARCH_ALL)
+    "-numa node[,memdev=id][,cpus=firstcpu[-lastcpu]][,nodeid=node]\n"
+    "-numa dist,src=source,dst=destination,val=distance\n", QEMU_ARCH_ALL)
 STEXI
 @item -numa node[,mem=@var{size}][,cpus=@var{firstcpu}[-@var{lastcpu}]][,nodeid=@var{node}]
 @itemx -numa node[,memdev=@var{id}][,cpus=@var{firstcpu}[-@var{lastcpu}]][,nodeid=@var{node}]
+@itemx -numa dist,src=@var{source},dst=@var{destination},val=@var{distance}
+@itemx -numa cpu,node-id=@var{node}[,socket-id=@var{x}][,core-id=@var{y}][,thread-id=@var{z}]
 @findex -numa
-Simulate a multi node NUMA system. If @samp{mem}, @samp{memdev}
-and @samp{cpus} are omitted, resources are split equally. Also, note
-that the -@option{numa} option doesn't allocate any of the specified
-resources. That is, it just assigns existing resources to NUMA nodes. This
-means that one still has to use the @option{-m}, @option{-smp} options
-to allocate RAM and VCPUs respectively, and possibly @option{-object}
-to specify the memory backend for the @samp{memdev} suboption.
+Define a NUMA node and assign RAM and VCPUs to it.
+Set the NUMA distance from a source node to a destination node.
 
-@samp{mem} and @samp{memdev} are mutually exclusive.  Furthermore, if one
-node uses @samp{memdev}, all of them have to use it.
+Legacy VCPU assignment uses @samp{cpus} option where
+@var{firstcpu} and @var{lastcpu} are CPU indexes. Each
+@samp{cpus} option represent a contiguous range of CPU indexes
+(or a single VCPU if @var{lastcpu} is omitted). A non-contiguous
+set of VCPUs can be represented by providing multiple @samp{cpus}
+options. If @samp{cpus} is omitted on all nodes, VCPUs are automatically
+split between them.
+
+For example, the following option assigns VCPUs 0, 1, 2 and 5 to
+a NUMA node:
+@example
+-numa node,cpus=0-2,cpus=5
+@end example
+
+@samp{cpu} option is a new alternative to @samp{cpus} option
+which uses @samp{socket-id|core-id|thread-id} properties to assign
+CPU objects to a @var{node} using topology layout properties of CPU.
+The set of properties is machine specific, and depends on used
+machine type/@samp{smp} options. It could be queried with
+@samp{hotpluggable-cpus} monitor command.
+@samp{node-id} property specifies @var{node} to which CPU object
+will be assigned, it's required for @var{node} to be declared
+with @samp{node} option before it's used with @samp{cpu} option.
+
+For example:
+@example
+-M pc \
+-smp 1,sockets=2,maxcpus=2 \
+-numa node,nodeid=0 -numa node,nodeid=1 \
+-numa cpu,node-id=0,socket-id=0 -numa cpu,node-id=1,socket-id=1
+@end example
+
+@samp{mem} assigns a given RAM amount to a node. @samp{memdev}
+assigns RAM from a given memory backend device to a node. If
+@samp{mem} and @samp{memdev} are omitted in all nodes, RAM is
+split equally between them.
+
+@samp{mem} and @samp{memdev} are mutually exclusive. Furthermore,
+if one node uses @samp{memdev}, all of them have to use it.
+
+@var{source} and @var{destination} are NUMA node IDs.
+@var{distance} is the NUMA distance from @var{source} to @var{destination}.
+The distance from a node to itself is always 10. If any pair of nodes is
+given a distance, then all pairs must be given distances. Although, when
+distances are only given in one direction for each pair of nodes, then
+the distances in the opposite directions are assumed to be the same. If,
+however, an asymmetrical pair of distances is given for even one node
+pair, then all node pairs must be provided distance values for both
+directions, even when they are symmetrical. When a node is unreachable
+from another node, set the pair's distance to 255.
+
+Note that the -@option{numa} option doesn't allocate any of the
+specified resources, it just assigns existing resources to NUMA
+nodes. This means that one still has to use the @option{-m},
+@option{-smp} options to allocate RAM and VCPUs respectively.
+
 ETEXI
 
 DEF("add-fd", HAS_ARG, QEMU_OPTION_add_fd,
@@ -214,7 +286,10 @@ drive letters depend on the target architecture. The x86 PC uses: a, b
 (floppy 1 and 2), c (first hard disk), d (first CD-ROM), n-p (Etherboot
 from network adapter 1-4), hard disk boot is the default. To apply a
 particular boot order only on the first startup, specify it via
-@option{once}.
+@option{once}. Note that the @option{order} or @option{once} parameter
+should not be used together with the @option{bootindex} property of
+devices, since the firmware implementations normally do not support both
+at the same time.
 
 Interactive boot menus/prompts can be enabled via @option{menu=on} as far
 as firmware/BIOS supports them. The default is non-interactive boot.
@@ -384,7 +459,7 @@ possible drivers and properties, use @code{-device help} and
 @code{-device @var{driver},help}.
 
 Some drivers are:
-@item -device ipmi-bmc-sim,id=@var{id}[,slave_addr=@var{val}]
+@item -device ipmi-bmc-sim,id=@var{id}[,slave_addr=@var{val}][,sdrfile=@var{file}][,furareasize=@var{val}][,furdatafile=@var{file}]
 
 Add an IPMI BMC.  This is a simulation of a hardware management
 interface processor that normally sits on a system.  It provides
@@ -395,6 +470,19 @@ The IPMI slave address to use for the BMC.  The default is 0x20.
 This address is the BMC's address on the I2C network of management
 controllers.  If you don't know what this means, it is safe to ignore
 it.
+
+@table @option
+@item bmc=@var{id}
+The BMC to connect to, one of ipmi-bmc-sim or ipmi-bmc-extern above.
+@item slave_addr=@var{val}
+Define slave address to use for the BMC.  The default is 0x20.
+@item sdrfile=@var{file}
+file containing raw Sensor Data Records (SDR) data. The default is none.
+@item fruareasize=@var{val}
+size of a Field Replaceable Unit (FRU) area.  The default is 1024.
+@item frudatafile=@var{file}
+file containing raw Field Replaceable Unit (FRU) inventory data. The default is none.
+@end table
 
 @item -device ipmi-bmc-extern,id=@var{id},chardev=@var{id}[,slave_addr=@var{val}]
 
@@ -512,6 +600,13 @@ Use @var{file} as CD-ROM image (you cannot use @option{-hdc} and
 using @file{/dev/cdrom} as filename (@pxref{host_drives}).
 ETEXI
 
+DEF("blockdev", HAS_ARG, QEMU_OPTION_blockdev,
+    "-blockdev [driver=]driver[,node-name=N][,discard=ignore|unmap]\n"
+    "          [,cache.direct=on|off][,cache.no-flush=on|off]\n"
+    "          [,read-only=on|off][,detect-zeroes=on|off|unmap]\n"
+    "          [,driver specific parameters...]\n"
+    "                configure a block backend\n", QEMU_ARCH_ALL)
+
 DEF("drive", HAS_ARG, QEMU_OPTION_drive,
     "-drive [file=file][,if=type][,bus=n][,unit=m][,media=d][,index=i]\n"
     "       [,cyls=c,heads=h,secs=s[,trans=t]][,snapshot=on|off]\n"
@@ -543,7 +638,7 @@ Special files such as iSCSI devices can be specified using protocol
 specific URLs. See the section for "Device URL Syntax" for more information.
 @item if=@var{interface}
 This option defines on which type on interface the drive is connected.
-Available types are: ide, scsi, sd, mtd, floppy, pflash, virtio.
+Available types are: ide, scsi, sd, mtd, floppy, pflash, virtio, none.
 @item bus=@var{bus},unit=@var{unit}
 These options define where is connected the drive by defining the bus number and
 the unit id.
@@ -587,6 +682,30 @@ file sectors into the image file.
 conversion of plain zero writes by the OS to driver specific optimized
 zero write commands. You may even choose "unmap" if @var{discard} is set
 to "unmap" to allow a zero write to be converted to an UNMAP operation.
+@item bps=@var{b},bps_rd=@var{r},bps_wr=@var{w}
+Specify bandwidth throttling limits in bytes per second, either for all request
+types or for reads or writes only.  Small values can lead to timeouts or hangs
+inside the guest.  A safe minimum for disks is 2 MB/s.
+@item bps_max=@var{bm},bps_rd_max=@var{rm},bps_wr_max=@var{wm}
+Specify bursts in bytes per second, either for all request types or for reads
+or writes only.  Bursts allow the guest I/O to spike above the limit
+temporarily.
+@item iops=@var{i},iops_rd=@var{r},iops_wr=@var{w}
+Specify request rate limits in requests per second, either for all request
+types or for reads or writes only.
+@item iops_max=@var{bm},iops_rd_max=@var{rm},iops_wr_max=@var{wm}
+Specify bursts in requests per second, either for all request types or for reads
+or writes only.  Bursts allow the guest I/O to spike above the limit
+temporarily.
+@item iops_size=@var{is}
+Let every @var{is} bytes of a request count as a new request for iops
+throttling purposes.  Use this option to prevent guests from circumventing iops
+limits by sending fewer but larger requests.
+@item group=@var{g}
+Join a throttling quota group with given name @var{g}.  All drives that are
+members of the same group are accounted for together.  Use this option to
+prevent guests from circumventing throttling limits by using many small disks
+instead of a single larger disk.
 @end table
 
 By default, the @option{cache=writeback} mode is used. It will report data
@@ -654,11 +773,6 @@ If you don't specify the "file=" argument, you define an empty drive:
 qemu-system-i386 -drive if=ide,index=1,media=cdrom
 @end example
 
-You can connect a SCSI disk with unit ID 6 on the bus #0:
-@example
-qemu-system-i386 -drive file=file,if=scsi,bus=0,unit=6
-@end example
-
 Instead of @option{-fda}, @option{-fdb}, you can use:
 @example
 qemu-system-i386 -drive file=file,index=0,if=floppy
@@ -723,13 +837,18 @@ STEXI
 Force hard disk 0 physical geometry (1 <= @var{c} <= 16383, 1 <=
 @var{h} <= 16, 1 <= @var{s} <= 63) and optionally force the BIOS
 translation mode (@var{t}=none, lba or auto). Usually QEMU can guess
-all those parameters. This option is useful for old MS-DOS disk
-images.
+all those parameters. This option is deprecated, please use
+@code{-device ide-hd,cyls=c,heads=h,secs=s,...} instead.
 ETEXI
 
 DEF("fsdev", HAS_ARG, QEMU_OPTION_fsdev,
     "-fsdev fsdriver,id=id[,path=path,][security_model={mapped-xattr|mapped-file|passthrough|none}]\n"
-    " [,writeout=immediate][,readonly][,socket=socket|sock_fd=sock_fd]\n",
+    " [,writeout=immediate][,readonly][,socket=socket|sock_fd=sock_fd]\n"
+    " [[,throttling.bps-total=b]|[[,throttling.bps-read=r][,throttling.bps-write=w]]]\n"
+    " [[,throttling.iops-total=i]|[[,throttling.iops-read=r][,throttling.iops-write=w]]]\n"
+    " [[,throttling.bps-total-max=bm]|[[,throttling.bps-read-max=rm][,throttling.bps-write-max=wm]]]\n"
+    " [[,throttling.iops-total-max=im]|[[,throttling.iops-read-max=irm][,throttling.iops-write-max=iwm]]]\n"
+    " [[,throttling.iops-size=is]]\n",
     QEMU_ARCH_ALL)
 
 STEXI
@@ -791,7 +910,7 @@ ETEXI
 
 DEF("virtfs", HAS_ARG, QEMU_OPTION_virtfs,
     "-virtfs local,path=path,mount_tag=tag,security_model=[mapped-xattr|mapped-file|passthrough|none]\n"
-    "        [,writeout=immediate][,readonly][,socket=socket|sock_fd=sock_fd]\n",
+    "        [,id=id][,writeout=immediate][,readonly][,socket=socket|sock_fd=sock_fd]\n",
     QEMU_ARCH_ALL)
 
 STEXI
@@ -1066,7 +1185,7 @@ DEF("spice", HAS_ARG, QEMU_OPTION_spice,
     "       [,streaming-video=[off|all|filter]][,disable-copy-paste]\n"
     "       [,disable-agent-file-xfer][,agent-mouse=[on|off]]\n"
     "       [,playback-compression=[on|off]][,seamless-migration=[on|off]]\n"
-    "       [,gl=[on|off]]\n"
+    "       [,gl=[on|off]][,rendernode=<file>]\n"
     "   enable spice\n"
     "   at least one of {port, tls-port} is mandatory\n",
     QEMU_ARCH_ALL)
@@ -1161,6 +1280,10 @@ Enable/disable spice seamless migration. Default is off.
 @item gl=[on|off]
 Enable/disable OpenGL context. Default is off.
 
+@item rendernode=<file>
+DRM render node for OpenGL rendering. If not specified, it will pick
+the first available. (Since 2.9)
+
 @end table
 ETEXI
 
@@ -1194,12 +1317,12 @@ Select type of VGA card to emulate. Valid values for @var{type} are
 Cirrus Logic GD5446 Video card. All Windows versions starting from
 Windows 95 should recognize and use this graphic card. For optimal
 performances, use 16 bit color depth in the guest and the host OS.
-(This one is the default)
+(This card was the default before QEMU 2.2)
 @item std
 Standard VGA card with Bochs VBE extensions.  If your guest OS
 supports the VESA 2.0 VBE extensions (e.g. Windows XP) and if you want
 to use high resolution modes (>= 1280x1024x16) then you should use
-this option.
+this option. (This card is the default since QEMU 2.2)
 @item vmware
 VMWare SVGA-II compatible adapter. Use it if you have sufficiently
 recent XFree86/XOrg server or Windows guest with a driver for this
@@ -1296,10 +1419,14 @@ is a TCP port number, not a display number.
 @item websocket
 
 Opens an additional TCP listening port dedicated to VNC Websocket connections.
-By definition the Websocket port is 5700+@var{display}. If @var{host} is
-specified connections will only be allowed from this host.
-As an alternative the Websocket port could be specified by using
-@code{websocket}=@var{port}.
+If a bare @var{websocket} option is given, the Websocket port is
+5700+@var{display}. An alternative port can be specified with the
+syntax @code{websocket}=@var{port}.
+
+If @var{host} is specified connections will only be allowed from this host.
+It is possible to control the websocket listen address independently, using
+the syntax @code{websocket}=@var{host}:@var{port}.
+
 If no TLS credentials are provided, the websocket connection runs in
 unencrypted mode. If TLS credentials are provided, the websocket connection
 requires encrypted client connections.
@@ -2123,7 +2250,7 @@ Example:
 @example
 qemu -m 512 -object memory-backend-file,id=mem,size=512M,mem-path=/hugetlbfs,share=on \
      -numa node,memdev=mem \
-     -chardev socket,path=/path/to/socket \
+     -chardev socket,id=chr0,path=/path/to/socket \
      -netdev type=vhost-user,id=net0,chardev=chr0 \
      -device virtio-net-pci,netdev=net0
 @end example
@@ -2583,7 +2710,7 @@ Example
 qemu-system-i386 --drive file=sheepdog://192.0.2.1:30000/MyVirtualMachine
 @end example
 
-See also @url{http://http://www.osrg.net/sheepdog/}.
+See also @url{https://sheepdog.github.io/sheepdog/}.
 
 @item GlusterFS
 GlusterFS is a user space distributed file system.
@@ -3298,6 +3425,11 @@ DEF("xen-attach", 0, QEMU_OPTION_xen_attach,
     "-xen-attach     attach to existing xen domain\n"
     "                xend will use this when starting QEMU\n",
     QEMU_ARCH_ALL)
+DEF("xen-domid-restrict", 0, QEMU_OPTION_xen_domid_restrict,
+    "-xen-domid-restrict     restrict set of available xen operations\n"
+    "                        to specified domain id. (Does not affect\n"
+    "                        xenpv machine type).\n",
+    QEMU_ARCH_ALL)
 STEXI
 @item -xen-domid @var{id}
 @findex -xen-domid
@@ -3310,6 +3442,8 @@ Warning: should not be used when xend is in use (XEN only).
 @findex -xen-attach
 Attach to existing xen domain.
 xend will use this when starting QEMU (XEN only).
+@findex -xen-domid-restrict
+Restrict set of available xen operations to specified domain id (XEN only).
 ETEXI
 
 DEF("no-reboot", 0, QEMU_OPTION_no_reboot, \
@@ -3938,7 +4072,7 @@ Create a filter-redirector we need to differ outdev id from indev id, id can not
 be the same. we can just use indev or outdev, but at least one of indev or outdev
 need to be specified.
 
-@item -object filter-rewriter,id=@var{id},netdev=@var{netdevid},rewriter-mode=@var{mode}[,queue=@var{all|rx|tx}]
+@item -object filter-rewriter,id=@var{id},netdev=@var{netdevid}[,queue=@var{all|rx|tx}]
 
 Filter-rewriter is a part of COLO project.It will rewrite tcp packet to
 secondary from primary to keep secondary tcp connection,and rewrite

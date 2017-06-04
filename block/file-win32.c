@@ -24,7 +24,6 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/cutils.h"
-#include "qemu/timer.h"
 #include "block/block_int.h"
 #include "qemu/module.h"
 #include "block/raw-aio.h"
@@ -282,7 +281,7 @@ static void raw_parse_filename(const char *filename, QDict *options,
      * function call can be ignored. */
     strstart(filename, "file:", &filename);
 
-    qdict_put_obj(options, "filename", QOBJECT(qstring_from_str(filename)));
+    qdict_put_str(options, "filename", filename);
 }
 
 static QemuOptsList raw_runtime_opts = {
@@ -341,6 +340,12 @@ static int raw_open(BlockDriverState *bs, QDict *options, int flags,
     qemu_opts_absorb_qdict(opts, options, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
+        ret = -EINVAL;
+        goto fail;
+    }
+
+    if (qdict_get_try_bool(options, "locking", false)) {
+        error_setg(errp, "locking=on is not supported on Windows");
         ret = -EINVAL;
         goto fail;
     }
@@ -461,7 +466,7 @@ static void raw_close(BlockDriverState *bs)
     }
 }
 
-static int raw_truncate(BlockDriverState *bs, int64_t offset)
+static int raw_truncate(BlockDriverState *bs, int64_t offset, Error **errp)
 {
     BDRVRawState *s = bs->opaque;
     LONG low, high;
@@ -476,11 +481,11 @@ static int raw_truncate(BlockDriverState *bs, int64_t offset)
      */
     dwPtrLow = SetFilePointer(s->hfile, low, &high, FILE_BEGIN);
     if (dwPtrLow == INVALID_SET_FILE_POINTER && GetLastError() != NO_ERROR) {
-        fprintf(stderr, "SetFilePointer error: %lu\n", GetLastError());
+        error_setg_win32(errp, GetLastError(), "SetFilePointer error");
         return -EIO;
     }
     if (SetEndOfFile(s->hfile) == 0) {
-        fprintf(stderr, "SetEndOfFile error: %lu\n", GetLastError());
+        error_setg_win32(errp, GetLastError(), "SetEndOfFile error");
         return -EIO;
     }
     return 0;
@@ -669,7 +674,7 @@ static void hdev_parse_filename(const char *filename, QDict *options,
     /* The prefix is optional, just as for "file". */
     strstart(filename, "host_device:", &filename);
 
-    qdict_put_obj(options, "filename", QOBJECT(qstring_from_str(filename)));
+    qdict_put_str(options, "filename", filename);
 }
 
 static int hdev_open(BlockDriverState *bs, QDict *options, int flags,

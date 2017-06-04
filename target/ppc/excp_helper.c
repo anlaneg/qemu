@@ -35,11 +35,6 @@
 #endif
 
 /*****************************************************************************/
-/* PowerPC Hypercall emulation */
-
-void (*cpu_ppc_hypercall)(PowerPCCPU *);
-
-/*****************************************************************************/
 /* Exception processing */
 #if defined(CONFIG_USER_ONLY)
 void ppc_cpu_do_interrupt(CPUState *cs)
@@ -318,8 +313,10 @@ static inline void powerpc_excp(PowerPCCPU *cpu, int excp_model, int excp)
         env->nip += 4;
 
         /* "PAPR mode" built-in hypercall emulation */
-        if ((lev == 1) && cpu_ppc_hypercall) {
-            cpu_ppc_hypercall(cpu);
+        if ((lev == 1) && cpu->vhyp) {
+            PPCVirtualHypervisorClass *vhc =
+                PPC_VIRTUAL_HYPERVISOR_GET_CLASS(cpu->vhyp);
+            vhc->hypercall(cpu->vhyp, cpu);
             return;
         }
         if (lev == 1) {
@@ -730,6 +727,9 @@ static inline void powerpc_excp(PowerPCCPU *cpu, int excp_model, int excp)
     /* Reset exception state */
     cs->exception_index = POWERPC_EXCP_NONE;
     env->error_code = 0;
+
+    /* Reset the reservation */
+    env->reserve_addr = -1;
 
     /* Any interrupt is context synchronizing, check if TCG TLB
      * needs a delayed flush on ppc64

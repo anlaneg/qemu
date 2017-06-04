@@ -63,7 +63,7 @@ static int virtio_ccw_hcall_notify(const uint64_t *args)
     if (!sch || !css_subch_visible(sch)) {
         return -EINVAL;
     }
-    if (queue >= VIRTIO_CCW_QUEUE_MAX) {
+    if (queue >= VIRTIO_QUEUE_MAX) {
         return -EINVAL;
     }
     virtio_queue_notify(virtio_ccw_get_vdev(sch), queue);
@@ -113,11 +113,13 @@ static void ccw_init(MachineState *machine)
     s390_sclp_init();
     s390_memory_init(machine->ram_size);
 
+    s390_flic_init();
+
     /* get a BUS */
     css_bus = virtual_css_bus_init();
     s390_init_ipl_dev(machine->kernel_filename, machine->kernel_cmdline,
-                      machine->initrd_filename, "s390-ccw.img", true);
-    s390_flic_init();
+                      machine->initrd_filename, "s390-ccw.img",
+                      "s390-netboot.img", true);
 
     dev = qdev_create(NULL, TYPE_S390_PCI_HOST_BRIDGE);
     object_property_add_child(qdev_get_machine(), TYPE_S390_PCI_HOST_BRIDGE,
@@ -272,6 +274,36 @@ bool cpu_model_allowed(void)
     return true;
 }
 
+static char *machine_get_loadparm(Object *obj, Error **errp)
+{
+    S390CcwMachineState *ms = S390_CCW_MACHINE(obj);
+
+    return g_memdup(ms->loadparm, sizeof(ms->loadparm));
+}
+
+static void machine_set_loadparm(Object *obj, const char *val, Error **errp)
+{
+    S390CcwMachineState *ms = S390_CCW_MACHINE(obj);
+    int i;
+
+    for (i = 0; i < sizeof(ms->loadparm) && val[i]; i++) {
+        uint8_t c = toupper(val[i]); /* mimic HMC */
+
+        if (('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') || (c == '.') ||
+            (c == ' ')) {
+            ms->loadparm[i] = c;
+        } else {
+            error_setg(errp, "LOADPARM: invalid character '%c' (ASCII 0x%02x)",
+                       c, c);
+            return;
+        }
+    }
+
+    for (; i < sizeof(ms->loadparm); i++) {
+        ms->loadparm[i] = ' '; /* pad right with spaces */
+    }
+}
+
 static inline void s390_machine_initfn(Object *obj)
 {
     object_property_add_bool(obj, "aes-key-wrap",
@@ -289,6 +321,13 @@ static inline void s390_machine_initfn(Object *obj)
             "enable/disable DEA key wrapping using the CPACF wrapping key",
             NULL);
     object_property_set_bool(obj, true, "dea-key-wrap", NULL);
+    object_property_add_str(obj, "loadparm",
+            machine_get_loadparm, machine_set_loadparm, NULL);
+    object_property_set_description(obj, "loadparm",
+            "Up to 8 chars in set of [A-Za-z0-9. ] (lower case chars converted"
+            " to upper case) to pass to machine loader, boot manager,"
+            " and guest kernel",
+            NULL);
 }
 
 static const TypeInfo ccw_machine_info = {
@@ -335,8 +374,16 @@ static const TypeInfo ccw_machine_info = {
     }                                                                         \
     type_init(ccw_machine_register_##suffix)
 
+#define CCW_COMPAT_2_9 \
+        HW_COMPAT_2_9
+
 #define CCW_COMPAT_2_8 \
-        HW_COMPAT_2_8
+        HW_COMPAT_2_8 \
+        {\
+            .driver   = TYPE_S390_FLIC_COMMON,\
+            .property = "adapter_routes_max_batch",\
+            .value    = "64",\
+        },
 
 #define CCW_COMPAT_2_7 \
         HW_COMPAT_2_7
@@ -396,14 +443,26 @@ static const TypeInfo ccw_machine_info = {
             .value    = "0",\
         },
 
+static void ccw_machine_2_10_instance_options(MachineState *machine)
+{
+}
+
+static void ccw_machine_2_10_class_options(MachineClass *mc)
+{
+}
+DEFINE_CCW_MACHINE(2_10, "2.10", true);
+
 static void ccw_machine_2_9_instance_options(MachineState *machine)
 {
+    ccw_machine_2_10_instance_options(machine);
 }
 
 static void ccw_machine_2_9_class_options(MachineClass *mc)
 {
+    ccw_machine_2_10_class_options(mc);
+    SET_MACHINE_COMPAT(mc, CCW_COMPAT_2_9);
 }
-DEFINE_CCW_MACHINE(2_9, "2.9", true);
+DEFINE_CCW_MACHINE(2_9, "2.9", false);
 
 static void ccw_machine_2_8_instance_options(MachineState *machine)
 {

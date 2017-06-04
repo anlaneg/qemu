@@ -34,7 +34,7 @@ typedef struct BlockDevOps {
      * changes.  Sure would be useful if it did.
      * Device models with removable media must implement this callback.
      */
-    void (*change_media_cb)(void *opaque, bool load);
+    void (*change_media_cb)(void *opaque, bool load, Error **errp);
     /*
      * Runs when an eject request is issued from the monitor, the tray
      * is closed, and the medium is locked.
@@ -58,34 +58,48 @@ typedef struct BlockDevOps {
      * Runs when the size changed (e.g. monitor command block_resize)
      */
     void (*resize_cb)(void *opaque);
+    /*
+     * Runs when the backend receives a drain request.
+     */
+    void (*drained_begin)(void *opaque);
+    /*
+     * Runs when the backend's last drain request ends.
+     */
+    void (*drained_end)(void *opaque);
 } BlockDevOps;
 
 /* This struct is embedded in (the private) BlockBackend struct and contains
  * fields that must be public. This is in particular for QLIST_ENTRY() and
  * friends so that BlockBackends can be kept in lists outside block-backend.c */
 typedef struct BlockBackendPublic {
-    /* I/O throttling.
-     * throttle_state tells us if this BlockBackend has I/O limits configured.
-     * io_limits_disabled tells us if they are currently being enforced */
+    /* I/O throttling has its own locking, but also some fields are
+     * protected by the AioContext lock.
+     */
+
+    /* Protected by AioContext lock.  */
     CoQueue      throttled_reqs[2];
+
+    /* Nonzero if the I/O limits are currently being ignored; generally
+     * it is zero.  */
     unsigned int io_limits_disabled;
 
     /* The following fields are protected by the ThrottleGroup lock.
-     * See the ThrottleGroup documentation for details. */
+     * See the ThrottleGroup documentation for details.
+     * throttle_state tells us if I/O limits are configured. */
     ThrottleState *throttle_state;
     ThrottleTimers throttle_timers;
     unsigned       pending_reqs[2];
     QLIST_ENTRY(BlockBackendPublic) round_robin;
 } BlockBackendPublic;
 
-BlockBackend *blk_new(void);
+BlockBackend *blk_new(uint64_t perm, uint64_t shared_perm);
 BlockBackend *blk_new_open(const char *filename, const char *reference,
                            QDict *options, int flags, Error **errp);
 int blk_get_refcnt(BlockBackend *blk);
 void blk_ref(BlockBackend *blk);
 void blk_unref(BlockBackend *blk);
 void blk_remove_all_bs(void);
-const char *blk_name(BlockBackend *blk);
+const char *blk_name(const BlockBackend *blk);
 BlockBackend *blk_by_name(const char *name);
 BlockBackend *blk_next(BlockBackend *blk);
 bool monitor_add_blk(BlockBackend *blk, const char *name, Error **errp);
@@ -96,9 +110,12 @@ BlockBackend *blk_by_public(BlockBackendPublic *public);
 
 BlockDriverState *blk_bs(BlockBackend *blk);
 void blk_remove_bs(BlockBackend *blk);
-void blk_insert_bs(BlockBackend *blk, BlockDriverState *bs);
+int blk_insert_bs(BlockBackend *blk, BlockDriverState *bs, Error **errp);
 bool bdrv_has_blk(BlockDriverState *bs);
 bool bdrv_is_root_node(BlockDriverState *bs);
+int blk_set_perm(BlockBackend *blk, uint64_t perm, uint64_t shared_perm,
+                 Error **errp);
+void blk_get_perm(BlockBackend *blk, uint64_t *perm, uint64_t *shared_perm);
 
 void blk_set_allow_write_beyond_eof(BlockBackend *blk, bool allow);
 void blk_iostatus_enable(BlockBackend *blk);
@@ -208,7 +225,7 @@ int coroutine_fn blk_co_pwrite_zeroes(BlockBackend *blk, int64_t offset,
                                       int count, BdrvRequestFlags flags);
 int blk_pwrite_compressed(BlockBackend *blk, int64_t offset, const void *buf,
                           int count);
-int blk_truncate(BlockBackend *blk, int64_t offset);
+int blk_truncate(BlockBackend *blk, int64_t offset, Error **errp);
 int blk_pdiscard(BlockBackend *blk, int64_t offset, int count);
 int blk_save_vmstate(BlockBackend *blk, const uint8_t *buf,
                      int64_t pos, int size);

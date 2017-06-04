@@ -15,7 +15,7 @@
 /* vl.c */
 
 extern const char *bios_name;
-
+extern int only_migratable;
 extern const char *qemu_name;
 extern QemuUUID qemu_uuid;
 extern bool qemu_uuid_set;
@@ -37,6 +37,7 @@ void vm_state_notify(int running, RunState state);
 #define VMRESET_REPORT   true
 
 void vm_start(void);
+int vm_prepare_start(void);
 int vm_stop(RunState state);
 int vm_stop_force_state(RunState state);
 
@@ -60,12 +61,12 @@ void qemu_register_powerdown_notifier(Notifier *notifier);
 void qemu_system_debug_request(void);
 void qemu_system_vmstop_request(RunState reason);
 void qemu_system_vmstop_request_prepare(void);
+bool qemu_vmstop_requested(RunState *r);
 int qemu_shutdown_requested_get(void);
 int qemu_reset_requested_get(void);
 void qemu_system_killed(int signal, pid_t pid);
 void qemu_system_reset(bool report);
-void qemu_system_guest_panicked(void);
-size_t qemu_target_page_bits(void);
+void qemu_system_guest_panicked(GuestPanicInformation *info);
 
 void qemu_add_exit_notifier(Notifier *notify);
 void qemu_remove_exit_notifier(Notifier *notify);
@@ -73,11 +74,8 @@ void qemu_remove_exit_notifier(Notifier *notify);
 void qemu_add_machine_init_done_notifier(Notifier *notify);
 void qemu_remove_machine_init_done_notifier(Notifier *notify);
 
-void hmp_savevm(Monitor *mon, const QDict *qdict);
-int save_vmstate(Monitor *mon, const char *name);
-int load_vmstate(const char *name);
-void hmp_delvm(Monitor *mon, const QDict *qdict);
-void hmp_info_snapshots(Monitor *mon, const QDict *qdict);
+int save_vmstate(const char *name, Error **errp);
+int load_vmstate(const char *name, Error **errp);
 
 void qemu_announce_self(void);
 
@@ -103,8 +101,7 @@ enum qemu_vm_cmd {
 #define MAX_VM_CMD_PACKAGED_SIZE (1ul << 24)
 
 bool qemu_savevm_state_blocked(Error **errp);
-void qemu_savevm_state_begin(QEMUFile *f,
-                             const MigrationParams *params);
+void qemu_savevm_state_begin(QEMUFile *f);
 void qemu_savevm_state_header(QEMUFile *f);
 int qemu_savevm_state_iterate(QEMUFile *f, bool postcopy);
 void qemu_savevm_state_cleanup(void);
@@ -167,6 +164,10 @@ extern int mem_prealloc;
 
 #define MAX_NODES 128
 #define NUMA_NODE_UNASSIGNED MAX_NODES
+#define NUMA_DISTANCE_MIN         10
+#define NUMA_DISTANCE_DEFAULT     20
+#define NUMA_DISTANCE_MAX         254
+#define NUMA_DISTANCE_UNREACHABLE 255
 
 #define MAX_OPTION_ROMS 16
 typedef struct QEMUOptionRom {

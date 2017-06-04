@@ -83,6 +83,16 @@ static Qcow2SetRefcountFunc *const set_refcount_funcs[] = {
 /*********************************************************/
 /* refcount handling */
 
+static void update_max_refcount_table_index(BDRVQcow2State *s)
+{
+    unsigned i = s->refcount_table_size - 1;
+    while (i > 0 && (s->refcount_table[i] & REFT_OFFSET_MASK) == 0) {
+        i--;
+    }
+    /* Set s->max_refcount_table_index to the index of the last used entry */
+    s->max_refcount_table_index = i;
+}
+
 int qcow2_refcount_init(BlockDriverState *bs)
 {
     BDRVQcow2State *s = bs->opaque;
@@ -111,6 +121,7 @@ int qcow2_refcount_init(BlockDriverState *bs)
         }
         for(i = 0; i < s->refcount_table_size; i++)
             be64_to_cpus(&s->refcount_table[i]);
+        update_max_refcount_table_index(s);
     }
     return 0;
  fail:
@@ -439,6 +450,10 @@ static int alloc_refcount_block(BlockDriverState *bs,
         }
 
         s->refcount_table[refcount_table_index] = new_block;
+        /* If there's a hole in s->refcount_table then it can happen
+         * that refcount_table_index < s->max_refcount_table_index */
+        s->max_refcount_table_index =
+            MAX(s->max_refcount_table_index, refcount_table_index);
 
         /* The new refcount block may be where the caller intended to put its
          * data, so let it restart the search. */
@@ -580,6 +595,7 @@ static int alloc_refcount_block(BlockDriverState *bs,
     s->refcount_table = new_table;
     s->refcount_table_size = table_size;
     s->refcount_table_offset = table_offset;
+    update_max_refcount_table_index(s);
 
     /* Free old table. */
     qcow2_free_clusters(bs, old_table_offset, old_table_size * sizeof(uint64_t),
@@ -1012,18 +1028,17 @@ void qcow2_free_any_clusters(BlockDriverState *bs, uint64_t l2_entry,
         }
         break;
     case QCOW2_CLUSTER_NORMAL:
-    case QCOW2_CLUSTER_ZERO:
-        if (l2_entry & L2E_OFFSET_MASK) {
-            if (offset_into_cluster(s, l2_entry & L2E_OFFSET_MASK)) {
-                qcow2_signal_corruption(bs, false, -1, -1,
-                                        "Cannot free unaligned cluster %#llx",
-                                        l2_entry & L2E_OFFSET_MASK);
-            } else {
-                qcow2_free_clusters(bs, l2_entry & L2E_OFFSET_MASK,
-                                    nb_clusters << s->cluster_bits, type);
-            }
+    case QCOW2_CLUSTER_ZERO_ALLOC:
+        if (offset_into_cluster(s, l2_entry & L2E_OFFSET_MASK)) {
+            qcow2_signal_corruption(bs, false, -1, -1,
+                                    "Cannot free unaligned cluster %#llx",
+                                    l2_entry & L2E_OFFSET_MASK);
+        } else {
+            qcow2_free_clusters(bs, l2_entry & L2E_OFFSET_MASK,
+                                nb_clusters << s->cluster_bits, type);
         }
         break;
+    case QCOW2_CLUSTER_ZERO_PLAIN:
     case QCOW2_CLUSTER_UNALLOCATED:
         break;
     default:
@@ -1043,9 +1058,9 @@ int qcow2_update_snapshot_refcount(BlockDriverState *bs,
     int64_t l1_table_offset, int l1_size, int addend)
 {
     BDRVQcow2State *s = bs->opaque;
-    uint64_t *l1_table, *l2_table, l2_offset, offset, l1_size2, refcount;
+    uint64_t *l1_table, *l2_table, l2_offset, entry, l1_size2, refcount;
     bool l1_allocated = false;
-    int64_t old_offset, old_l2_offset;
+    int64_t old_entry, old_l2_offset;
     int i, j, l1_modified = 0, nb_csectors;
     int ret;
 
@@ -1073,15 +1088,16 @@ int qcow2_update_snapshot_refcount(BlockDriverState *bs,
             goto fail;
         }
 
-        for(i = 0;i < l1_size; i++)
+        for (i = 0; i < l1_size; i++) {
             be64_to_cpus(&l1_table[i]);
+        }
     } else {
         assert(l1_size == s->l1_size);
         l1_table = s->l1_table;
         l1_allocated = false;
     }
 
-    for(i = 0; i < l1_size; i++) {
+    for (i = 0; i < l1_size; i++) {
         l2_offset = l1_table[i];
         if (l2_offset) {
             old_l2_offset = l2_offset;
@@ -1101,81 +1117,79 @@ int qcow2_update_snapshot_refcount(BlockDriverState *bs,
                 goto fail;
             }
 
-            for(j = 0; j < s->l2_size; j++) {
+            for (j = 0; j < s->l2_size; j++) {
                 uint64_t cluster_index;
+                uint64_t offset;
 
-                offset = be64_to_cpu(l2_table[j]);
-                old_offset = offset;
-                offset &= ~QCOW_OFLAG_COPIED;
+                entry = be64_to_cpu(l2_table[j]);
+                old_entry = entry;
+                entry &= ~QCOW_OFLAG_COPIED;
+                offset = entry & L2E_OFFSET_MASK;
 
-                switch (qcow2_get_cluster_type(offset)) {
-                    case QCOW2_CLUSTER_COMPRESSED:
-                        nb_csectors = ((offset >> s->csize_shift) &
-                                       s->csize_mask) + 1;
-                        if (addend != 0) {
-                            ret = update_refcount(bs,
-                                (offset & s->cluster_offset_mask) & ~511,
+                switch (qcow2_get_cluster_type(entry)) {
+                case QCOW2_CLUSTER_COMPRESSED:
+                    nb_csectors = ((entry >> s->csize_shift) &
+                                   s->csize_mask) + 1;
+                    if (addend != 0) {
+                        ret = update_refcount(bs,
+                                (entry & s->cluster_offset_mask) & ~511,
                                 nb_csectors * 512, abs(addend), addend < 0,
                                 QCOW2_DISCARD_SNAPSHOT);
-                            if (ret < 0) {
-                                goto fail;
-                            }
-                        }
-                        /* compressed clusters are never modified */
-                        refcount = 2;
-                        break;
-
-                    case QCOW2_CLUSTER_NORMAL:
-                    case QCOW2_CLUSTER_ZERO:
-                        if (offset_into_cluster(s, offset & L2E_OFFSET_MASK)) {
-                            qcow2_signal_corruption(bs, true, -1, -1, "Data "
-                                                    "cluster offset %#llx "
-                                                    "unaligned (L2 offset: %#"
-                                                    PRIx64 ", L2 index: %#x)",
-                                                    offset & L2E_OFFSET_MASK,
-                                                    l2_offset, j);
-                            ret = -EIO;
-                            goto fail;
-                        }
-
-                        cluster_index = (offset & L2E_OFFSET_MASK) >> s->cluster_bits;
-                        if (!cluster_index) {
-                            /* unallocated */
-                            refcount = 0;
-                            break;
-                        }
-                        if (addend != 0) {
-                            ret = qcow2_update_cluster_refcount(bs,
-                                    cluster_index, abs(addend), addend < 0,
-                                    QCOW2_DISCARD_SNAPSHOT);
-                            if (ret < 0) {
-                                goto fail;
-                            }
-                        }
-
-                        ret = qcow2_get_refcount(bs, cluster_index, &refcount);
                         if (ret < 0) {
                             goto fail;
                         }
-                        break;
+                    }
+                    /* compressed clusters are never modified */
+                    refcount = 2;
+                    break;
 
-                    case QCOW2_CLUSTER_UNALLOCATED:
-                        refcount = 0;
-                        break;
+                case QCOW2_CLUSTER_NORMAL:
+                case QCOW2_CLUSTER_ZERO_ALLOC:
+                    if (offset_into_cluster(s, offset)) {
+                        qcow2_signal_corruption(bs, true, -1, -1, "Cluster "
+                                                "allocation offset %#" PRIx64
+                                                " unaligned (L2 offset: %#"
+                                                PRIx64 ", L2 index: %#x)",
+                                                offset, l2_offset, j);
+                        ret = -EIO;
+                        goto fail;
+                    }
 
-                    default:
-                        abort();
+                    cluster_index = offset >> s->cluster_bits;
+                    assert(cluster_index);
+                    if (addend != 0) {
+                        ret = qcow2_update_cluster_refcount(bs,
+                                    cluster_index, abs(addend), addend < 0,
+                                    QCOW2_DISCARD_SNAPSHOT);
+                        if (ret < 0) {
+                            goto fail;
+                        }
+                    }
+
+                    ret = qcow2_get_refcount(bs, cluster_index, &refcount);
+                    if (ret < 0) {
+                        goto fail;
+                    }
+                    break;
+
+                case QCOW2_CLUSTER_ZERO_PLAIN:
+                case QCOW2_CLUSTER_UNALLOCATED:
+                    refcount = 0;
+                    break;
+
+                default:
+                    abort();
                 }
 
                 if (refcount == 1) {
-                    offset |= QCOW_OFLAG_COPIED;
+                    entry |= QCOW_OFLAG_COPIED;
                 }
-                if (offset != old_offset) {
+                if (entry != old_entry) {
                     if (addend > 0) {
                         qcow2_cache_set_dependency(bs, s->l2_table_cache,
                             s->refcount_block_cache);
                     }
-                    l2_table[j] = cpu_to_be64(offset);
+                    l2_table[j] = cpu_to_be64(entry);
                     qcow2_cache_entry_mark_dirty(bs, s->l2_table_cache,
                                                  l2_table);
                 }
@@ -1425,12 +1439,7 @@ static int check_refcounts_l2(BlockDriverState *bs, BdrvCheckResult *res,
             }
             break;
 
-        case QCOW2_CLUSTER_ZERO:
-            if ((l2_entry & L2E_OFFSET_MASK) == 0) {
-                break;
-            }
-            /* fall through */
-
+        case QCOW2_CLUSTER_ZERO_ALLOC:
         case QCOW2_CLUSTER_NORMAL:
         {
             uint64_t offset = l2_entry & L2E_OFFSET_MASK;
@@ -1460,6 +1469,7 @@ static int check_refcounts_l2(BlockDriverState *bs, BdrvCheckResult *res,
             break;
         }
 
+        case QCOW2_CLUSTER_ZERO_PLAIN:
         case QCOW2_CLUSTER_UNALLOCATED:
             break;
 
@@ -1622,10 +1632,10 @@ static int check_oflag_copied(BlockDriverState *bs, BdrvCheckResult *res,
         for (j = 0; j < s->l2_size; j++) {
             uint64_t l2_entry = be64_to_cpu(l2_table[j]);
             uint64_t data_offset = l2_entry & L2E_OFFSET_MASK;
-            int cluster_type = qcow2_get_cluster_type(l2_entry);
+            QCow2ClusterType cluster_type = qcow2_get_cluster_type(l2_entry);
 
-            if ((cluster_type == QCOW2_CLUSTER_NORMAL) ||
-                ((cluster_type == QCOW2_CLUSTER_ZERO) && (data_offset != 0))) {
+            if (cluster_type == QCOW2_CLUSTER_NORMAL ||
+                cluster_type == QCOW2_CLUSTER_ZERO_ALLOC) {
                 ret = qcow2_get_refcount(bs,
                                          data_offset >> s->cluster_bits,
                                          &refcount);
@@ -1712,14 +1722,17 @@ static int check_refblocks(BlockDriverState *bs, BdrvCheckResult *res,
 
             if (fix & BDRV_FIX_ERRORS) {
                 int64_t new_nb_clusters;
+                Error *local_err = NULL;
 
                 if (offset > INT64_MAX - s->cluster_size) {
                     ret = -EINVAL;
                     goto resize_fail;
                 }
 
-                ret = bdrv_truncate(bs->file->bs, offset + s->cluster_size);
+                ret = bdrv_truncate(bs->file, offset + s->cluster_size,
+                                    &local_err);
                 if (ret < 0) {
+                    error_report_err(local_err);
                     goto resize_fail;
                 }
                 size = bdrv_getlength(bs->file->bs);
@@ -2171,6 +2184,7 @@ write_refblocks:
     s->refcount_table = on_disk_reftable;
     s->refcount_table_offset = reftable_offset;
     s->refcount_table_size = reftable_size;
+    update_max_refcount_table_index(s);
 
     return 0;
 
@@ -2383,7 +2397,11 @@ int qcow2_check_metadata_overlap(BlockDriverState *bs, int ign, int64_t offset,
     }
 
     if ((chk & QCOW2_OL_REFCOUNT_BLOCK) && s->refcount_table) {
-        for (i = 0; i < s->refcount_table_size; i++) {
+        unsigned last_entry = s->max_refcount_table_index;
+        assert(last_entry < s->refcount_table_size);
+        assert(last_entry + 1 == s->refcount_table_size ||
+               (s->refcount_table[last_entry + 1] & REFT_OFFSET_MASK) == 0);
+        for (i = 0; i <= last_entry; i++) {
             if ((s->refcount_table[i] & REFT_OFFSET_MASK) &&
                 overlaps_with(s->refcount_table[i] & REFT_OFFSET_MASK,
                 s->cluster_size)) {
@@ -2871,6 +2889,7 @@ int qcow2_change_refcount_order(BlockDriverState *bs, int refcount_order,
     /* Now update the rest of the in-memory information */
     old_reftable = s->refcount_table;
     s->refcount_table = new_reftable;
+    update_max_refcount_table_index(s);
 
     s->refcount_bits = 1 << refcount_order;
     s->refcount_max = UINT64_C(1) << (s->refcount_bits - 1);

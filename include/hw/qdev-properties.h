@@ -134,12 +134,12 @@ extern PropertyInfo qdev_prop_arraylen;
  *   device_add, so add code like this:
  *   |* Reason: pointer property "NAME-OF-YOUR-PROP" *|
  *   DeviceClass *dc = DEVICE_CLASS(class);
- *   dc->cannot_instantiate_with_device_add_yet = true;
+ *   dc->user_creatable = false;
  *
  * - If the property may safely remain null, document it like this:
  *   |*
  *    * Note: pointer property "interrupt_vector" may remain null, thus
- *    * no need for dc->cannot_instantiate_with_device_add_yet = true;
+ *    * no need for dc->user_creatable = false;
  *    *|
  */
 #define DEFINE_PROP_PTR(_n, _s, _f)             \
@@ -188,7 +188,8 @@ void qdev_prop_set_chr(DeviceState *dev, const char *name, Chardev *value);
 void qdev_prop_set_netdev(DeviceState *dev, const char *name, NetClientState *value);
 void qdev_prop_set_drive(DeviceState *dev, const char *name,
                          BlockBackend *value, Error **errp);
-void qdev_prop_set_macaddr(DeviceState *dev, const char *name, uint8_t *value);
+void qdev_prop_set_macaddr(DeviceState *dev, const char *name,
+                           const uint8_t *value);
 void qdev_prop_set_enum(DeviceState *dev, const char *name, int value);
 /* FIXME: Remove opaque pointer properties.  */
 void qdev_prop_set_ptr(DeviceState *dev, const char *name, void *value);

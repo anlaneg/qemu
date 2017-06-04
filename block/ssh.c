@@ -227,24 +227,23 @@ static int parse_uri(const char *filename, QDict *options, Error **errp)
     }
 
     if(uri->user && strcmp(uri->user, "") != 0) {
-        qdict_put(options, "user", qstring_from_str(uri->user));
+        qdict_put_str(options, "user", uri->user);
     }
 
-    qdict_put(options, "server.host", qstring_from_str(uri->server));
+    qdict_put_str(options, "server.host", uri->server);
 
     port_str = g_strdup_printf("%d", uri->port ?: 22);
-    qdict_put(options, "server.port", qstring_from_str(port_str));
+    qdict_put_str(options, "server.port", port_str);
     g_free(port_str);
 
-    qdict_put(options, "path", qstring_from_str(uri->path));
+    qdict_put_str(options, "path", uri->path);
 
     /* Pick out any query parameters that we understand, and ignore
      * the rest.
      */
     for (i = 0; i < qp->n; ++i) {
         if (strcmp(qp->p[i].name, "host_key_check") == 0) {
-            qdict_put(options, "host_key_check",
-                      qstring_from_str(qp->p[i].value));
+            qdict_put_str(options, "host_key_check", qp->p[i].value);
         }
     }
 
@@ -574,9 +573,8 @@ static bool ssh_process_legacy_socket_options(QDict *output_opts,
     }
 
     if (host) {
-        qdict_put(output_opts, "server.host", qstring_from_str(host));
-        qdict_put(output_opts, "server.port",
-                  qstring_from_str(port ?: stringify(22)));
+        qdict_put_str(output_opts, "server.host", host);
+        qdict_put_str(output_opts, "server.port", port ?: stringify(22));
     }
 
     return true;
@@ -601,7 +599,15 @@ static InetSocketAddress *ssh_config(QDict *options, Error **errp)
         goto out;
     }
 
-    iv = qobject_input_visitor_new(crumpled_addr, true);
+    /*
+     * FIXME .numeric, .to, .ipv4 or .ipv6 don't work with -drive.
+     * .to doesn't matter, it's ignored anyway.
+     * That's because when @options come from -blockdev or
+     * blockdev_add, members are typed according to the QAPI schema,
+     * but when they come from -drive, they're all QString.  The
+     * visitor expects the former.
+     */
+    iv = qobject_input_visitor_new(crumpled_addr);
     visit_type_InetSocketAddress(iv, NULL, &inet, &local_error);
     if (local_error) {
         error_propagate(errp, local_error);
@@ -673,7 +679,7 @@ static int connect_to_ssh(BDRVSSHState *s, QDict *options,
     }
 
     /* Open the socket and connect. */
-    s->sock = inet_connect_saddr(s->inet, errp, NULL, NULL);
+    s->sock = inet_connect_saddr(s->inet, NULL, NULL, errp);
     if (s->sock < 0) {
         ret = -EIO;
         goto err;
@@ -889,10 +895,14 @@ static void restart_coroutine(void *opaque)
 
     DPRINTF("co=%p", co);
 
-    qemu_coroutine_enter(co);
+    aio_co_wake(co);
 }
 
-static coroutine_fn void set_fd_handler(BDRVSSHState *s, BlockDriverState *bs)
+/* A non-blocking call returned EAGAIN, so yield, ensuring the
+ * handlers are set up so that we'll be rescheduled when there is an
+ * interesting event on the socket.
+ */
+static coroutine_fn void co_yield(BDRVSSHState *s, BlockDriverState *bs)
 {
     int r;
     IOHandler *rd_handler = NULL, *wr_handler = NULL;
@@ -912,25 +922,10 @@ static coroutine_fn void set_fd_handler(BDRVSSHState *s, BlockDriverState *bs)
 
     aio_set_fd_handler(bdrv_get_aio_context(bs), s->sock,
                        false, rd_handler, wr_handler, NULL, co);
-}
-
-static coroutine_fn void clear_fd_handler(BDRVSSHState *s,
-                                          BlockDriverState *bs)
-{
-    DPRINTF("s->sock=%d", s->sock);
-    aio_set_fd_handler(bdrv_get_aio_context(bs), s->sock,
-                       false, NULL, NULL, NULL, NULL);
-}
-
-/* A non-blocking call returned EAGAIN, so yield, ensuring the
- * handlers are set up so that we'll be rescheduled when there is an
- * interesting event on the socket.
- */
-static coroutine_fn void co_yield(BDRVSSHState *s, BlockDriverState *bs)
-{
-    set_fd_handler(s, bs);
     qemu_coroutine_yield();
-    clear_fd_handler(s, bs);
+    DPRINTF("s->sock=%d - back", s->sock);
+    aio_set_fd_handler(bdrv_get_aio_context(bs), s->sock, false,
+                       NULL, NULL, NULL, NULL);
 }
 
 /* SFTP has a function `libssh2_sftp_seek64' which seeks to a position

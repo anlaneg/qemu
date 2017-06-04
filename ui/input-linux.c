@@ -169,6 +169,12 @@ struct InputLinux {
     bool        has_abs_x;
     int         num_keys;
     int         num_btns;
+    int         abs_x_min;
+    int         abs_x_max;
+    int         abs_y_min;
+    int         abs_y_max;
+    struct input_event event;
+    int         read_offset;
 
     QTAILQ_ENTRY(InputLinux) next;
 };
@@ -312,6 +318,18 @@ static void input_linux_handle_mouse(InputLinux *il, struct input_event *event)
             break;
         }
         break;
+    case EV_ABS:
+        switch (event->code) {
+        case ABS_X:
+            qemu_input_queue_abs(NULL, INPUT_AXIS_X, event->value,
+                                 il->abs_x_min, il->abs_x_max);
+            break;
+        case ABS_Y:
+            qemu_input_queue_abs(NULL, INPUT_AXIS_Y, event->value,
+                                 il->abs_y_min, il->abs_y_max);
+            break;
+        }
+        break;
     case EV_SYN:
         qemu_input_event_sync();
         if (il->wheel != 0) {
@@ -327,25 +345,30 @@ static void input_linux_handle_mouse(InputLinux *il, struct input_event *event)
 static void input_linux_event(void *opaque)
 {
     InputLinux *il = opaque;
-    struct input_event event;
     int rc;
+    int read_size;
+    uint8_t *p = (uint8_t *)&il->event;
 
     for (;;) {
-        rc = read(il->fd, &event, sizeof(event));
-        if (rc != sizeof(event)) {
+        read_size = sizeof(il->event) - il->read_offset;
+        rc = read(il->fd, &p[il->read_offset], read_size);
+        if (rc != read_size) {
             if (rc < 0 && errno != EAGAIN) {
                 fprintf(stderr, "%s: read: %s\n", __func__, strerror(errno));
                 qemu_set_fd_handler(il->fd, NULL, NULL, NULL);
                 close(il->fd);
+            } else if (rc > 0) {
+                il->read_offset += rc;
             }
             break;
         }
+        il->read_offset = 0;
 
         if (il->num_keys) {
-            input_linux_handle_keyboard(il, &event);
+            input_linux_handle_keyboard(il, &il->event);
         }
-        if (il->has_rel_x && il->num_btns) {
-            input_linux_handle_mouse(il, &event);
+        if ((il->has_rel_x || il->has_abs_x) && il->num_btns) {
+            input_linux_handle_mouse(il, &il->event);
         }
     }
 }
@@ -357,6 +380,7 @@ static void input_linux_complete(UserCreatable *uc, Error **errp)
     uint8_t keymap[KEY_CNT / 8], keystate[KEY_CNT / 8];
     unsigned int i;
     int rc, ver;
+    struct input_absinfo absinfo;
 
     if (!il->evdev) {
         error_setg(errp, "no input device specified");
@@ -395,6 +419,12 @@ static void input_linux_complete(UserCreatable *uc, Error **errp)
         rc = ioctl(il->fd, EVIOCGBIT(EV_ABS, sizeof(absmap)), &absmap);
         if (absmap & (1 << ABS_X)) {
             il->has_abs_x = true;
+            rc = ioctl(il->fd, EVIOCGABS(ABS_X), &absinfo);
+            il->abs_x_min = absinfo.minimum;
+            il->abs_x_max = absinfo.maximum;
+            rc = ioctl(il->fd, EVIOCGABS(ABS_Y), &absinfo);
+            il->abs_y_min = absinfo.minimum;
+            il->abs_y_max = absinfo.maximum;
         }
     }
 

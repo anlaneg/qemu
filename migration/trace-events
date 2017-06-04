@@ -63,13 +63,16 @@ put_qtailq_end(const char *name, const char *reason) "%s %s"
 qemu_file_fclose(void) ""
 
 # migration/ram.c
-get_queued_page(const char *block_name, uint64_t tmp_offset, uint64_t ram_addr) "%s/%" PRIx64 " ram_addr=%" PRIx64
-get_queued_page_not_dirty(const char *block_name, uint64_t tmp_offset, uint64_t ram_addr, int sent) "%s/%" PRIx64 " ram_addr=%" PRIx64 " (sent=%d)"
+get_queued_page(const char *block_name, uint64_t tmp_offset, unsigned long page_abs) "%s/%" PRIx64 " page_abs=%lx"
+get_queued_page_not_dirty(const char *block_name, uint64_t tmp_offset, unsigned long page_abs, int sent) "%s/%" PRIx64 " page_abs=%lx (sent=%d)"
 migration_bitmap_sync_start(void) ""
 migration_bitmap_sync_end(uint64_t dirty_pages) "dirty_pages %" PRIu64
 migration_throttle(void) ""
+ram_discard_range(const char *rbname, uint64_t start, size_t len) "%s: start: %" PRIx64 " %zx"
+ram_load_loop(const char *rbname, uint64_t addr, int flags, void *host) "%s: addr: %" PRIx64 " flags: %x host: %p"
 ram_load_postcopy_loop(uint64_t addr, int flags) "@%" PRIx64 " %x"
 ram_postcopy_send_discard_bitmap(void) ""
+ram_save_page(const char *rbname, uint64_t offset, void *host) "%s: offset: %" PRIx64 " host: %p"
 ram_save_queue_pages(const char *rbname, size_t start, size_t len) "%s: start: %zx len: %zx"
 
 # migration/migration.c
@@ -176,7 +179,6 @@ rdma_start_outgoing_migration_after_rdma_source_init(void) ""
 # migration/postcopy-ram.c
 postcopy_discard_send_finish(const char *ramblock, int nwords, int ncmds) "%s mask words sent=%d in %d commands"
 postcopy_discard_send_range(const char *ramblock, unsigned long start, unsigned long length) "%s:%lx/%lx"
-postcopy_ram_discard_range(void *start, size_t length) "%p,+%zx"
 postcopy_cleanup_range(const char *ramblock, void *host_addr, size_t offset, size_t length) "%s: %p offset=%zx length=%zx"
 postcopy_init_range(const char *ramblock, void *host_addr, size_t offset, size_t length) "%s: %p offset=%zx length=%zx"
 postcopy_nhp_range(const char *ramblock, void *host_addr, size_t offset, size_t length) "%s: %p offset=%zx length=%zx"

@@ -58,7 +58,7 @@ ivshmem_server_send_one_msg(int sock_fd, int64_t peer_id, int fd)
         cmsg->cmsg_level = SOL_SOCKET;
         cmsg->cmsg_type = SCM_RIGHTS;
         cmsg->cmsg_len = CMSG_LEN(sizeof(int));
-        memcpy(CMSG_DATA(cmsg), &fd, sizeof(fd));
+        memcpy(CMSG_DATA(cmsg), &fd, sizeof(fd));//填写fd
     }
 
     ret = sendmsg(sock_fd, &msg, 0);

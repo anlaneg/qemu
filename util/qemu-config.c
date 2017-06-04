@@ -24,7 +24,7 @@ static QemuOptsList *find_list(QemuOptsList **lists, const char *group,
     return lists[i];
 }
 
-//查找opt
+//查找指定group的opt
 QemuOptsList *qemu_find_opts(const char *group)
 {
     QemuOptsList *ret;
@@ -229,6 +229,12 @@ static QemuOptsList machine_opts = {
             .name = "dea-key-wrap",
             .type = QEMU_OPT_BOOL,
             .help = "enable/disable DEA key wrapping using the CPACF wrapping key",
+        },{
+            .name = "loadparm",
+            .type = QEMU_OPT_STRING,
+            .help = "Up to 8 chars in set of [A-Za-z0-9. ](lower case chars"
+                    " converted to upper case) to pass to machine"
+                    " loader, boot manager, and guest kernel",
         },
         { /* End of list */ }
     }

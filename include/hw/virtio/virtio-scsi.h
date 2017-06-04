@@ -49,8 +49,10 @@ struct VirtIOSCSIConf {
     uint32_t num_queues;
     uint32_t max_sectors;
     uint32_t cmd_per_lun;
+#ifdef CONFIG_VHOST_SCSI
     char *vhostfd;
     char *wwpn;
+#endif
     uint32_t boot_tpgt;
     IOThread *iothread;
 };
@@ -121,14 +123,30 @@ typedef struct VirtIOSCSIReq {
     } req;
 } VirtIOSCSIReq;
 
-void virtio_scsi_common_realize(DeviceState *dev, Error **errp,
-                                VirtIOHandleOutput ctrl, VirtIOHandleOutput evt,
-                                VirtIOHandleOutput cmd);
+static inline void virtio_scsi_acquire(VirtIOSCSI *s)
+{
+    if (s->ctx) {
+        aio_context_acquire(s->ctx);
+    }
+}
+
+static inline void virtio_scsi_release(VirtIOSCSI *s)
+{
+    if (s->ctx) {
+        aio_context_release(s->ctx);
+    }
+}
+
+void virtio_scsi_common_realize(DeviceState *dev,
+                                VirtIOHandleOutput ctrl,
+                                VirtIOHandleOutput evt,
+                                VirtIOHandleOutput cmd,
+                                Error **errp);
 
 void virtio_scsi_common_unrealize(DeviceState *dev, Error **errp);
-void virtio_scsi_handle_event_vq(VirtIOSCSI *s, VirtQueue *vq);
-void virtio_scsi_handle_cmd_vq(VirtIOSCSI *s, VirtQueue *vq);
-void virtio_scsi_handle_ctrl_vq(VirtIOSCSI *s, VirtQueue *vq);
+bool virtio_scsi_handle_event_vq(VirtIOSCSI *s, VirtQueue *vq);
+bool virtio_scsi_handle_cmd_vq(VirtIOSCSI *s, VirtQueue *vq);
+bool virtio_scsi_handle_ctrl_vq(VirtIOSCSI *s, VirtQueue *vq);
 void virtio_scsi_init_req(VirtIOSCSI *s, VirtQueue *vq, VirtIOSCSIReq *req);
 void virtio_scsi_free_req(VirtIOSCSIReq *req);
 void virtio_scsi_push_event(VirtIOSCSI *s, SCSIDevice *dev,
