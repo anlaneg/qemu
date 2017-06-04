@@ -369,7 +369,7 @@ typedef void (ObjectFree)(void *obj);
 struct ObjectClass
 {
     /*< private >*/
-    Type type;
+    Type type;//类型
     GSList *interfaces;
 
     const char *object_cast_cache[OBJECT_CLASS_CAST_CACHE];
@@ -377,7 +377,7 @@ struct ObjectClass
 
     ObjectUnparent *unparent;
 
-    GHashTable *properties;
+    GHashTable *properties;//属性表
 };
 
 /**
@@ -444,16 +444,16 @@ struct Object
  */
 struct TypeInfo
 {
-    const char *name;
-    const char *parent;
+    const char *name;//类型名称
+    const char *parent;//父类型
 
-    size_t instance_size;
+    size_t instance_size;//类型大小
     void (*instance_init)(Object *obj);
     void (*instance_post_init)(Object *obj);
     void (*instance_finalize)(Object *obj);
 
-    bool abstract;
-    size_t class_size;
+    bool abstract;//是否抽象类型
+    size_t class_size;//类元数据大小
 
     void (*class_init)(ObjectClass *klass, void *data);
     void (*class_base_init)(ObjectClass *klass, void *data);

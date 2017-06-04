@@ -24,7 +24,7 @@ static QemuOptsList *find_list(QemuOptsList **lists, const char *group,
     return lists[i];
 }
 
-//查找opt
+//查找指定group的opt
 QemuOptsList *qemu_find_opts(const char *group)
 {
     QemuOptsList *ret;

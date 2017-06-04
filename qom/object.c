@@ -48,6 +48,7 @@ struct TypeImpl
 
     size_t instance_size;
 
+    //本类型的构造函数
     void (*class_init)(ObjectClass *klass, void *data);
     void (*class_base_init)(ObjectClass *klass, void *data);
     void (*class_finalize)(ObjectClass *klass, void *data);
@@ -60,10 +61,10 @@ struct TypeImpl
 
     bool abstract;
 
-    const char *parent;
-    TypeImpl *parent_type;
+    const char *parent;//父类型
+    TypeImpl *parent_type;//父类型实例
 
-    ObjectClass *class;
+    ObjectClass *class;//基类
 
     int num_interfaces;
     InterfaceImpl interfaces[MAX_INTERFACES];
@@ -76,6 +77,7 @@ static GHashTable *type_table_get(void)
 {
     static GHashTable *type_table;
 
+    //如果type_tabe没有创建，则创建它
     if (type_table == NULL) {
         type_table = g_hash_table_new(g_str_hash, g_str_equal);
     }
@@ -96,6 +98,7 @@ static TypeImpl *type_table_lookup(const char *name)
     return g_hash_table_lookup(type_table_get(), name);
 }
 
+//依据info构造一份TypeImpl数据
 static TypeImpl *type_new(const TypeInfo *info)
 {
     TypeImpl *ti = g_malloc0(sizeof(*ti));
@@ -103,11 +106,13 @@ static TypeImpl *type_new(const TypeInfo *info)
 
     g_assert(info->name != NULL);
 
+    //类型已存在，注册失败，代码有误，abort
     if (type_table_lookup(info->name) != NULL) {
         fprintf(stderr, "Registering `%s' which already exists\n", info->name);
         abort();
     }
 
+    //copy一份传入的数据
     ti->name = g_strdup(info->name);
     ti->parent = g_strdup(info->parent);
 
@@ -136,23 +141,26 @@ static TypeImpl *type_new(const TypeInfo *info)
 static TypeImpl *type_register_internal(const TypeInfo *info)
 {
     TypeImpl *ti;
-    ti = type_new(info);
+    ti = type_new(info);//创建ti
 
-    type_table_add(ti);
+    type_table_add(ti);//加入hash表中
     return ti;
 }
 
 TypeImpl *type_register(const TypeInfo *info)
 {
+	//类型必须要有parent
     assert(info->parent);
     return type_register_internal(info);
 }
 
+//实现类型注册
 TypeImpl *type_register_static(const TypeInfo *info)
 {
     return type_register(info);
 }
 
+//给定名称查询TypeImpl
 static TypeImpl *type_get_by_name(const char *name)
 {
     if (name == NULL) {
@@ -162,6 +170,7 @@ static TypeImpl *type_get_by_name(const char *name)
     return type_table_lookup(name);
 }
 
+//取指定类型的父类型
 static TypeImpl *type_get_parent(TypeImpl *type)
 {
     if (!type->parent_type && type->parent) {
@@ -172,11 +181,13 @@ static TypeImpl *type_get_parent(TypeImpl *type)
     return type->parent_type;
 }
 
+//此类型是否有父类型
 static bool type_has_parent(TypeImpl *type)
 {
     return (type->parent != NULL);
 }
 
+//获取class_size
 static size_t type_class_get_size(TypeImpl *ti)
 {
     if (ti->class_size) {
@@ -190,6 +201,7 @@ static size_t type_class_get_size(TypeImpl *ti)
     return sizeof(ObjectClass);
 }
 
+//取类型的instance_size
 static size_t type_object_get_size(TypeImpl *ti)
 {
     if (ti->instance_size) {
@@ -236,11 +248,12 @@ static void type_initialize_interface(TypeImpl *ti, TypeImpl *interface_type,
     TypeInfo info = { };
     TypeImpl *iface_impl;
 
+    //将接口看成是名称为$typename::$interfacename的类型
     info.parent = parent_type->name;
     info.name = g_strdup_printf("%s::%s", ti->name, interface_type->name);
     info.abstract = true;
 
-    iface_impl = type_new(&info);
+    iface_impl = type_new(&info);//创建动态类型
     iface_impl->parent_type = parent_type;
     type_initialize(iface_impl);
     g_free((char *)info.name);
@@ -263,6 +276,7 @@ static void object_property_free(gpointer data)
     g_free(prop);
 }
 
+//type初始化
 static void type_initialize(TypeImpl *ti)
 {
     TypeImpl *parent;
@@ -271,37 +285,43 @@ static void type_initialize(TypeImpl *ti)
         return;
     }
 
+    //获取类元数据大小，实例（对象）大小
     ti->class_size = type_class_get_size(ti);
     ti->instance_size = type_object_get_size(ti);
     /* Any type with zero instance_size is implicitly abstract.
      * This means interface types are all abstract.
      */
     if (ti->instance_size == 0) {
-        ti->abstract = true;
+        ti->abstract = true;//实例大小为0，则为抽象数据结构
     }
 
+    //生成类元数据需要的内存
     ti->class = g_malloc0(ti->class_size);
 
     parent = type_get_parent(ti);
     if (parent) {
+    		//递归实例化父类
         type_initialize(parent);
         GSList *e;
         int i;
 
+        //将父类型实例化好的数据copy到自身class上来
         g_assert_cmpint(parent->class_size, <=, ti->class_size);
         memcpy(ti->class, parent->class, parent->class_size);
         ti->class->interfaces = NULL;
+        //构造属性表
         ti->class->properties = g_hash_table_new_full(
             g_str_hash, g_str_equal, g_free, object_property_free);
 
         for (e = parent->class->interfaces; e; e = e->next) {
             InterfaceClass *iface = e->data;
-            ObjectClass *klass = OBJECT_CLASS(iface);
+            ObjectClass *klass = OBJECT_CLASS(iface);//强转为基类
 
             type_initialize_interface(ti, iface->interface_type, klass->type);
         }
 
         for (i = 0; i < ti->num_interfaces; i++) {
+        		//查询接口类型
             TypeImpl *t = type_get_by_name(ti->interfaces[i].typename);
             for (e = ti->class->interfaces; e; e = e->next) {
                 TypeImpl *target_type = OBJECT_CLASS(e->data)->type;
@@ -318,11 +338,12 @@ static void type_initialize(TypeImpl *ti)
             type_initialize_interface(ti, t, t);
         }
     } else {
+    		//构造基类的属性表
         ti->class->properties = g_hash_table_new_full(
             g_str_hash, g_str_equal, g_free, object_property_free);
     }
 
-    ti->class->type = ti;
+    ti->class->type = ti;//覆盖顶层基类的type
 
     while (parent) {
         if (parent->class_base_init) {
@@ -331,6 +352,7 @@ static void type_initialize(TypeImpl *ti)
         parent = type_get_parent(parent);
     }
 
+    //调用本类的构造函数
     if (ti->class_init) {
         ti->class_init(ti->class, ti->class_data);
     }
@@ -796,6 +818,7 @@ typedef struct OCFData
     void *opaque;
 } OCFData;
 
+//对key,value的遍历
 static void object_class_foreach_tramp(gpointer key, gpointer value,
                                        gpointer opaque)
 {
@@ -825,6 +848,7 @@ void object_class_foreach(void (*fn)(ObjectClass *klass, void *opaque),
     OCFData data = { fn, implements_type, include_abstract, opaque };
 
     enumerating_types = true;
+    //遍历全局的type hash表
     g_hash_table_foreach(type_table_get(), object_class_foreach_tramp, &data);
     enumerating_types = false;
 }
@@ -905,6 +929,7 @@ void object_unref(Object *obj)
     }
 }
 
+//属性添加
 ObjectProperty *
 object_property_add(Object *obj, const char *name, const char *type,
                     ObjectPropertyAccessor *get,
@@ -935,6 +960,7 @@ object_property_add(Object *obj, const char *name, const char *type,
         return ret;
     }
 
+    //检查属性是否已存在
     if (object_property_find(obj, name, NULL) != NULL) {
         error_setg(errp, "attempt to add duplicate property '%s'"
                    " to object (type '%s')", name,
@@ -1731,10 +1757,11 @@ Object *object_resolve_path(const char *path, bool *ambiguous)
     return object_resolve_path_type(path, TYPE_OBJECT, ambiguous);
 }
 
+//字符串属性
 typedef struct StringProperty
 {
-    char *(*get)(Object *, Error **);
-    void (*set)(Object *, const char *, Error **);
+    char *(*get)(Object *, Error **);//get函数
+    void (*set)(Object *, const char *, Error **);//set函数
 } StringProperty;
 
 static void property_get_str(Object *obj, Visitor *v, const char *name,
@@ -1778,6 +1805,7 @@ static void property_release_str(Object *obj, const char *name,
     g_free(prop);
 }
 
+//添加字符串类型属性
 void object_property_add_str(Object *obj, const char *name,
                            char *(*get)(Object *, Error **),
                            void (*set)(Object *, const char *, Error **),
@@ -1789,6 +1817,7 @@ void object_property_add_str(Object *obj, const char *name,
     prop->get = get;
     prop->set = set;
 
+    //为object添加属性
     object_property_add(obj, name, "string",
                         get ? property_get_str : NULL,
                         set ? property_set_str : NULL,
@@ -2313,6 +2342,7 @@ static void register_types(void)
         .abstract = true,
     };
 
+    //object类型信息
     static TypeInfo object_info = {
         .name = TYPE_OBJECT,
         .instance_size = sizeof(Object),

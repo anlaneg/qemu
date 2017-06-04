@@ -1094,6 +1094,7 @@ static const TypeInfo char_socket_type_info = {
     .class_init = char_socket_class_init,
 };
 
+//注册类型
 static void register_types(void)
 {
     type_register_static(&char_socket_type_info);

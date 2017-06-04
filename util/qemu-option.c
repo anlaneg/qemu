@@ -264,6 +264,7 @@ void qemu_opts_print_help(QemuOptsList *list)
 }
 /* ------------------------------------------------------------------ */
 
+//自一组选项中取出名称为name的选项
 QemuOpt *qemu_opt_find(QemuOpts *opts, const char *name)
 {
     QemuOpt *opt;
@@ -298,6 +299,7 @@ static void qemu_opt_del_all(QemuOpts *opts, const char *name)
     }
 }
 
+//获取opts选项中名称为name的给值
 const char *qemu_opt_get(QemuOpts *opts, const char *name)
 {
     QemuOpt *opt;
@@ -308,6 +310,7 @@ const char *qemu_opt_get(QemuOpts *opts, const char *name)
 
     opt = qemu_opt_find(opts, name);
     if (!opt) {
+    		//如果此选项没有指定，则使用默认值
         const QemuOptDesc *desc = find_desc_by_name(opts->list->desc, name);
         if (desc && desc->def_value_str) {
             return desc->def_value_str;
@@ -1120,7 +1123,7 @@ int qemu_opts_foreach(QemuOptsList *list, qemu_opts_loopfunc func,
     loc_push_none(&loc);
     QTAILQ_FOREACH(opts, &list->head, next) {
         loc_restore(&opts->loc);
-        rc = func(opaque, opts, errp);
+        rc = func(opaque, opts, errp);//针对每一个opts，调用函数func
         if (rc) {
             break;
         }

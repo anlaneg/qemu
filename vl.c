@@ -4347,6 +4347,7 @@ int main(int argc, char **argv, char **envp)
         exit(1);
     }
 
+    //针对每一个chardev选项，执行init
     if (qemu_opts_foreach(qemu_find_opts("chardev"),
                           chardev_init_func, NULL, NULL)) {
         exit(1);

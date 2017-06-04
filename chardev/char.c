@@ -426,6 +426,7 @@ static void char_finalize(Object *obj)
     qemu_mutex_destroy(&chr->chr_write_lock);
 }
 
+//字符类型信息
 static const TypeInfo char_type_info = {
     .name = TYPE_CHARDEV,
     .parent = TYPE_OBJECT,
@@ -778,6 +779,7 @@ static const ChardevClass *char_get_class(const char *driver, Error **errp)
 {
     ObjectClass *oc;
     const ChardevClass *cc;
+    //查找名称为chardev-%s的chardev类driver
     char *typename = g_strdup_printf("chardev-%s", driver);
 
     oc = object_class_by_name(typename);
@@ -866,12 +868,14 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts,
     const char *id = qemu_opts_id(opts);
     char *bid = NULL;
 
+    //后端参数未指定，报错
     if (name == NULL) {
         error_setg(errp, "chardev: \"%s\" missing backend",
                    qemu_opts_id(opts));
         return NULL;
     }
 
+    //处理对应选项的帮助请求
     if (is_help_option(name)) {
         GString *str = g_string_new("");
 
@@ -887,6 +891,7 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts,
         return NULL;
     }
 
+    //检查name取值是否在chardev的别名表中
     for (i = 0; i < ARRAY_SIZE(chardev_alias_table); i++) {
         if (g_strcmp0(chardev_alias_table[i].alias, name) == 0) {
             name = chardev_alias_table[i].typename;
@@ -908,6 +913,7 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts,
 
     chr = NULL;
     if (cc->parse) {
+    		//解析命令行
         cc->parse(opts, backend, &local_err);
         if (local_err) {
             error_propagate(errp, local_err);
