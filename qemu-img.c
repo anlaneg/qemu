@@ -399,7 +399,7 @@ static int img_create(int argc, char **argv)
             help();//帮助信息
             break;
         case 'F':
-            base_fmt = optarg;
+            base_fmt = optarg;//backfile格式
             break;
         case 'b':
         		//如果“-o”选项中使用了backing_file这个选项来指定其后端镜像文件，
@@ -427,10 +427,10 @@ static int img_create(int argc, char **argv)
                 goto fail;
             }
             if (!options) {
-            		//如果之前没有设置过options,则设置
+            	//如果之前没有设置过options,则设置
                 options = g_strdup(optarg);
             } else {
-            		//如果已设置，则合并options
+            	//如果已设置，则合并options
                 char *old_options = options;
                 options = g_strdup_printf("%s,%s", options, optarg);
                 g_free(old_options);
@@ -4164,7 +4164,7 @@ out:
 
 
 static const img_cmd_t img_cmds[] = {
-#define DEF(option, callback, arg_string)        \
+#define DEF(option, callback, arg_string)        \
     { option, callback },
 #include "qemu-img-cmds.h" //取出各option及其回调函数
 #undef DEF
@@ -4190,9 +4190,9 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);//忽略pipe信号（当服务器端关闭时仍写，将触发）
 #endif
 
-    module_call_init(MODULE_INIT_TRACE);
+    module_call_init(MODULE_INIT_TRACE);//调此类型的init
     error_set_progname(argv[0]);
-    qemu_init_exec_dir(argv[0]);
+    qemu_init_exec_dir(argv[0]);//设置exe所在位置
 
     if (qemu_init_main_loop(&local_error)) {
         error_report_err(local_error);

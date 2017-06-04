@@ -273,7 +273,7 @@ void qemu_init_exec_dir(const char *argv0)
 
 #if defined(__linux__)
     {
-    		//读取当前进程可执行程序所在的位置
+    	//读取当前进程可执行程序所在的位置
         int len;
         len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
         if (len > 0) {
