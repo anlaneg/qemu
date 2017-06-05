@@ -300,6 +300,7 @@ seccomp=""
 glusterfs=""
 glusterfs_xlator_opt="no"
 glusterfs_discard="no"
+glusterfs_fallocate="no"
 glusterfs_zerofill="no"
 gtk=""
 gtkabi=""
@@ -3583,6 +3584,7 @@ if test "$glusterfs" != "no" ; then
       glusterfs_discard="yes"
     fi
     if $pkg_config --atleast-version=6 glusterfs-api; then
+      glusterfs_fallocate="yes"
       glusterfs_zerofill="yes"
     fi
   else
@@ -3627,25 +3629,6 @@ main(void)
 EOF
 if compile_prog "" "" ; then
   inotify1=yes
-fi
-
-# check if utimensat and futimens are supported
-utimens=no
-cat > $TMPC << EOF
-#define _ATFILE_SOURCE
-#include <stddef.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-
-int main(void)
-{
-    utimensat(AT_FDCWD, "foo", NULL, 0);
-    futimens(0, NULL);
-    return 0;
-}
-EOF
-if compile_prog "" "" ; then
-  utimens=yes
 fi
 
 # check if pipe2 is there
@@ -5434,9 +5417,6 @@ fi
 if test "$curses" = "yes" ; then
   echo "CONFIG_CURSES=y" >> $config_host_mak
 fi
-if test "$utimens" = "yes" ; then
-  echo "CONFIG_UTIMENSAT=y" >> $config_host_mak
-fi
 if test "$pipe2" = "yes" ; then
   echo "CONFIG_PIPE2=y" >> $config_host_mak
 fi
@@ -5777,6 +5757,10 @@ fi
 
 if test "$glusterfs_discard" = "yes" ; then
   echo "CONFIG_GLUSTERFS_DISCARD=y" >> $config_host_mak
+fi
+
+if test "$glusterfs_fallocate" = "yes" ; then
+  echo "CONFIG_GLUSTERFS_FALLOCATE=y" >> $config_host_mak
 fi
 
 if test "$glusterfs_zerofill" = "yes" ; then
