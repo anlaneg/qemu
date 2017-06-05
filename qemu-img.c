@@ -72,11 +72,13 @@ typedef enum OutputFormat {
 /* Default to cache=writeback as data integrity is not important for qemu-img */
 #define BDRV_DEFAULT_CACHE "writeback"
 
+//显示不信息到标准输出
 static void format_print(void *opaque, const char *name)
 {
     printf(" %s", name);
 }
 
+//错误输出并退出
 static void QEMU_NORETURN GCC_FMT_ATTR(1, 2) error_exit(const char *fmt, ...)
 {
     va_list ap;
@@ -91,11 +93,13 @@ static void QEMU_NORETURN GCC_FMT_ATTR(1, 2) error_exit(const char *fmt, ...)
     exit(EXIT_FAILURE);
 }
 
+//指明缺少参数后退出
 static void QEMU_NORETURN missing_argument(const char *option)
 {
     error_exit("missing argument for option '%s'", option);
 }
 
+//指明为未知选项后退出
 static void QEMU_NORETURN unrecognized_option(const char *option)
 {
     error_exit("unrecognized option '%s'", option);
@@ -117,7 +121,13 @@ static void QEMU_NORETURN help(void)
            "Command syntax:\n"
 #define DEF(option, callback, arg_string)        \
            "  " arg_string "\n" //显示命令参数说明
-#include "qemu-img-cmds.h"
+
+#include "qemu-img-cmds.h" //此文件在编译期，由qemu-img-cmds.hx生成而来（实际上是qemu-img-cmds.hx中的DEF列
+/**
+ * 举个例子
+ * DEF("dd", img_dd,
+    "dd [--image-opts] [-U] [-f fmt] [-O output_fmt] [bs=block_size] [count=blocks] [skip=blocks] if=input of=output")
+ */
 #undef DEF
 #undef GEN_DOCS
            "\n"
@@ -246,12 +256,14 @@ static int print_block_option_help(const char *filename, const char *fmt)
 
     create_opts = qemu_opts_append(create_opts, drv->create_opts);
     if (filename) {
+    	//有文件名称，查找filename对应的协议
         proto_drv = bdrv_find_protocol(filename, true, &local_err);
         if (!proto_drv) {
             error_report_err(local_err);
             qemu_opts_free(create_opts);
             return 1;
         }
+        //合入协议层的选项
         create_opts = qemu_opts_append(create_opts, proto_drv->create_opts);
     }
 
@@ -485,12 +497,12 @@ static int img_create(int argc, char **argv)
             base_fmt = optarg;//backfile格式
             break;
         case 'b':
-        		//如果“-o”选项中使用了backing_file这个选项来指定其后端镜像文件，
-        		//那么这个创建的镜像文件仅记录与后端镜像文件的差异部分。后端镜像
-        		//文件不会被修改，除非在QEMU monitor中使用“commit”命令或者使用
-        		//“qemu-img commit”命令去手动提交这些改动。这种情况下，
-        		//size参数不是必须需的，其值默认为后端镜像文件的大小。另外，
-        		//直接使用“-b backfile”参数也与“-o backing_file=backfile”效果相同。
+			//如果“-o”选项中使用了backing_file这个选项来指定其后端镜像文件，
+			//那么这个创建的镜像文件仅记录与后端镜像文件的差异部分。后端镜像
+			//文件不会被修改，除非在QEMU monitor中使用“commit”命令或者使用
+			//“qemu-img commit”命令去手动提交这些改动。这种情况下，
+			//size参数不是必须需的，其值默认为后端镜像文件的大小。另外，
+			//直接使用“-b backfile”参数也与“-o backing_file=backfile”效果相同。
             base_filename = optarg;
             break;
         case 'f':
@@ -535,6 +547,7 @@ static int img_create(int argc, char **argv)
 
     /* Get the filename */
     filename = (optind < argc) ? argv[optind] : NULL;
+
     //如果有选项，且选项是有help的，则显示此格式支持的选项
     if (options && has_help_option(options)) {
         g_free(options);
@@ -572,6 +585,8 @@ static int img_create(int argc, char **argv)
         //设置镜像大小
         img_size = (uint64_t)sval;
     }
+
+    //参数过多
     if (optind != argc) {
         error_exit("Unexpected argument: %s", argv[optind]);
     }

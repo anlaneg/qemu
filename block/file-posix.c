@@ -1851,6 +1851,7 @@ static int raw_create(const char *filename, QemuOpts *opts, Error **errp)
     total_size = ROUND_UP(qemu_opt_get_size_del(opts, BLOCK_OPT_SIZE, 0),
                           BDRV_SECTOR_SIZE);
     nocow = qemu_opt_get_bool(opts, BLOCK_OPT_NOCOW, false);
+    //取preallocation模式
     buf = qemu_opt_get_del(opts, BLOCK_OPT_PREALLOC);
     prealloc = qapi_enum_parse(PreallocMode_lookup, buf,
                                PREALLOC_MODE__MAX, PREALLOC_MODE_OFF,
@@ -1862,6 +1863,7 @@ static int raw_create(const char *filename, QemuOpts *opts, Error **errp)
         goto out;
     }
 
+    //打开文件
     fd = qemu_open(filename, O_RDWR | O_CREAT | O_TRUNC | O_BINARY,
                    0644);
     if (fd < 0) {
@@ -1885,6 +1887,7 @@ static int raw_create(const char *filename, QemuOpts *opts, Error **errp)
 #endif
     }
 
+    //按预分配方式来写文件
     switch (prealloc) {
 #ifdef CONFIG_POSIX_FALLOCATE
     case PREALLOC_MODE_FALLOC:
@@ -1940,6 +1943,7 @@ static int raw_create(const char *filename, QemuOpts *opts, Error **errp)
         break;
     }
     case PREALLOC_MODE_OFF:
+    	//采用ftruncate直接扩充或者缩减大小
         if (ftruncate(fd, total_size) != 0) {
             result = -errno;
             error_setg_errno(errp, -result, "Could not resize file");
@@ -2185,6 +2189,7 @@ static void raw_abort_perm_update(BlockDriverState *bs)
     raw_handle_perm_lock(bs, RAW_PL_ABORT, 0, 0, NULL);
 }
 
+//raw的协议驱动
 BlockDriver bdrv_file = {
     .format_name = "file",
     .protocol_name = "file",
@@ -2197,7 +2202,7 @@ BlockDriver bdrv_file = {
     .bdrv_reopen_commit = raw_reopen_commit,
     .bdrv_reopen_abort = raw_reopen_abort,
     .bdrv_close = raw_close,
-    .bdrv_create = raw_create,
+    .bdrv_create = raw_create,//块设备创建
     .bdrv_has_zero_init = bdrv_has_zero_init_1,
     .bdrv_co_get_block_status = raw_co_get_block_status,
     .bdrv_co_pwrite_zeroes = raw_co_pwrite_zeroes,
@@ -2338,6 +2343,7 @@ static void print_unmounting_directions(const char *file_name)
 
 #endif /* defined(__APPLE__) && defined(__MACH__) */
 
+//接受两种情况'/dev/cdrom'开头的，得50分，如果是块设备或者字符设备，得100分
 static int hdev_probe_device(const char *filename)
 {
     struct stat st;
@@ -2622,6 +2628,7 @@ static int hdev_create(const char *filename, QemuOpts *opts,
     total_size = ROUND_UP(qemu_opt_get_size_del(opts, BLOCK_OPT_SIZE, 0),
                           BDRV_SECTOR_SIZE);
 
+    //打开文件
     fd = qemu_open(filename, O_WRONLY | O_BINARY);
     if (fd < 0) {
         ret = -errno;
@@ -2629,14 +2636,17 @@ static int hdev_create(const char *filename, QemuOpts *opts,
         return ret;
     }
 
+    //取文件状态
     if (fstat(fd, &stat_buf) < 0) {
         ret = -errno;
         error_setg_errno(errp, -ret, "Could not stat device");
     } else if (!S_ISBLK(stat_buf.st_mode) && !S_ISCHR(stat_buf.st_mode)) {
+    	//不是块设备，不是自符设备，报错
         error_setg(errp,
                    "The given file is neither a block nor a character device");
         ret = -ENODEV;
     } else if (lseek(fd, 0, SEEK_END) < total_size) {
+    	//如果文件现行大小小于total_size，则报错
         error_setg(errp, "Device is too small");
         ret = -ENOSPC;
     }
@@ -2706,6 +2716,7 @@ static int cdrom_open(BlockDriverState *bs, QDict *options, int flags,
     return raw_open_common(bs, options, flags, O_NONBLOCK, errp);
 }
 
+//如果是cdrom,得100分
 static int cdrom_probe_device(const char *filename)
 {
     int fd, ret;

@@ -51,7 +51,7 @@ enum QemuOptType {
 
 typedef struct QemuOptDesc {
     const char *name;
-    enum QemuOptType type;
+    enum QemuOptType type;//选项值数据类型
     const char *help;
     const char *def_value_str;
 } QemuOptDesc;

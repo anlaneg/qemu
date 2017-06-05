@@ -27,7 +27,7 @@
 #include "block/blockjob.h"
 #include "block/nbd.h"
 #include "qemu/error-report.h"
-#include "module_block.h"
+#include "module_block.h" //此文件由makefile用module_block.py自动生成
 #include "qemu/module.h"
 #include "qapi/qmp/qerror.h"
 #include "qapi/qmp/qbool.h"
@@ -163,7 +163,7 @@ void path_combine(char *dest, int dest_size,
     if (dest_size <= 0)
         return;
     if (path_is_absolute(filename)) {
-    		//如果filename是绝对路径，则将filename填充进dest中
+    	//如果filename是绝对路径，则将filename填充进dest中
         pstrcpy(dest, dest_size, filename);
     } else {
         const char *protocol_stripped = NULL;
@@ -349,7 +349,7 @@ static BlockDriver *bdrv_do_find_format(const char *format_name)
     return NULL;
 }
 
-//查找名称为format_name的块设备
+//查找名称为format_name的块设备驱动
 BlockDriver *bdrv_find_format(const char *format_name)
 {
     BlockDriver *drv1;
@@ -362,7 +362,7 @@ BlockDriver *bdrv_find_format(const char *format_name)
     }
 
     /* The driver isn't registered, maybe we need to load a module */
-    //block_driver_module是一个自动生成的数组，如果我们要查找到format在此数且内，
+    //block_driver_module是一个自动生成的数组，如果我们要查找到format在此数组内，
     //将尝试加载此块设备
     for (i = 0; i < (int)ARRAY_SIZE(block_driver_modules); ++i) {
         if (!strcmp(block_driver_modules[i].format_name, format_name)) {
@@ -417,6 +417,7 @@ typedef struct CreateCo {
     Error *err;
 } CreateCo;
 
+//通过调用bdrv_create创建block
 static void coroutine_fn bdrv_create_co_entry(void *opaque)
 {
     Error *local_err = NULL;
@@ -430,6 +431,7 @@ static void coroutine_fn bdrv_create_co_entry(void *opaque)
     cco->ret = ret;
 }
 
+//块设备创建，drv是驱动，filename是要创建的文件名称，opts是选项
 int bdrv_create(BlockDriver *drv, const char* filename,
                 QemuOpts *opts, Error **errp)
 {
@@ -483,11 +485,13 @@ int bdrv_create_file(const char *filename, QemuOpts *opts, Error **errp)
     Error *local_err = NULL;
     int ret;
 
+    //找协议驱动
     drv = bdrv_find_protocol(filename, true, errp);
     if (drv == NULL) {
         return -ENOENT;
     }
 
+    //走协议驱动的创建
     ret = bdrv_create(drv, filename, opts, &local_err);
     error_propagate(errp, local_err);
     return ret;
@@ -573,8 +577,9 @@ static BlockDriver *find_hdev_driver(const char *filename)
     BlockDriver *drv = NULL, *d;
 
     QLIST_FOREACH(d, &bdrv_drivers, list) {
-    		//只有有bdrv_probe_device的driver才有被选择的可能
+    	//只有有bdrv_probe_device的driver才有被选择的可能
         if (d->bdrv_probe_device) {
+        	//驱动会探测自已是否支持，通过score来反映匹配度，我们选择匹配度最大的
             score = d->bdrv_probe_device(filename);
             if (score > score_max) {
                 score_max = score;
@@ -586,6 +591,7 @@ static BlockDriver *find_hdev_driver(const char *filename)
     return drv;
 }
 
+//给出协议名称，比对protocol_name
 static BlockDriver *bdrv_do_find_protocol(const char *protocol)
 {
     BlockDriver *drv1;
@@ -599,6 +605,7 @@ static BlockDriver *bdrv_do_find_protocol(const char *protocol)
     return NULL;
 }
 
+//通过filename确认其使用那个blockDriver
 BlockDriver *bdrv_find_protocol(const char *filename,
                                 bool allow_protocol_prefix,
                                 Error **errp)
@@ -624,10 +631,12 @@ BlockDriver *bdrv_find_protocol(const char *filename,
         return drv1;
     }
 
+    //没有找到对应的driver,如果没有协议，直接返回bdrv_file
     if (!path_has_protocol(filename) || !allow_protocol_prefix) {
         return &bdrv_file;
     }
 
+    //解析出协议，然后查协议对应的驱动
     p = strchr(filename, ':');
     assert(p != NULL);
     len = p - filename;
@@ -638,9 +647,11 @@ BlockDriver *bdrv_find_protocol(const char *filename,
 
     drv1 = bdrv_do_find_protocol(protocol);
     if (drv1) {
+    	//找到相关协议，返回其对应的驱动
         return drv1;
     }
 
+    //加载module再试一次
     for (i = 0; i < (int)ARRAY_SIZE(block_driver_modules); ++i) {
         if (block_driver_modules[i].protocol_name &&
             !strcmp(block_driver_modules[i].protocol_name, protocol)) {
@@ -3589,6 +3600,7 @@ static int qsort_strcmp(const void *a, const void *b)
     return strcmp(*(char *const *)a, *(char *const *)b);
 }
 
+//遍历format名称
 void bdrv_iterate_format(void (*it)(void *opaque, const char *name),
                          void *opaque)
 {
@@ -3597,24 +3609,25 @@ void bdrv_iterate_format(void (*it)(void *opaque, const char *name),
     int i;
     const char **formats = NULL;
 
-    //针对bdrv_drivers收集名称
+    //针对bdrv_drivers收集已注册的块驱动名称
     QLIST_FOREACH(drv, &bdrv_drivers, list) {
         if (drv->format_name) {
             bool found = false;
             int i = count;
+            //检查下，此驱动是否已被找到过，找到过，则不再加入
             while (formats && i && !found) {
                 found = !strcmp(formats[--i], drv->format_name);
             }
 
             if (!found) {
-            		//如果在formats中没有找到format_name,则存放入formats中
+            	//如果在formats中没有找到format_name,则存放入formats中
                 formats = g_renew(const char *, formats, count + 1);
                 formats[count++] = drv->format_name;
             }
         }
     }
 
-    //针对block_driver_modules收集名称
+    //针对block_driver_modules(自动生成的数组，见python脚本）收集名称
     for (i = 0; i < (int)ARRAY_SIZE(block_driver_modules); i++) {
         const char *format_name = block_driver_modules[i].format_name;
 
@@ -3622,6 +3635,7 @@ void bdrv_iterate_format(void (*it)(void *opaque, const char *name),
             bool found = false;
             int j = count;
 
+            //检查是否未包含，如果没有包含，则将其包含
             while (formats && j && !found) {
                 found = !strcmp(formats[--j], format_name);
             }
@@ -4372,30 +4386,34 @@ void bdrv_img_create(const char *filename, const char *fmt,
         return;
     }
 
-    //如果驱动没有create操作，则报错
+    //如果驱动没有create操作的选项，则报错
     if (!drv->create_opts) {
         error_setg(errp, "Format driver '%s' does not support image creation",
                    drv->format_name);
         return;
     }
 
+    //如果协议驱动没有create操作的选项，报错
     if (!proto_drv->create_opts) {
         error_setg(errp, "Protocol driver '%s' does not support image creation",
                    proto_drv->format_name);
         return;
     }
 
+    //将镜像驱动，协议层驱动支持的选项都串起来
     //将dvr->create_opts,proto_drv->create_opts串连在一起
     create_opts = qemu_opts_append(create_opts, drv->create_opts);
     create_opts = qemu_opts_append(create_opts, proto_drv->create_opts);
 
     /* Create parameter list with default values */
+    //构造opts
     opts = qemu_opts_create(create_opts, NULL, 0, &error_abort);
     //存入'size'参数
     qemu_opt_set_number(opts, BLOCK_OPT_SIZE, img_size, &error_abort);
 
     /* Parse -o options */
     if (options) {
+    	//用户输入了选项，解析这些选项
         qemu_opts_do_parse(opts, options, NULL, &local_err);
         if (local_err) {
             error_report_err(local_err);
@@ -4406,6 +4424,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
     }
 
     if (base_filename) {
+    	//添加backing_file选项
         qemu_opt_set(opts, BLOCK_OPT_BACKING_FILE, base_filename, &local_err);
         if (local_err) {
             error_setg(errp, "Backing file not supported for file format '%s'",
@@ -4415,6 +4434,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
     }
 
     if (base_fmt) {
+    	//添加backing_fmt选项
         qemu_opt_set(opts, BLOCK_OPT_BACKING_FMT, base_fmt, &local_err);
         if (local_err) {
             error_setg(errp, "Backing file format not supported for file "
@@ -4436,6 +4456,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
 
     // The size for the image must always be specified, with one exception:
     // If we are using a backing file, we can obtain the size from there
+    //有backing_file时，size可以为－1
     size = qemu_opt_get_size(opts, BLOCK_OPT_SIZE, 0);
     if (size == -1) {
         if (backing_file) {
@@ -4445,6 +4466,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
             int back_flags;
             QDict *backing_options = NULL;
 
+            //获取backing的路径
             bdrv_get_full_backing_filename_from_filename(filename, backing_file,
                                                          full_backing, PATH_MAX,
                                                          &local_err);
@@ -4476,6 +4498,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
                 goto out;
             }
 
+            //设置size取值，使其于backing一样大
             qemu_opt_set_number(opts, BLOCK_OPT_SIZE, size, &error_abort);
 
             bdrv_unref(bs);

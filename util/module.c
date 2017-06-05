@@ -30,6 +30,7 @@ typedef struct ModuleEntry
 
 typedef QTAILQ_HEAD(, ModuleEntry) ModuleTypeList;
 
+//按模块类型组织成链表
 static ModuleTypeList init_type_list[MODULE_INIT_MAX];
 
 static ModuleTypeList dso_init_list;//与init_type_list相同，实现dso的初始化

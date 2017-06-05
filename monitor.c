@@ -4050,8 +4050,10 @@ void error_vprintf(const char *fmt, va_list ap)
 void error_vprintf_unless_qmp(const char *fmt, va_list ap)
 {
     if (cur_mon && !monitor_cur_is_qmp()) {
+    	//有monitor时的输出
         monitor_vprintf(cur_mon, fmt, ap);
     } else if (!cur_mon) {
+    	//标准错误输出
         vfprintf(stderr, fmt, ap);
     }
 }

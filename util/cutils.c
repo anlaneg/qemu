@@ -68,6 +68,7 @@ char *pstrcat(char *buf, int buf_size, const char *s)
     return buf;
 }
 
+//str字符串，是否以val开头.ptr返回的是val后的情况（返回1时有效）
 int strstart(const char *str, const char *val, const char **ptr)
 {
     const char *p, *q;

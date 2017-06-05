@@ -46,6 +46,7 @@
  * The return value is the position of the delimiter/zero byte after the option
  * name in p.
  */
+//将buf中delim符号前的内容copy到p中，buf的最大长度为buf_size
 const char *get_opt_name(char *buf, int buf_size, const char *p, char delim)
 {
     char *q;
@@ -70,6 +71,7 @@ const char *get_opt_name(char *buf, int buf_size, const char *p, char delim)
  * delimiter is fixed to be comma which starts a new option. To specify an
  * option value that contains commas, double each comma.
  */
+//取出buf中第一个逗号之前的内容（逗号可以转义逗号）
 const char *get_opt_value(char *buf, int buf_size, const char *p)
 {
     char *q;
@@ -78,7 +80,7 @@ const char *get_opt_value(char *buf, int buf_size, const char *p)
     while (*p != '\0') {//未达到字符串结尾
         if (*p == ',') {
             if (*(p + 1) != ',')
-                break;//如果后面不是','号，则分割
+                break;//如果后面不是','号，则分割（逗号来转义逗号)
             p++;
         }
         if (q && (q - buf) < buf_size - 1)
@@ -144,6 +146,7 @@ static void parse_option_number(const char *name, const char *value,
     uint64_t number;
     int err;
 
+    //统一按无符号64位整数转
     err = qemu_strtou64(value, NULL, 0, &number);
     if (err == -ERANGE) {
         error_setg(errp, "Value '%s' is too large for parameter '%s'",
@@ -172,6 +175,7 @@ static const QemuOptDesc *find_desc_by_name(const QemuOptDesc *desc,
     return NULL;
 }
 
+//解析img的size参数
 void parse_option_size(const char *name, const char *value,
                        uint64_t *ret, Error **errp)
 {
@@ -230,7 +234,7 @@ bool is_valid_option_list(const char *param)
     bool result = true;
 
     while (*p) {
-    		//从p中解析中第一个，选项值，取入buf中,返回新头
+		//从p中解析中第一个，选项值，取入buf中,返回新头
         p = get_opt_value(buf, buflen, p);
         if (*p && !*++p) {
             result = false;
@@ -249,6 +253,7 @@ out:
     return result;
 }
 
+//显示支持的选项
 void qemu_opts_print_help(QemuOptsList *list)
 {
     QemuOptDesc *desc;
@@ -299,7 +304,7 @@ static void qemu_opt_del_all(QemuOpts *opts, const char *name)
     }
 }
 
-//获取opts选项中名称为name的给值
+//获取opts选项中名称为name的给字符串给值
 const char *qemu_opt_get(QemuOpts *opts, const char *name)
 {
     QemuOpt *opt;
@@ -457,10 +462,12 @@ static uint64_t qemu_opt_get_size_helper(QemuOpts *opts, const char *name,
     QemuOpt *opt;
     uint64_t ret = defval;
 
+    //如果opts为NULL,使用defval
     if (opts == NULL) {
         return ret;
     }
 
+    //查name对应的opt,如果没有找到，则查描述信息，并解析默认值
     opt = qemu_opt_find(opts, name);
     if (opt == NULL) {
         const QemuOptDesc *desc = find_desc_by_name(opts->list->desc, name);
@@ -469,6 +476,8 @@ static uint64_t qemu_opt_get_size_helper(QemuOpts *opts, const char *name,
         }
         return ret;
     }
+
+    //返回opt配置的值
     assert(opt->desc && opt->desc->type == QEMU_OPT_SIZE);
     ret = opt->value.uint;
     if (del) {
@@ -482,19 +491,21 @@ uint64_t qemu_opt_get_size(QemuOpts *opts, const char *name, uint64_t defval)
     return qemu_opt_get_size_helper(opts, name, defval, false);
 }
 
+//取出获项中配置的name对应的值，如果opts为空，使用defval
 uint64_t qemu_opt_get_size_del(QemuOpts *opts, const char *name,
                                uint64_t defval)
 {
     return qemu_opt_get_size_helper(opts, name, defval, true);
 }
 
+//解析选项值
 static void qemu_opt_parse(QemuOpt *opt, Error **errp)
 {
     if (opt->desc == NULL)
         return;
 
     switch (opt->desc->type) {
-    case QEMU_OPT_STRING:
+    case QEMU_OPT_STRING://字符串类型什么也不需要做
         /* nothing */
         return;
     case QEMU_OPT_BOOL:
@@ -511,6 +522,7 @@ static void qemu_opt_parse(QemuOpt *opt, Error **errp)
     }
 }
 
+//选项是否接受任意值
 static bool opts_accepts_any(const QemuOpts *opts)
 {
     return opts->list->desc[0].name == NULL;
@@ -530,6 +542,7 @@ int qemu_opt_unset(QemuOpts *opts, const char *name)
     }
 }
 
+//构造QemuOpt将其串在opts链上，prepend用于控制是否串在最前面
 static void opt_set(QemuOpts *opts, const char *name, const char *value,
                     bool prepend, Error **errp)
 {
@@ -537,6 +550,7 @@ static void opt_set(QemuOpts *opts, const char *name, const char *value,
     const QemuOptDesc *desc;
     Error *local_err = NULL;
 
+    //查找名称为name的选项
     desc = find_desc_by_name(opts->list->desc, name);
     if (!desc && !opts_accepts_any(opts)) {
         error_setg(errp, QERR_INVALID_PARAMETER, name);
@@ -544,7 +558,7 @@ static void opt_set(QemuOpts *opts, const char *name, const char *value,
     }
 
     opt = g_malloc0(sizeof(*opt));
-    opt->name = g_strdup(name);
+    opt->name = g_strdup(name);//选项名称
     opt->opts = opts;
     if (prepend) {
         QTAILQ_INSERT_HEAD(&opts->head, opt, next);
@@ -554,6 +568,7 @@ static void opt_set(QemuOpts *opts, const char *name, const char *value,
     opt->desc = desc;
     opt->str = g_strdup(value);
     assert(opt->str);
+    //解析选项取值
     qemu_opt_parse(opt, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
@@ -799,6 +814,7 @@ void qemu_opts_print(QemuOpts *opts, const char *separator)
     }
 }
 
+//解析params中指明的选项，将选项串连在opts上，prepend用于控制是否串在首位
 static void opts_do_parse(QemuOpts *opts, const char *params,
                           const char *firstname, bool prepend, Error **errp)
 {
@@ -810,14 +826,18 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
         pe = strchr(p, '=');//检查选项中是否有'='号
         pc = strchr(p, ',');//检查选项中是否有','号
         if (!pe || (pc && pc < pe)) {
+        	//没有等号，或者下一个选项有‘＝’号
             /* found "foo,more" */
             if (p == params && firstname) {
                 /* implicitly named first option */
-                pstrcpy(option, sizeof(option), firstname);
-                p = get_opt_value(value, sizeof(value), p);
+                pstrcpy(option, sizeof(option), firstname);//将firstname做为option
+                p = get_opt_value(value, sizeof(value), p);//将p做为value
             } else {
                 /* option without value, probably a flag */
+            	//仅有选项的情况，提取此选项
                 p = get_opt_name(option, sizeof(option), p, ',');
+
+                //检查选项是否以no开头，如果是，则将选项值设为on,否则选项值设置为off
                 if (strncmp(option, "no", 2) == 0) {
                     memmove(option, option+2, strlen(option+2)+1);
                     pstrcpy(value, sizeof(value), "off");
@@ -826,6 +846,7 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
                 }
             }
         } else {
+        	//选项有‘＝’号，提取option及其对应的value
             /* found "foo=bar,more" */
             p = get_opt_name(option, sizeof(option), p, '=');
             if (*p != '=') {
@@ -834,6 +855,8 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
             p++;
             p = get_opt_value(value, sizeof(value), p);
         }
+
+        //如果option不是id,则加入此选项
         if (strcmp(option, "id") != 0) {
             /* store and parse */
             opt_set(opts, option, value, prepend, &local_err);
@@ -854,6 +877,7 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
  * key=, and is treated as if key was @firstname.
  * On error, store an error object through @errp if non-null.
  */
+//解析选项，并生成opts对象
 void qemu_opts_do_parse(QemuOpts *opts, const char *params,
                        const char *firstname, Error **errp)
 {
@@ -872,6 +896,7 @@ static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
     assert(!permit_abbrev || list->implied_opt_name);
     firstname = permit_abbrev ? list->implied_opt_name : NULL;
 
+    //提取id值
     if (strncmp(params, "id=", 3) == 0) {
         get_opt_value(value, sizeof(value), params+3);
         id = value;//从开始位置提取id值
@@ -1162,7 +1187,7 @@ void qemu_opts_free(QemuOptsList *list)
  * The lifetime of dst must be shorter than the input list because the
  * QemuOptDesc->name, ->help, and ->def_value_str strings are shared.
  */
-//合并list到dst中
+//将list的选项信息合并到dst中
 QemuOptsList *qemu_opts_append(QemuOptsList *dst,
                                QemuOptsList *list)
 {
@@ -1172,7 +1197,7 @@ QemuOptsList *qemu_opts_append(QemuOptsList *dst,
     bool need_head_update;
 
     if (!list) {
-    		//如果list为空，就直接返回dst
+    	//如果list为空，就直接返回dst
         return dst;
     }
 
@@ -1180,7 +1205,7 @@ QemuOptsList *qemu_opts_append(QemuOptsList *dst,
      * before adding options to it.
      */
     if (!dst) {
-    		//如果dst为空，则need_init为true.s
+    	//如果dst为空，则need_init为true
         need_init = true;
         need_head_update = true;
     } else {
@@ -1190,14 +1215,14 @@ QemuOptsList *qemu_opts_append(QemuOptsList *dst,
         need_head_update = QTAILQ_EMPTY(&dst->head);
     }
 
-    num_opts = count_opts_list(dst);
+    num_opts = count_opts_list(dst);//已有的数目
     num_dst_opts = num_opts;
-    num_opts += count_opts_list(list);
+    num_opts += count_opts_list(list);//合并后总数
     //保留dst,并扩大内存
     dst = g_realloc(dst, sizeof(QemuOptsList) +
                     (num_opts + 1) * sizeof(QemuOptDesc));
     if (need_init) {
-    		//dst需要初始化
+    	//第一次存放，dst需要初始化
         dst->name = NULL;
         dst->implied_opt_name = NULL;
         dst->merge_lists = false;
@@ -1207,13 +1232,14 @@ QemuOptsList *qemu_opts_append(QemuOptsList *dst,
     if (need_head_update) {
         QTAILQ_INIT(&dst->head);
     }
-    dst->desc[num_dst_opts].name = NULL;
+    dst->desc[num_dst_opts].name = NULL;//最后一块赋为空，准备放入
 
     /* append list->desc to dst->desc */
     if (list) {
     		//添加list->desc的值到dst中
         desc = list->desc;
         while (desc && desc->name) {
+        	//如果现有的desc中没有，则加入
             if (find_desc_by_name(dst->desc, desc->name) == NULL) {
                 dst->desc[num_dst_opts++] = *desc;
                 dst->desc[num_dst_opts].name = NULL;

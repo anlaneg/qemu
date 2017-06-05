@@ -913,7 +913,7 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts,
 
     chr = NULL;
     if (cc->parse) {
-    		//解析命令行
+    	//解析命令行
         cc->parse(opts, backend, &local_err);
         if (local_err) {
             error_propagate(errp, local_err);
@@ -1231,6 +1231,7 @@ Chardev *qemu_chardev_new(const char *id, const char *typename,
 
     assert(g_str_has_prefix(typename, "chardev-"));
 
+    //生成这种类型的对象
     obj = object_new(typename);
     chr = CHARDEV(obj);
     chr->label = g_strdup(id);

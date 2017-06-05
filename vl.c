@@ -2969,6 +2969,7 @@ static int qemu_read_default_config_file(void)
     return 0;
 }
 
+//qemu-system入口
 int main(int argc, char **argv, char **envp)
 {
     int i;
@@ -3084,6 +3085,7 @@ int main(int argc, char **argv, char **envp)
     /* first pass of option parsing */
     optind = 1;
     while (optind < argc) {
+    	//跳过非选项
         if (argv[optind][0] != '-') {
             /* disk image */
             optind++;
