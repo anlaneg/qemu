@@ -907,6 +907,7 @@ err:
     return -1;
 }
 
+//完成unix-socket连接
 static int unix_connect_saddr(UnixSocketAddress *saddr,
                               NonBlockingConnectHandler *callback, void *opaque,
                               Error **errp)
@@ -932,6 +933,7 @@ static int unix_connect_saddr(UnixSocketAddress *saddr,
         qemu_set_nonblock(sock);
     }
 
+    //saddr是目的地址
     memset(&un, 0, sizeof(un));
     un.sun_family = AF_UNIX;
     snprintf(un.sun_path, sizeof(un.sun_path), "%s", saddr->path);
@@ -939,6 +941,7 @@ static int unix_connect_saddr(UnixSocketAddress *saddr,
     /* connect to peer */
     do {
         rc = 0;
+        //连接到目的地址
         if (connect(sock, (struct sockaddr *) &un, sizeof(un)) < 0) {
             rc = -errno;
         }

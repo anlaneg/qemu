@@ -972,6 +972,7 @@ error:
     }
 }
 
+//vsocket命令行解析（构造socket)
 static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
                                   Error **errp)
 {

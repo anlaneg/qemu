@@ -775,6 +775,7 @@ void qemu_chr_parse_common(QemuOpts *opts, ChardevCommon *backend)
     backend->logappend = qemu_opt_get_bool(opts, "logappend", false);
 }
 
+//加载driver对应的ChardevClass
 static const ChardevClass *char_get_class(const char *driver, Error **errp)
 {
     ObjectClass *oc;
@@ -785,11 +786,13 @@ static const ChardevClass *char_get_class(const char *driver, Error **errp)
     oc = object_class_by_name(typename);
     g_free(typename);
 
+    //oc必须是chardev类型
     if (!object_class_dynamic_cast(oc, TYPE_CHARDEV)) {
         error_setg(errp, "'%s' is not a valid char driver name", driver);
         return NULL;
     }
 
+    //oc不能是抽象类
     if (object_class_is_abstract(oc)) {
         error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "driver",
                    "abstract device type");
@@ -886,6 +889,7 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts,
         exit(0);
     }
 
+    //如果没有id，则报错
     if (id == NULL) {
         error_setg(errp, "chardev: no id specified");
         return NULL;
@@ -899,6 +903,7 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts,
         }
     }
 
+    //加载对应驱动
     cc = char_get_class(name, errp);
     if (cc == NULL) {
         return NULL;

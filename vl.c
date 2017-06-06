@@ -1573,8 +1573,10 @@ struct vm_change_state_entry {
     QLIST_ENTRY (vm_change_state_entry) entries;
 };
 
+//vm状态变更通知链（当vm状态发生变更时，会知会这些成员）
 static QLIST_HEAD(vm_change_state_head, vm_change_state_entry) vm_change_state_head;
 
+//注册vm状态变更handler
 VMChangeStateEntry *qemu_add_vm_change_state_handler(VMChangeStateHandler *cb,
                                                      void *opaque)
 {
@@ -1594,12 +1596,14 @@ void qemu_del_vm_change_state_handler(VMChangeStateEntry *e)
     g_free (e);
 }
 
+//vm状态变更通知
 void vm_state_notify(int running, RunState state)
 {
     VMChangeStateEntry *e, *next;
 
     trace_vm_state_notify(running, state);
 
+    //通知此链上所有节点
     QLIST_FOREACH_SAFE(e, &vm_change_state_head, entries, next) {
         e->cb(e->opaque, running, state);
     }
@@ -1951,15 +1955,15 @@ static void help(int exitcode)
 #define HAS_ARG 0x0001
 
 typedef struct QEMUOption {
-    const char *name;
-    int flags;
-    int index;
-    uint32_t arch_mask;
+    const char *name;//选项名称
+    int flags;//选项的flag(目前仅有是否含参）
+    int index;//可以理解为小选项
+    uint32_t arch_mask;//那个体系结构有此参数
 } QEMUOption;
 
 static const QEMUOption qemu_options[] = {
     { "h", 0, QEMU_OPTION_h, QEMU_ARCH_ALL },
-#define QEMU_OPTIONS_GENERATE_OPTIONS
+#define QEMU_OPTIONS_GENERATE_OPTIONS //通过这个宏可以控制生成的样式
 #include "qemu-options-wrapper.h"
     { NULL },
 };
@@ -2701,6 +2705,8 @@ static void qemu_run_machine_init_done_notifiers(void)
     machine_init_done = true;
 }
 
+//解析一个选项及其参数取值。从poptind位置开始分析argv,确认参数使用的是那个选项（返回值）,确定
+//选项参数(poptarg参数）
 static const QEMUOption *lookup_opt(int argc, char **argv,
                                     const char **poptarg, int *poptind)
 {
@@ -2712,24 +2718,31 @@ static const QEMUOption *lookup_opt(int argc, char **argv,
     loc_set_cmdline(argv, optind, 1);
     optind++;
     /* Treat --foo the same as -foo.  */
+    //使得--fo 与-fo等价
     if (r[1] == '-')
         r++;
-    popt = qemu_options;
+    popt = qemu_options;//qemu选项
     for(;;) {
+    	//错误的选项（或者没有找到与参数相匹配的选项）
         if (!popt->name) {
             error_report("invalid option");
             exit(1);
         }
+
+        //找一个与参数相匹配的选项
         if (!strcmp(popt->name, r + 1))
             break;
         popt++;
     }
+
+    //有参数情况
     if (popt->flags & HAS_ARG) {
         if (optind >= argc) {
             error_report("requires an argument");
             exit(1);
         }
         optarg = argv[optind++];
+        //改变位置
         loc_set_cmdline(argv, optind - 2, 2);
     } else {
         optarg = NULL;
@@ -2987,7 +3000,7 @@ int main(int argc, char **argv, char **envp)
     const char *optarg;
     const char *loadvm = NULL;
     MachineClass *machine_class;
-    const char *cpu_model;
+    const char *cpu_model;//-cpu 参数
     const char *vga_model = NULL;
     const char *qtest_chrdev = NULL;
     const char *qtest_log = NULL;
@@ -3115,6 +3128,7 @@ int main(int argc, char **argv, char **envp)
     for(;;) {
         if (optind >= argc)
             break;
+        //如果参数不是选项，则加入到IF_DEFAULT中
         if (argv[optind][0] != '-') {
             hda_opts = drive_add(IF_DEFAULT, 0, argv[optind++], HD_OPTS);
         } else {
@@ -3131,11 +3145,11 @@ int main(int argc, char **argv, char **envp)
                 qemu_opts_parse_noisily(olist, "kernel_irqchip=off", false);
                 break;
             }
-            case QEMU_OPTION_cpu:
+            case QEMU_OPTION_cpu://-cpu
                 /* hw initialization will check this */
                 cpu_model = optarg;
                 break;
-            case QEMU_OPTION_hda:
+            case QEMU_OPTION_hda://-hda
                 {
                     char buf[256];
                     if (cyls == 0)
@@ -3334,13 +3348,13 @@ int main(int argc, char **argv, char **envp)
             case QEMU_OPTION_no_fd_bootchk:
                 fd_bootchk = 0;
                 break;
-            case QEMU_OPTION_netdev:
+            case QEMU_OPTION_netdev://-netdev
                 default_net = 0;
                 if (net_client_parse(qemu_find_opts("netdev"), optarg) == -1) {
                     exit(1);
                 }
                 break;
-            case QEMU_OPTION_net:
+            case QEMU_OPTION_net://-net
                 default_net = 0;
                 if (net_client_parse(qemu_find_opts("net"), optarg) == -1) {
                     exit(1);
@@ -3516,7 +3530,7 @@ int main(int argc, char **argv, char **envp)
                 }
                 default_monitor = 0;
                 break;
-            case QEMU_OPTION_chardev:
+            case QEMU_OPTION_chardev://-chardev
                 opts = qemu_opts_parse_noisily(qemu_find_opts("chardev"),
                                                optarg, true);
                 if (!opts) {
@@ -4095,8 +4109,9 @@ int main(int argc, char **argv, char **envp)
 
     set_memory_options(&ram_slots, &maxram_size, machine_class);
 
-    os_daemonize();
+    os_daemonize();//daemonize处理
 
+    //写fd文件
     if (pid_file && qemu_create_pidfile(pid_file) != 0) {
         error_report("could not acquire pid file: %s", strerror(errno));
         exit(1);

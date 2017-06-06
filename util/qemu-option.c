@@ -282,6 +282,7 @@ QemuOpt *qemu_opt_find(QemuOpts *opts, const char *name)
     return NULL;
 }
 
+//释放opt
 static void qemu_opt_del(QemuOpt *opt)
 {
     QTAILQ_REMOVE(&opt->opts->head, opt, next);
@@ -315,7 +316,7 @@ const char *qemu_opt_get(QemuOpts *opts, const char *name)
 
     opt = qemu_opt_find(opts, name);
     if (!opt) {
-    		//如果此选项没有指定，则使用默认值
+    	//如果此选项没有指定，则使用默认值
         const QemuOptDesc *desc = find_desc_by_name(opts->list->desc, name);
         if (desc && desc->def_value_str) {
             return desc->def_value_str;
@@ -649,6 +650,7 @@ int qemu_opt_foreach(QemuOpts *opts, qemu_opt_loopfunc func, void *opaque,
     return 0;
 }
 
+//检查选项列表中是否已存在此id(NULL==NULL)
 QemuOpts *qemu_opts_find(QemuOptsList *list, const char *id)
 {
     QemuOpts *opts;
@@ -664,12 +666,14 @@ QemuOpts *qemu_opts_find(QemuOptsList *list, const char *id)
     return NULL;
 }
 
+//创建一个选项
 QemuOpts *qemu_opts_create(QemuOptsList *list, const char *id,
                            int fail_if_exists, Error **errp)
 {
     QemuOpts *opts = NULL;
 
     if (id) {
+    	//id格式有误时报错
         if (!id_wellformed(id)) {
             error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "id",
                        "an identifier");
@@ -677,37 +681,44 @@ QemuOpts *qemu_opts_create(QemuOptsList *list, const char *id,
                               "'-', '.', '_', starting with a letter.\n");
             return NULL;
         }
+
+        //检查是否已存在
         opts = qemu_opts_find(list, id);
         if (opts != NULL) {
+        	//检查是否有必要报错，有则报错
             if (fail_if_exists && !list->merge_lists) {
                 error_setg(errp, "Duplicate ID '%s' for %s", id, list->name);
                 return NULL;
             } else {
+            	//使用已有的
                 return opts;
             }
         }
     } else if (list->merge_lists) {
+    	//用NULL查一遍
         opts = qemu_opts_find(list, NULL);
         if (opts) {
             return opts;
         }
     }
 
-    //生成opts
+    //确实不存在此opts,生成opts
     opts = g_malloc0(sizeof(*opts));
-    opts->id = g_strdup(id);
-    opts->list = list;
+    opts->id = g_strdup(id);//填充id
+    opts->list = list;//指明自已属于那个list
     loc_save(&opts->loc);
     QTAILQ_INIT(&opts->head);
-    QTAILQ_INSERT_TAIL(&list->head, opts, next);
+    QTAILQ_INSERT_TAIL(&list->head, opts, next);//将opts加入链中
     return opts;
 }
 
+//将optslist清空
 void qemu_opts_reset(QemuOptsList *list)
 {
     QemuOpts *opts, *next_opts;
 
     QTAILQ_FOREACH_SAFE(opts, &list->head, next, next_opts) {
+    	//清空opts及其下的opt
         qemu_opts_del(opts);
     }
 }
@@ -717,6 +728,7 @@ void qemu_opts_loc_restore(QemuOpts *opts)
     loc_restore(&opts->loc);
 }
 
+//向给定的list中添加id为*id的一个选项，选项名称为name,选项值为vlaue
 void qemu_opts_set(QemuOptsList *list, const char *id,
                    const char *name, const char *value, Error **errp)
 {
@@ -742,6 +754,7 @@ void qemu_opts_set_id(QemuOpts *opts, char *id)
     opts->id = id;
 }
 
+//删除opts
 void qemu_opts_del(QemuOpts *opts)
 {
     QemuOpt *opt;
@@ -950,6 +963,7 @@ QemuOpts *qemu_opts_parse(QemuOptsList *list, const char *params,
  * QMP context.  Do not use this function there!
  * Return the new QemuOpts on success, null pointer on error.
  */
+//构造opts,并将其串在list上
 QemuOpts *qemu_opts_parse_noisily(QemuOptsList *list, const char *params,
                                   bool permit_abbrev)
 {
@@ -1138,6 +1152,7 @@ void qemu_opts_validate(QemuOpts *opts, const QemuOptDesc *desc, Error **errp)
  * When @func() returns non-zero, break the loop and return that value.
  * Return zero when the loop completes.
  */
+//遍历给定optslist中每一个opts
 int qemu_opts_foreach(QemuOptsList *list, qemu_opts_loopfunc func,
                       void *opaque, Error **errp)
 {

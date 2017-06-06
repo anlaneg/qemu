@@ -1551,6 +1551,7 @@ int net_init_clients(void)
     return 0;
 }
 
+//解析参数，将其加入到opts_list中
 int net_client_parse(QemuOptsList *opts_list, const char *optarg)
 {
 #if defined(CONFIG_SLIRP)

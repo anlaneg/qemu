@@ -5,7 +5,13 @@
 #include "qemu/config-file.h"
 #include "qmp-commands.h"
 
+//存放qemu选项
+//这些选项是按加入顺序放置的，按name区分（称为group-name）
+//QemuOptsList链上挂接着多个QemuOpts结构,此结构按id区分，不同id的用next
+//挂接（QemuOpts结构），同一id的用head挂接（QemuOpt结构）
+//QemuOpt结构是具体一个选项一个值
 static QemuOptsList *vm_config_groups[48];
+//qemu drive选项
 static QemuOptsList *drive_config_groups[5];
 
 //在给出的lists数组中查找名称为group的lists,找不到返回NULL
@@ -45,6 +51,7 @@ QemuOpts *qemu_find_opts_singleton(const char *group)
 
     list = qemu_find_opts(group);
     assert(list);
+    //查找此group中无id的opts，如果不存在，则创建它
     opts = qemu_opts_find(list, NULL);
     if (!opts) {
         opts = qemu_opts_create(list, NULL, 0, &error_abort);
@@ -279,6 +286,7 @@ QemuOptsList *qemu_find_opts_err(const char *group, Error **errp)
     return find_list(vm_config_groups, group, errp);
 }
 
+//qemu driver 选项添加
 void qemu_add_drive_opts(QemuOptsList *list)
 {
     int entries, i;
@@ -295,6 +303,7 @@ void qemu_add_drive_opts(QemuOptsList *list)
     abort();
 }
 
+//qemu选项添加
 void qemu_add_opts(QemuOptsList *list)
 {
     int entries, i;

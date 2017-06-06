@@ -44,11 +44,11 @@ struct QemuOpt {
 };
 
 struct QemuOpts {
-    char *id;
-    QemuOptsList *list;//选项对应的描述信息（元数据信息）？
+    char *id;//选项id
+    QemuOptsList *list;//选项从属于哪个QemuOptsList（或者说挂在哪个链上）
     Location loc;
-    QTAILQ_HEAD(QemuOptHead, QemuOpt) head;
-    QTAILQ_ENTRY(QemuOpts) next;
+    QTAILQ_HEAD(QemuOptHead, QemuOpt) head;//同一id的挂在这
+    QTAILQ_ENTRY(QemuOpts) next;//下一个QemuOpts(id不同）
 };
 
 #endif
