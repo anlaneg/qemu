@@ -61,6 +61,7 @@ enum {
     OPTION_PATTERN = 260,
     OPTION_FLUSH_INTERVAL = 261,
     OPTION_NO_DRAIN = 262,
+    OPTION_TARGET_IMAGE_OPTS = 263,
 };
 
 typedef enum OutputFormat {
@@ -71,11 +72,13 @@ typedef enum OutputFormat {
 /* Default to cache=writeback as data integrity is not important for qemu-img */
 #define BDRV_DEFAULT_CACHE "writeback"
 
+//显示不信息到标准输出
 static void format_print(void *opaque, const char *name)
 {
     printf(" %s", name);
 }
 
+//错误输出并退出
 static void QEMU_NORETURN GCC_FMT_ATTR(1, 2) error_exit(const char *fmt, ...)
 {
     va_list ap;
@@ -90,11 +93,13 @@ static void QEMU_NORETURN GCC_FMT_ATTR(1, 2) error_exit(const char *fmt, ...)
     exit(EXIT_FAILURE);
 }
 
+//指明缺少参数后退出
 static void QEMU_NORETURN missing_argument(const char *option)
 {
     error_exit("missing argument for option '%s'", option);
 }
 
+//指明为未知选项后退出
 static void QEMU_NORETURN unrecognized_option(const char *option)
 {
     error_exit("unrecognized option '%s'", option);
@@ -116,7 +121,13 @@ static void QEMU_NORETURN help(void)
            "Command syntax:\n"
 #define DEF(option, callback, arg_string)        \
            "  " arg_string "\n" //显示命令参数说明
-#include "qemu-img-cmds.h"
+
+#include "qemu-img-cmds.h" //此文件在编译期，由qemu-img-cmds.hx生成而来（实际上是qemu-img-cmds.hx中的DEF列
+/**
+ * 举个例子
+ * DEF("dd", img_dd,
+    "dd [--image-opts] [-U] [-f fmt] [-O output_fmt] [bs=block_size] [count=blocks] [skip=blocks] if=input of=output")
+ */
 #undef DEF
 #undef GEN_DOCS
            "\n"
@@ -245,12 +256,14 @@ static int print_block_option_help(const char *filename, const char *fmt)
 
     create_opts = qemu_opts_append(create_opts, drv->create_opts);
     if (filename) {
+    	//有文件名称，查找filename对应的协议
         proto_drv = bdrv_find_protocol(filename, true, &local_err);
         if (!proto_drv) {
             error_report_err(local_err);
             qemu_opts_free(create_opts);
             return 1;
         }
+        //合入协议层的选项
         create_opts = qemu_opts_append(create_opts, proto_drv->create_opts);
     }
 
@@ -295,9 +308,10 @@ static BlockBackend *img_open_opts(const char *optstr,
         if (qdict_haskey(options, BDRV_OPT_FORCE_SHARE)
             && !qdict_get_bool(options, BDRV_OPT_FORCE_SHARE)) {
             error_report("--force-share/-U conflicts with image options");
+            QDECREF(options);
             return NULL;
         }
-        qdict_put(options, BDRV_OPT_FORCE_SHARE, qbool_from_bool(true));
+        qdict_put_bool(options, BDRV_OPT_FORCE_SHARE, true);
     }
     blk = blk_new_open(NULL, NULL, options, flags, &local_err);
     if (!blk) {
@@ -314,20 +328,23 @@ static BlockBackend *img_open_opts(const char *optstr,
 }
 
 static BlockBackend *img_open_file(const char *filename,
+                                   QDict *options,
                                    const char *fmt, int flags,
                                    bool writethrough, bool quiet,
                                    bool force_share)
 {
     BlockBackend *blk;
     Error *local_err = NULL;
-    QDict *options = qdict_new();
 
+    if (!options) {
+        options = qdict_new();
+    }
     if (fmt) {
         qdict_put_str(options, "driver", fmt);
     }
 
     if (force_share) {
-        qdict_put(options, BDRV_OPT_FORCE_SHARE, qbool_from_bool(true));
+        qdict_put_bool(options, BDRV_OPT_FORCE_SHARE, true);
     }
     blk = blk_new_open(filename, NULL, options, flags, &local_err);
     if (!blk) {
@@ -341,6 +358,35 @@ static BlockBackend *img_open_file(const char *filename,
         return NULL;
     }
     return blk;
+}
+
+
+static int img_add_key_secrets(void *opaque,
+                               const char *name, const char *value,
+                               Error **errp)
+{
+    QDict *options = opaque;
+
+    if (g_str_has_suffix(name, "key-secret")) {
+        qdict_put(options, name, qstring_from_str(value));
+    }
+
+    return 0;
+}
+
+static BlockBackend *img_open_new_file(const char *filename,
+                                       QemuOpts *create_opts,
+                                       const char *fmt, int flags,
+                                       bool writethrough, bool quiet,
+                                       bool force_share)
+{
+    QDict *options = NULL;
+
+    options = qdict_new();
+    qemu_opt_foreach(create_opts, img_add_key_secrets, options, &error_abort);
+
+    return img_open_file(filename, options, fmt, flags, writethrough, quiet,
+                         force_share);
 }
 
 
@@ -364,7 +410,7 @@ static BlockBackend *img_open(bool image_opts,
         blk = img_open_opts(filename, opts, flags, writethrough, quiet,
                             force_share);
     } else {
-        blk = img_open_file(filename, fmt, flags, writethrough, quiet,
+        blk = img_open_file(filename, NULL, fmt, flags, writethrough, quiet,
                             force_share);
     }
     return blk;
@@ -448,15 +494,15 @@ static int img_create(int argc, char **argv)
             help();//帮助信息
             break;
         case 'F':
-            base_fmt = optarg;
+            base_fmt = optarg;//backfile格式
             break;
         case 'b':
-        		//如果“-o”选项中使用了backing_file这个选项来指定其后端镜像文件，
-        		//那么这个创建的镜像文件仅记录与后端镜像文件的差异部分。后端镜像
-        		//文件不会被修改，除非在QEMU monitor中使用“commit”命令或者使用
-        		//“qemu-img commit”命令去手动提交这些改动。这种情况下，
-        		//size参数不是必须需的，其值默认为后端镜像文件的大小。另外，
-        		//直接使用“-b backfile”参数也与“-o backing_file=backfile”效果相同。
+			//如果“-o”选项中使用了backing_file这个选项来指定其后端镜像文件，
+			//那么这个创建的镜像文件仅记录与后端镜像文件的差异部分。后端镜像
+			//文件不会被修改，除非在QEMU monitor中使用“commit”命令或者使用
+			//“qemu-img commit”命令去手动提交这些改动。这种情况下，
+			//size参数不是必须需的，其值默认为后端镜像文件的大小。另外，
+			//直接使用“-b backfile”参数也与“-o backing_file=backfile”效果相同。
             base_filename = optarg;
             break;
         case 'f':
@@ -476,10 +522,10 @@ static int img_create(int argc, char **argv)
                 goto fail;
             }
             if (!options) {
-            		//如果之前没有设置过options,则设置
+            	//如果之前没有设置过options,则设置
                 options = g_strdup(optarg);
             } else {
-            		//如果已设置，则合并options
+            	//如果已设置，则合并options
                 char *old_options = options;
                 options = g_strdup_printf("%s,%s", options, optarg);
                 g_free(old_options);
@@ -501,6 +547,7 @@ static int img_create(int argc, char **argv)
 
     /* Get the filename */
     filename = (optind < argc) ? argv[optind] : NULL;
+
     //如果有选项，且选项是有help的，则显示此格式支持的选项
     if (options && has_help_option(options)) {
         g_free(options);
@@ -538,6 +585,8 @@ static int img_create(int argc, char **argv)
         //设置镜像大小
         img_size = (uint64_t)sval;
     }
+
+    //参数过多
     if (optind != argc) {
         error_exit("Unexpected argument: %s", argv[optind]);
     }
@@ -1928,10 +1977,10 @@ static int convert_do_copy(ImgConvertState *s)
 static int img_convert(int argc, char **argv)
 {
     int c, bs_i, flags, src_flags = 0;
-    const char *fmt = NULL, *out_fmt = "raw", *cache = "unsafe",
+    const char *fmt = NULL, *out_fmt = NULL, *cache = "unsafe",
                *src_cache = BDRV_DEFAULT_CACHE, *out_baseimg = NULL,
                *out_filename, *out_baseimg_param, *snapshot_name = NULL;
-    BlockDriver *drv, *proto_drv;
+    BlockDriver *drv = NULL, *proto_drv = NULL;
     BlockDriverInfo bdi;
     BlockDriverState *out_bs;
     QemuOpts *opts = NULL, *sn_opts = NULL;
@@ -1939,7 +1988,7 @@ static int img_convert(int argc, char **argv)
     char *options = NULL;
     Error *local_err = NULL;
     bool writethrough, src_writethrough, quiet = false, image_opts = false,
-         skip_create = false, progress = false;
+         skip_create = false, progress = false, tgt_image_opts = false;
     int64_t ret = -EINVAL;
     bool force_share = false;
 
@@ -1957,6 +2006,7 @@ static int img_convert(int argc, char **argv)
             {"object", required_argument, 0, OPTION_OBJECT},
             {"image-opts", no_argument, 0, OPTION_IMAGE_OPTS},
             {"force-share", no_argument, 0, 'U'},
+            {"target-image-opts", no_argument, 0, OPTION_TARGET_IMAGE_OPTS},
             {0, 0, 0, 0}
         };
         c = getopt_long(argc, argv, ":hf:O:B:ce6o:s:l:S:pt:T:qnm:WU",
@@ -2077,7 +2127,14 @@ static int img_convert(int argc, char **argv)
         case OPTION_IMAGE_OPTS:
             image_opts = true;
             break;
+        case OPTION_TARGET_IMAGE_OPTS:
+            tgt_image_opts = true;
+            break;
         }
+    }
+
+    if (!out_fmt && !tgt_image_opts) {
+        out_fmt = "raw";
     }
 
     if (qemu_opts_foreach(&qemu_object_opts,
@@ -2091,12 +2148,22 @@ static int img_convert(int argc, char **argv)
         goto fail_getopt;
     }
 
+    if (tgt_image_opts && !skip_create) {
+        error_report("--target-image-opts requires use of -n flag");
+        goto fail_getopt;
+    }
+
     s.src_num = argc - optind - 1;
     out_filename = s.src_num >= 1 ? argv[argc - 1] : NULL;
 
     if (options && has_help_option(options)) {
-        ret = print_block_option_help(out_filename, out_fmt);
-        goto fail_getopt;
+        if (out_fmt) {
+            ret = print_block_option_help(out_filename, out_fmt);
+            goto fail_getopt;
+        } else {
+            error_report("Option help requires a format be specified");
+            goto fail_getopt;
+        }
     }
 
     if (s.src_num < 1) {
@@ -2161,22 +2228,22 @@ static int img_convert(int argc, char **argv)
         goto out;
     }
 
-    /* Find driver and parse its options */
-    drv = bdrv_find_format(out_fmt);
-    if (!drv) {
-        error_report("Unknown file format '%s'", out_fmt);
-        ret = -1;
-        goto out;
-    }
-
-    proto_drv = bdrv_find_protocol(out_filename, true, &local_err);
-    if (!proto_drv) {
-        error_report_err(local_err);
-        ret = -1;
-        goto out;
-    }
-
     if (!skip_create) {
+        /* Find driver and parse its options */
+        drv = bdrv_find_format(out_fmt);
+        if (!drv) {
+            error_report("Unknown file format '%s'", out_fmt);
+            ret = -1;
+            goto out;
+        }
+
+        proto_drv = bdrv_find_protocol(out_filename, true, &local_err);
+        if (!proto_drv) {
+            error_report_err(local_err);
+            ret = -1;
+            goto out;
+        }
+
         if (!drv->create_opts) {
             error_report("Format driver '%s' does not support image creation",
                          drv->format_name);
@@ -2233,7 +2300,7 @@ static int img_convert(int argc, char **argv)
         const char *preallocation =
             qemu_opt_get(opts, BLOCK_OPT_PREALLOC);
 
-        if (!drv->bdrv_co_pwritev_compressed) {
+        if (drv && !drv->bdrv_co_pwritev_compressed) {
             error_report("Compression not supported for this file format");
             ret = -1;
             goto out;
@@ -2273,18 +2340,29 @@ static int img_convert(int argc, char **argv)
         goto out;
     }
 
-    /* XXX we should allow --image-opts to trigger use of
-     * img_open() here, but then we have trouble with
-     * the bdrv_create() call which takes different params.
-     * Not critical right now, so fix can wait...
-     */
-    s.target = img_open_file(out_filename, out_fmt, flags, writethrough, quiet,
-                             false);
+    if (skip_create) {
+        s.target = img_open(tgt_image_opts, out_filename, out_fmt,
+                            flags, writethrough, quiet, false);
+    } else {
+        /* TODO ultimately we should allow --target-image-opts
+         * to be used even when -n is not given.
+         * That has to wait for bdrv_create to be improved
+         * to allow filenames in option syntax
+         */
+        s.target = img_open_new_file(out_filename, opts, out_fmt,
+                                     flags, writethrough, quiet, false);
+    }
     if (!s.target) {
         ret = -1;
         goto out;
     }
     out_bs = blk_bs(s.target);
+
+    if (s.compressed && !out_bs->drv->bdrv_co_pwritev_compressed) {
+        error_report("Compression not supported for this file format");
+        ret = -1;
+        goto out;
+    }
 
     /* increase bufsectors from the default 4096 (2M) if opt_transfer
      * or discard_alignment of the out_bs is greater. Limit to 32768 (16MB)
@@ -3171,8 +3249,7 @@ static int img_rebase(int argc, char **argv)
             if (!options) {
                 options = qdict_new();
             }
-            qdict_put(options, BDRV_OPT_FORCE_SHARE,
-                      qbool_from_bool(true));
+            qdict_put_bool(options, BDRV_OPT_FORCE_SHARE, true);
         }
         bdrv_get_backing_filename(bs, backing_name, sizeof(backing_name));
         blk_old_backing = blk_new_open(backing_name, NULL,
@@ -4173,6 +4250,7 @@ static int img_dd(int argc, char **argv)
     };
     const struct option long_options[] = {
         { "help", no_argument, 0, 'h'},
+        { "object", required_argument, 0, OPTION_OBJECT},
         { "image-opts", no_argument, 0, OPTION_IMAGE_OPTS},
         { "force-share", no_argument, 0, 'U'},
         { 0, 0, 0, 0 }
@@ -4201,6 +4279,15 @@ static int img_dd(int argc, char **argv)
         case 'U':
             force_share = true;
             break;
+        case OPTION_OBJECT: {
+            QemuOpts *opts;
+            opts = qemu_opts_parse_noisily(&qemu_object_opts,
+                                           optarg, true);
+            if (!opts) {
+                ret = -1;
+                goto out;
+            }
+        }   break;
         case OPTION_IMAGE_OPTS:
             image_opts = true;
             break;
@@ -4245,6 +4332,14 @@ static int img_dd(int argc, char **argv)
         ret = -1;
         goto out;
     }
+
+    if (qemu_opts_foreach(&qemu_object_opts,
+                          user_creatable_add_opts_foreach,
+                          NULL, NULL)) {
+        ret = -1;
+        goto out;
+    }
+
     blk1 = img_open(image_opts, in.filename, fmt, 0, false, false,
                     force_share);
 
@@ -4313,8 +4408,13 @@ static int img_dd(int argc, char **argv)
         goto out;
     }
 
-    blk2 = img_open(image_opts, out.filename, out_fmt, BDRV_O_RDWR,
-                    false, false, false);
+    /* TODO, we can't honour --image-opts for the target,
+     * since it needs to be given in a format compatible
+     * with the bdrv_create() call above which does not
+     * support image-opts style.
+     */
+    blk2 = img_open_file(out.filename, NULL, out_fmt, BDRV_O_RDWR,
+                         false, false, false);
 
     if (!blk2) {
         ret = -1;
@@ -4380,7 +4480,7 @@ out:
 
 
 static const img_cmd_t img_cmds[] = {
-#define DEF(option, callback, arg_string)        \
+#define DEF(option, callback, arg_string)        \
     { option, callback },
 #include "qemu-img-cmds.h" //取出各option及其回调函数
 #undef DEF
@@ -4406,9 +4506,9 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);//忽略pipe信号（当服务器端关闭时仍写，将触发）
 #endif
 
-    module_call_init(MODULE_INIT_TRACE);
+    module_call_init(MODULE_INIT_TRACE);//调此类型的init
     error_set_progname(argv[0]);
-    qemu_init_exec_dir(argv[0]);
+    qemu_init_exec_dir(argv[0]);//设置exe所在位置
 
     if (qemu_init_main_loop(&local_error)) {
         error_report_err(local_error);

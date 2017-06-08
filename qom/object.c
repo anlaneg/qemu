@@ -802,8 +802,10 @@ const char *object_class_get_name(ObjectClass *klass)
     return klass->type->name;
 }
 
+//通过typename找ObjectClass
 ObjectClass *object_class_by_name(const char *typename)
 {
+	//通过type找到TypeImpl
     TypeImpl *type = type_get_by_name(typename);
 
     if (!type) {

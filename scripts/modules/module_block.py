@@ -9,7 +9,8 @@
 #
 # This work is licensed under the terms of the GNU GPL, version 2.
 # See the COPYING file in the top-level directory.
-
+# encoding=utf-8
+#依据/block文件夹中的每个.c文件，生成一条block_driver_modules记录
 from __future__ import print_function
 import sys
 import os
@@ -47,6 +48,7 @@ def process_file(fheader, filename):
                 elif line.find(".protocol_name") != -1:
                     protocol_name = get_string_struct(line)
                 elif line == "};":
+                    #添加模块
                     add_module(fheader, library, format_name, protocol_name)
                     found_start = False
             elif line.find("static BlockDriver") != -1:
@@ -54,6 +56,7 @@ def process_file(fheader, filename):
                 format_name = ""
                 protocol_name = ""
 
+#生成文件头
 def print_top(fheader):
     fheader.write('''/* AUTOMATICALLY GENERATED, DO NOT MODIFY */
 /*
@@ -87,10 +90,12 @@ def print_bottom(fheader):
 # All other arguments: modules source files (.c)
 output_file = sys.argv[1]
 with open(output_file, 'w') as fheader:
+    #生成文件头
     print_top(fheader)
 
     for filename in sys.argv[2:]:
         if os.path.isfile(filename):
+            #解析输入文件
             process_file(fheader, filename)
         else:
             print("File " + filename + " does not exist.", file=sys.stderr)

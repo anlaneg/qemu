@@ -478,7 +478,7 @@ struct {                                                                \
                 (var) && ((next_var) = ((var)->field.tqe_next), 1);     \
                 (var) = (next_var))
 
-//逆序遍历tail队列（具体代码没搞明白？？？？）
+//逆序遍历tail队列（tqh_last指向的是next，tgq_prev指向的是前一个）
 #define QTAILQ_FOREACH_REVERSE(var, head, headname, field)              \
         for ((var) = (*(((struct headname *)((head)->tqh_last))->tqh_last));    \
                 (var);                                                  \

@@ -15,6 +15,8 @@
 #include "qemu-common.h"
 #include "qapi/util.h"
 
+//查找buf指定的字符串，是否在lookup表中存在，如果buf为空，返回def
+//如果存在返回下标，如果不存在，返回def
 int qapi_enum_parse(const char * const lookup[], const char *buf,
                     int max, int def, Error **errp)
 {

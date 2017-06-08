@@ -23,16 +23,17 @@
 
 typedef struct ModuleEntry
 {
-    void (*init)(void);
-    QTAILQ_ENTRY(ModuleEntry) node;
-    module_init_type type;
+    void (*init)(void);//初始化函数
+    QTAILQ_ENTRY(ModuleEntry) node;//挂接点
+    module_init_type type;//模块类型
 } ModuleEntry;
 
 typedef QTAILQ_HEAD(, ModuleEntry) ModuleTypeList;
 
+//按模块类型组织成链表
 static ModuleTypeList init_type_list[MODULE_INIT_MAX];
 
-static ModuleTypeList dso_init_list;
+static ModuleTypeList dso_init_list;//与init_type_list相同，实现dso的初始化
 
 //初始化
 static void init_lists(void)
@@ -41,6 +42,7 @@ static void init_lists(void)
     int i;
 
     if (inited) {
+    	//仅初始化一次
         return;
     }
 
@@ -61,7 +63,7 @@ static ModuleTypeList *find_type(module_init_type type)
     return &init_type_list[type];
 }
 
-//注册模块回调
+//注册模块回调（将fn,注册到type列表中）
 void register_module_init(void (*fn)(void), module_init_type type)
 {
     ModuleEntry *e;
@@ -119,6 +121,8 @@ static int module_load_file(const char *fname)
         ret = -EINVAL;
         goto out;
     }
+
+    //检查fname是否可访问
     if (access(fname, F_OK)) {
         ret = -ENOENT;
         goto out;

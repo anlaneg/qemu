@@ -29,7 +29,7 @@
 #error "qemu-options-wrapper.h included with no option defined"
 #endif
 
-#include "qemu-options.def"
+#include "qemu-options.def" //此文件是自动生成的
 
 #undef DEF
 #undef DEFHEADING

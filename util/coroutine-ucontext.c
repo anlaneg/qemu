@@ -76,6 +76,7 @@ static void coroutine_trampoline(int i0, int i1)
     }
 
     while (true) {
+    	//调用ucontext传入的回调
         co->entry(co->entry_arg);
         qemu_coroutine_switch(co, co->caller, COROUTINE_TERMINATE);
     }

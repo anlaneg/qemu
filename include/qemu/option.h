@@ -51,7 +51,7 @@ enum QemuOptType {
 
 typedef struct QemuOptDesc {
     const char *name;
-    enum QemuOptType type;
+    enum QemuOptType type;//选项值数据类型
     const char *help;
     const char *def_value_str;
 } QemuOptDesc;
@@ -59,6 +59,7 @@ typedef struct QemuOptDesc {
 struct QemuOptsList {
     const char *name;
     const char *implied_opt_name;
+    //是否可合并
     bool merge_lists;  /* Merge multiple uses of option into a single list? */
     QTAILQ_HEAD(, QemuOpts) head;
     QemuOptDesc desc[];//以‘NULL’结尾的数组

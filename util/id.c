@@ -14,13 +14,17 @@
 #include "qemu-common.h"
 #include "qemu/id.h"
 
+//id是否格式是正确的
 bool id_wellformed(const char *id)
 {
     int i;
 
+    //id首字符必须为字母
     if (!qemu_isalpha(id[0])) {
         return false;
     }
+
+    //id其它字符必须“字符，数字，与'-' , '.' , '_'
     for (i = 1; id[i]; i++) {
         if (!qemu_isalnum(id[i]) && !strchr("-._", id[i])) {
             return false;
