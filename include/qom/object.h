@@ -480,6 +480,7 @@ struct TypeInfo
  * Converts a class to an #ObjectClass.  Since all objects are #Objects,
  * this function will always succeed.
  */
+//将class强转为ObjectClass，所有类型均是此类的基类
 #define OBJECT_CLASS(class) \
     ((ObjectClass *)(class))
 

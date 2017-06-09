@@ -37,16 +37,16 @@ typedef struct TypeImpl TypeImpl;
 
 struct InterfaceImpl
 {
-    const char *typename;
+    const char *typename;//接口类型名称
 };
 
 struct TypeImpl
 {
-    const char *name;
+    const char *name;//类型名称
 
-    size_t class_size;
+    size_t class_size;//类元数据大小
 
-    size_t instance_size;
+    size_t instance_size;//此类型对象大小
 
     //本类型的构造函数
     void (*class_init)(ObjectClass *klass, void *data);
@@ -87,12 +87,14 @@ static GHashTable *type_table_get(void)
 
 static bool enumerating_types;
 
+//添加type
 static void type_table_add(TypeImpl *ti)
 {
     assert(!enumerating_types);
     g_hash_table_insert(type_table_get(), (void *)ti->name, ti);
 }
 
+//type查询
 static TypeImpl *type_table_lookup(const char *name)
 {
     return g_hash_table_lookup(type_table_get(), name);
@@ -130,6 +132,7 @@ static TypeImpl *type_new(const TypeInfo *info)
 
     ti->abstract = info->abstract;
 
+    //设置接口类型名称
     for (i = 0; info->interfaces && info->interfaces[i].type; i++) {
         ti->interfaces[i].typename = g_strdup(info->interfaces[i].type);
     }
@@ -138,6 +141,7 @@ static TypeImpl *type_new(const TypeInfo *info)
     return ti;
 }
 
+//type注册内部函数
 static TypeImpl *type_register_internal(const TypeInfo *info)
 {
     TypeImpl *ti;
@@ -147,6 +151,7 @@ static TypeImpl *type_register_internal(const TypeInfo *info)
     return ti;
 }
 
+//type注册外部函数
 TypeImpl *type_register(const TypeInfo *info)
 {
 	//类型必须要有parent
@@ -215,6 +220,7 @@ static size_t type_object_get_size(TypeImpl *ti)
     return 0;
 }
 
+//获取对象大小
 size_t object_type_get_instance_size(const char *typename)
 {
     TypeImpl *type = type_get_by_name(typename);
@@ -223,6 +229,7 @@ size_t object_type_get_instance_size(const char *typename)
     return type_object_get_size(type);
 }
 
+//类型type,是否继承自target_type类型
 static bool type_is_ancestor(TypeImpl *type, TypeImpl *target_type)
 {
     assert(target_type);
@@ -277,10 +284,12 @@ static void object_property_free(gpointer data)
 }
 
 //type初始化
+//先调基类的class_init,再调class_base_init{到达下层后又会调回来}
 static void type_initialize(TypeImpl *ti)
 {
     TypeImpl *parent;
 
+    //如果类型已初始化，则直接返回
     if (ti->class) {
         return;
     }
@@ -313,6 +322,7 @@ static void type_initialize(TypeImpl *ti)
         ti->class->properties = g_hash_table_new_full(
             g_str_hash, g_str_equal, g_free, object_property_free);
 
+        //如果父类有接口，则初始化接口类型
         for (e = parent->class->interfaces; e; e = e->next) {
             InterfaceClass *iface = e->data;
             ObjectClass *klass = OBJECT_CLASS(iface);//强转为基类
@@ -320,6 +330,7 @@ static void type_initialize(TypeImpl *ti)
             type_initialize_interface(ti, iface->interface_type, klass->type);
         }
 
+        //初始化本类的接口
         for (i = 0; i < ti->num_interfaces; i++) {
         		//查询接口类型
             TypeImpl *t = type_get_by_name(ti->interfaces[i].typename);
@@ -345,6 +356,7 @@ static void type_initialize(TypeImpl *ti)
 
     ti->class->type = ti;//覆盖顶层基类的type
 
+    //自下而上，调用class_base_init
     while (parent) {
         if (parent->class_base_init) {
             parent->class_base_init(ti->class, ti->class_data);
@@ -352,7 +364,6 @@ static void type_initialize(TypeImpl *ti)
         parent = type_get_parent(parent);
     }
 
-    //调用本类的构造函数
     if (ti->class_init) {
         ti->class_init(ti->class, ti->class_data);
     }
@@ -496,6 +507,7 @@ static void object_finalize(void *data)
     }
 }
 
+//new一个对象
 static Object *object_new_with_type(Type type)
 {
     Object *obj;
@@ -510,6 +522,7 @@ static Object *object_new_with_type(Type type)
     return obj;
 }
 
+//给定类型名称，构造对象
 Object *object_new(const char *typename)
 {
     TypeImpl *ti = type_get_by_name(typename);
@@ -671,6 +684,7 @@ out:
     return obj;
 }
 
+//返回NULL表示不能强转，返回！NULL表示可强转
 ObjectClass *object_class_dynamic_cast(ObjectClass *class,
                                        const char *typename)
 {
@@ -683,11 +697,13 @@ ObjectClass *object_class_dynamic_cast(ObjectClass *class,
     }
 
     /* A simple fast path that can trigger a lot for leaf classes.  */
+    //如果type->name == typename,则检查的是最终的类类型（leaf class)
     type = class->type;
     if (type->name == typename) {
         return class;
     }
 
+    //非最终类类型（1。检查是否有这种类型，如无，失败）
     target_type = type_get_by_name(typename);
     if (!target_type) {
         /* target class type unknown, so fail the cast */
@@ -713,12 +729,14 @@ ObjectClass *object_class_dynamic_cast(ObjectClass *class,
             ret = NULL;
         }
     } else if (type_is_ancestor(type, target_type)) {
+    	    //继承链上的中间节点
         ret = class;
     }
 
     return ret;
 }
 
+//确认class的类型是否可强转为typename
 ObjectClass *object_class_dynamic_cast_assert(ObjectClass *class,
                                               const char *typename,
                                               const char *file, int line,
@@ -2352,8 +2370,8 @@ static void register_types(void)
         .abstract = true,
     };
 
-    type_interface = type_register_internal(&interface_info);
-    type_register_internal(&object_info);
+    type_interface = type_register_internal(&interface_info);//注册interface-info类型
+    type_register_internal(&object_info);//注册object类型
 }
 
 type_init(register_types)
