@@ -27,7 +27,7 @@
 #define VHOST_USER_F_PROTOCOL_FEATURES 30
 
 enum VhostUserProtocolFeature {
-    VHOST_USER_PROTOCOL_F_MQ = 0,
+    VHOST_USER_PROTOCOL_F_MQ = 0,//支持多队列
     VHOST_USER_PROTOCOL_F_LOG_SHMFD = 1,
     VHOST_USER_PROTOCOL_F_RARP = 2,
     VHOST_USER_PROTOCOL_F_REPLY_ACK = 3,
@@ -232,11 +232,13 @@ static int vhost_user_write(struct vhost_dev *dev, VhostUserMsg *msg,
         return 0;
     }
 
+    //在消息中设置fds
     if (qemu_chr_fe_set_msgfds(chr, fds, fd_num) < 0) {
         error_report("Failed to set msg fds.");
         return -1;
     }
 
+    //发送消息
     ret = qemu_chr_fe_write_all(chr, (const uint8_t *) msg, size);
     if (ret != size) {
         error_report("Failed to write msg."
@@ -521,6 +523,7 @@ static int vhost_user_set_protocol_features(struct vhost_dev *dev,
     return vhost_user_set_u64(dev, VHOST_USER_SET_PROTOCOL_FEATURES, features);
 }
 
+//向vhost_user发送request请求，并读取响应的u64大小的数据
 static int vhost_user_get_u64(struct vhost_dev *dev, int request, uint64_t *u64)
 {
     VhostUserMsg msg = {
@@ -532,14 +535,17 @@ static int vhost_user_get_u64(struct vhost_dev *dev, int request, uint64_t *u64)
         return 0;
     }
 
+    //向vhost_user发送消息
     if (vhost_user_write(dev, &msg, NULL, 0) < 0) {
         return -1;
     }
 
+    //自vhost_user中读取响应消息
     if (vhost_user_read(dev, &msg) < 0) {
         return -1;
     }
 
+    //响应消息不是应答request的，丢弃
     if (msg.request != request) {
         error_report("Received unexpected msg type. Expected %d received %d",
                      request, msg.request);
@@ -556,6 +562,7 @@ static int vhost_user_get_u64(struct vhost_dev *dev, int request, uint64_t *u64)
     return 0;
 }
 
+//获取dev支持的功能
 static int vhost_user_get_features(struct vhost_dev *dev, uint64_t *features)
 {
     return vhost_user_get_u64(dev, VHOST_USER_GET_FEATURES, features);
@@ -669,6 +676,7 @@ static int vhost_setup_slave_channel(struct vhost_dev *dev)
         return 0;
     }
 
+    //创建一个socketpair
     if (socketpair(PF_UNIX, SOCK_STREAM, 0, sv) == -1) {
         error_report("socketpair() failed");
         return -1;
@@ -681,11 +689,13 @@ static int vhost_setup_slave_channel(struct vhost_dev *dev)
         msg.flags |= VHOST_USER_NEED_REPLY_MASK;
     }
 
+    //向后端发送消息（slave_req_fd)
     ret = vhost_user_write(dev, &msg, &sv[1], 1);
     if (ret) {
         goto out;
     }
 
+    //等待响应
     if (reply_supported) {
         ret = process_message_reply(dev, &msg);
     }
@@ -714,6 +724,7 @@ static int vhost_user_init(struct vhost_dev *dev, void *opaque)
     u->slave_fd = -1;
     dev->opaque = u;
 
+    //获取dev对端支持的功能
     err = vhost_user_get_features(dev, &features);
     if (err < 0) {
         return err;
@@ -722,12 +733,14 @@ static int vhost_user_init(struct vhost_dev *dev, void *opaque)
     if (virtio_has_feature(features, VHOST_USER_F_PROTOCOL_FEATURES)) {
         dev->backend_features |= 1ULL << VHOST_USER_F_PROTOCOL_FEATURES;
 
+        //获取dev对端的协议功能
         err = vhost_user_get_u64(dev, VHOST_USER_GET_PROTOCOL_FEATURES,
                                  &protocol_features);
         if (err < 0) {
             return err;
         }
 
+        //设置协商好的protocol功能（mask是我们支持的功能）
         dev->protocol_features =
             protocol_features & VHOST_USER_PROTOCOL_FEATURE_MASK;
         err = vhost_user_set_protocol_features(dev, dev->protocol_features);
@@ -736,6 +749,7 @@ static int vhost_user_init(struct vhost_dev *dev, void *opaque)
         }
 
         /* query the max queues we support if backend supports Multiple Queue */
+        //如果支持多队列，检查后端支持的最大队列数
         if (dev->protocol_features & (1ULL << VHOST_USER_PROTOCOL_F_MQ)) {
             err = vhost_user_get_u64(dev, VHOST_USER_GET_QUEUE_NUM,
                                      &dev->max_queues);
@@ -744,6 +758,7 @@ static int vhost_user_init(struct vhost_dev *dev, void *opaque)
             }
         }
 
+        //有IOMMU功能，但没有REPLAY-ACK与SLAVE_REQ
         if (virtio_has_feature(features, VIRTIO_F_IOMMU_PLATFORM) &&
                 !(virtio_has_feature(dev->protocol_features,
                     VHOST_USER_PROTOCOL_F_SLAVE_REQ) &&
@@ -795,6 +810,7 @@ static int vhost_user_get_vq_index(struct vhost_dev *dev, int idx)
     return idx;
 }
 
+//最大支持8个memory region
 static int vhost_user_memslots_limit(struct vhost_dev *dev)
 {
     return VHOST_MEMORY_MAX_NREGIONS;

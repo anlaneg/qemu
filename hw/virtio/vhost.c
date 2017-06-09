@@ -1238,6 +1238,7 @@ int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
     hdev->vdev = NULL;
     hdev->migration_blocker = NULL;
 
+    //按照后端类型，为dev设置操作集ops
     r = vhost_set_backend_type(hdev, backend_type);
     assert(r >= 0);
 
@@ -1265,6 +1266,7 @@ int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
         goto fail;
     }
 
+    //初始化virtqueue
     for (i = 0; i < hdev->nvqs; ++i, ++n_initialized_vqs) {
         r = vhost_virtqueue_init(hdev, hdev->vqs + i, hdev->vq_index + i);
         if (r < 0) {

@@ -318,6 +318,7 @@ int qemu_chr_fe_get_msgfds(CharBackend *be, int *fds, int len)
         CHARDEV_GET_CLASS(s)->get_msgfds(s, fds, len) : -1;
 }
 
+//如果字符设备有set_msgfds，则调用set_msgfds
 int qemu_chr_fe_set_msgfds(CharBackend *be, int *fds, int num)
 {
     Chardev *s = be->chr;

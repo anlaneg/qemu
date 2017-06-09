@@ -11,7 +11,7 @@
 #
 # This work is licensed under the terms of the GNU GPL, version 2.
 # See the COPYING file in the top-level directory.
-
+# encoding:utf-8
 from qapi import *
 
 
@@ -340,6 +340,7 @@ for o, a in opts:
     if o in ('-b', '--builtins'):
         do_builtins = True
 
+#c文件头部注解
 c_comment = '''
 /*
  * schema-defined QAPI visitor functions
@@ -354,6 +355,7 @@ c_comment = '''
  *
  */
 '''
+#h文件头部注解
 h_comment = '''
 /*
  * schema-defined QAPI visitor functions
@@ -369,10 +371,12 @@ h_comment = '''
  */
 '''
 
+#open_output来源于文件qapi.py
 (fdef, fdecl) = open_output(output_dir, do_c, do_h, prefix,
                             'qapi-visit.c', 'qapi-visit.h',
                             c_comment, h_comment)
 
+#写c依赖的头文件
 fdef.write(mcgen('''
 #include "qemu/osdep.h"
 #include "qemu-common.h"
@@ -381,6 +385,7 @@ fdef.write(mcgen('''
 ''',
                  prefix=prefix))
 
+#写h移赖的头文件
 fdecl.write(mcgen('''
 #include "qapi/visitor.h"
 #include "qapi/qmp/qerror.h"

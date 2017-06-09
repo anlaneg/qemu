@@ -44,6 +44,7 @@
 #define VIRTIO_NET_F_HOST_TSO4	11	/* Host can handle TSOv4 in. */
 #define VIRTIO_NET_F_HOST_TSO6	12	/* Host can handle TSOv6 in. */
 #define VIRTIO_NET_F_HOST_ECN	13	/* Host can handle TSO[6] w/ ECN in. */
+//tcp segment offset叫tso,而udp frame offset叫ufo
 #define VIRTIO_NET_F_HOST_UFO	14	/* Host can handle UFO in. */
 #define VIRTIO_NET_F_MRG_RXBUF	15	/* Host can merge receive buffers. */
 #define VIRTIO_NET_F_STATUS	16	/* virtio_net_config.status available */

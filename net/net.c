@@ -1112,6 +1112,7 @@ int net_client_init(QemuOpts *opts, bool is_netdev, Error **errp)
     }
 
     if (is_netdev) {
+    	//-netdev类型配置处理(依据配置生成对应的netdev)
         visit_type_Netdev(v, NULL, (Netdev **)&object, &err);
     } else {
         visit_type_NetLegacy(v, NULL, (NetLegacy **)&object, &err);
@@ -1516,6 +1517,7 @@ static int net_init_client(void *dummy, QemuOpts *opts, Error **errp)
     return 0;
 }
 
+//针对具体的一个netdev配置进行初始化
 static int net_init_netdev(void *dummy, QemuOpts *opts, Error **errp)
 {
     Error *local_err = NULL;
@@ -1539,6 +1541,7 @@ int net_init_clients(void)
 
     QTAILQ_INIT(&net_clients);
 
+    //遍历qemu所有netdev配置,并调用net_init_netdev
     if (qemu_opts_foreach(qemu_find_opts("netdev"),
                           net_init_netdev, NULL, NULL)) {
         return -1;

@@ -326,11 +326,14 @@ static Chardev *net_vhost_claim_chardev(
         return NULL;
     }
 
+    //无重连属性报错
     if (!qemu_chr_has_feature(chr, QEMU_CHAR_FEATURE_RECONNECTABLE)) {
         error_setg(errp, "chardev \"%s\" is not reconnectable",
                    opts->chardev);
         return NULL;
     }
+
+    //无fd传递属性报错
     if (!qemu_chr_has_feature(chr, QEMU_CHAR_FEATURE_FD_PASS)) {
         error_setg(errp, "chardev \"%s\" does not support FD passing",
                    opts->chardev);
@@ -382,6 +385,7 @@ int net_init_vhost_user(const Netdev *netdev, const char *name,
         return -1;
     }
 
+    //队列数检查
     queues = vhost_user_opts->has_queues ? vhost_user_opts->queues : 1;
     if (queues < 1 || queues > MAX_QUEUE_NUM) {
         error_setg(errp,

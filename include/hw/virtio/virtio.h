@@ -303,6 +303,7 @@ static inline void virtio_clear_feature(uint64_t *features, unsigned int fbit)
     *features &= ~(1ULL << fbit);
 }
 
+//检查是否具有功能fbit
 static inline bool virtio_has_feature(uint64_t features, unsigned int fbit)
 {
     assert(fbit < 64);

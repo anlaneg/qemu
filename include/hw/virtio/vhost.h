@@ -62,7 +62,7 @@ struct vhost_dev {
     uint64_t acked_features;
     uint64_t backend_features;
     uint64_t protocol_features;
-    uint64_t max_queues;
+    uint64_t max_queues;//支持的最大队列数
     bool started;
     bool log_enabled;
     uint64_t log_size;

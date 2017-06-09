@@ -263,18 +263,21 @@ class QAPIDoc(object):
 class QAPISchemaParser(object):
 
     def __init__(self, fp, previously_included=[], incl_info=None):
+        #文件的绝对地址
         abs_fname = os.path.abspath(fp.name)
+        #文件名称
         fname = fp.name
         self.fname = fname
         previously_included.append(abs_fname)
         self.incl_info = incl_info
         self.src = fp.read()
+        #如果文件内容为空或者文件不能'\n'结尾，则添加‘\n'
         if self.src == '' or self.src[-1] != '\n':
             self.src += '\n'
-        self.cursor = 0
+        self.cursor = 0 #指向要解析的下一个位置
         self.line = 1
         self.line_pos = 0
-        self.exprs = []
+        self.exprs = [] #识别出来的表达式
         self.docs = []
         self.cur_doc = None
         self.accept()
@@ -283,6 +286,7 @@ class QAPISchemaParser(object):
             info = {'file': fname, 'line': self.line,
                     'parent': self.incl_info}
             if self.tok == '#':
+                #双'##'号处理
                 self.reject_expr_doc()
                 self.cur_doc = self.get_doc(info)
                 self.docs.append(self.cur_doc)
@@ -297,6 +301,7 @@ class QAPISchemaParser(object):
                 if not isinstance(include, str):
                     raise QAPISemError(info,
                                        "Value of 'include' must be a string")
+                #include处理
                 self._include(include, info, os.path.dirname(abs_fname),
                               previously_included)
             elif "pragma" in expr:
@@ -307,6 +312,7 @@ class QAPISchemaParser(object):
                 if not isinstance(pragma, dict):
                     raise QAPISemError(
                         info, "Value of 'pragma' must be a dictionary")
+                #pargma处理
                 for name, value in pragma.iteritems():
                     self._pragma(name, value, info)
             else:
@@ -382,10 +388,12 @@ class QAPISchemaParser(object):
 
             if self.tok == '#':
                 if self.src[self.cursor] == '#':
+                    #有两个'#'号，不能跳过注释
                     # Start of doc comment
                     skip_comment = False
                 self.cursor = self.src.find('\n', self.cursor)
                 if not skip_comment:
+                    #返回起始位置与行尾间的数据
                     self.val = self.src[self.pos:self.cursor]
                     return
             elif self.tok in '{}:,[]':
@@ -397,8 +405,10 @@ class QAPISchemaParser(object):
                     ch = self.src[self.cursor]
                     self.cursor += 1
                     if ch == '\n':
+                        #逗号符未封闭时，遇到换行符，报错
                         raise QAPIParseError(self, 'Missing terminating "\'"')
                     if esc:
+                        #转义处理
                         if ch == 'b':
                             string += '\b'
                         elif ch == 'f':
@@ -415,14 +425,17 @@ class QAPISchemaParser(object):
                                 ch = self.src[self.cursor]
                                 self.cursor += 1
                                 if ch not in '0123456789abcdefABCDEF':
+                                    #\u unicode编码的格式是后面有4个16进制字符
                                     raise QAPIParseError(self,
                                                          '\\u escape needs 4 '
                                                          'hex digits')
+                                #转为整数值
                                 value = (value << 4) + int(ch, 16)
                             # If Python 2 and 3 didn't disagree so much on
                             # how to handle Unicode, then we could allow
                             # Unicode string defaults.  But most of QAPI is
                             # ASCII-only, so we aren't losing much for now.
+                            # 不接受0x7f以外的数据
                             if not value or value > 0x7f:
                                 raise QAPIParseError(self,
                                                      'For now, \\u escape '
@@ -430,19 +443,25 @@ class QAPISchemaParser(object):
                                                      'values up to \\u007f')
                             string += chr(value)
                         elif ch in '\\/\'"':
+                            #不合入转义符，直接加入数据
                             string += ch
                         else:
+                            #非转义的字符
                             raise QAPIParseError(self,
                                                  "Unknown escape \\%s" % ch)
                         esc = False
                     elif ch == '\\':
+                        #遇到转义符，转到转议模式
                         esc = True
                     elif ch == "'":
+                        #遇到字符串结尾，收齐了字符串内容，返回
                         self.val = string
                         return
                     else:
+                        #将字符加入string
                         string += ch
             elif self.src.startswith('true', self.pos):
+                #true
                 self.val = True
                 self.cursor += 3
                 return
@@ -456,35 +475,47 @@ class QAPISchemaParser(object):
                 return
             elif self.tok == '\n':
                 if self.cursor == len(self.src):
+                    #解析完成
                     self.tok = None
                     return
+                #行编号加1
                 self.line += 1
                 self.line_pos = self.cursor
+            #行首出现非期待的字符
             elif not self.tok.isspace():
                 raise QAPIParseError(self, 'Stray "%s"' % self.tok)
 
+    #获取object的内容
     def get_members(self):
         expr = OrderedDict()
         if self.tok == '}':
             self.accept()
             return expr
         if self.tok != "'":
+            #key必须以"'"开头
             raise QAPIParseError(self, 'Expected string or "}"')
         while True:
+            #将value识别为key
             key = self.val
             self.accept()
             if self.tok != ':':
+                #key后面跟的是':',这里不是，报错，格式见json object中key:value方式
                 raise QAPIParseError(self, 'Expected ":"')
             self.accept()
             if key in expr:
+                #重复的key,报错
                 raise QAPIParseError(self, 'Duplicate key "%s"' % key)
+            #识别value
             expr[key] = self.get_expr(True)
             if self.tok == '}':
                 self.accept()
+                #object结束，返回expr
                 return expr
             if self.tok != ',':
+                #期待的是key:value,key:value
                 raise QAPIParseError(self, 'Expected "," or "}"')
             self.accept()
+            #key必须为"'“开头
             if self.tok != "'":
                 raise QAPIParseError(self, 'Expected string')
 
@@ -507,17 +538,21 @@ class QAPISchemaParser(object):
 
     def get_expr(self, nested):
         if self.tok != '{' and not nested:
+            #外层必须是object
             raise QAPIParseError(self, 'Expected "{"')
         if self.tok == '{':
             self.accept()
             expr = self.get_members()
         elif self.tok == '[':
             self.accept()
+            #解析数组类型
             expr = self.get_values()
         elif self.tok in "'tfn":
+            #解析'true','false','null',字符串类型
             expr = self.val
             self.accept()
         else:
+            #不是期待的开头，报错
             raise QAPIParseError(self, 'Expected "{", "[", string, '
                                  'boolean or "null"')
         return expr
@@ -1734,6 +1769,7 @@ def c_enum_const(type_name, const_name, prefix=None):
         type_name = prefix
     return camel_to_upper(type_name) + '_' + c_name(const_name, False).upper()
 
+#构造映射表，将‘.'对应到'_',将'-'对应到'_'
 c_name_trans = string.maketrans('.-', '__')
 
 
@@ -1746,6 +1782,7 @@ c_name_trans = string.maketrans('.-', '__')
 # into substrings of a generated C function name.
 # '__a.b_c' -> '__a_b_c', 'x-foo' -> 'x_foo'
 # protect=True: 'int' -> 'q_int'; protect=False: 'int' -> 'int'
+#规范name值，使其不包含'.'，‘—'，如果需要使其不等于关键字
 def c_name(name, protect=True):
     # ANSI X3J11/88-090, 3.1.1
     c89_words = set(['auto', 'break', 'case', 'char', 'const', 'continue',
@@ -1774,10 +1811,13 @@ def c_name(name, protect=True):
                      'not_eq', 'or', 'or_eq', 'xor', 'xor_eq'])
     # namespace pollution:
     polluted_words = set(['unix', 'errno', 'mips', 'sparc'])
+    #将name中的字符按c_name_trans表进行转换
     name = name.translate(c_name_trans)
+    #如果name变换为c89,c99,c11等关键字，则如果需要保护，则在其它加“q_"前缀
     if protect and (name in c89_words | c99_words | c11_words | gcc_words
                     | cpp_words | polluted_words):
         return 'q_' + name
+    #直接返回name
     return name
 
 eatspace = '\033EATSPACE.'
@@ -1818,10 +1858,11 @@ def cgen(code, **kwds):
 
 def mcgen(code, **kwds):
     if code[0] == '\n':
+        #剔除行首的“换行符”
         code = code[1:]
     return cgen(code, **kwds)
 
-
+#规范文件名称
 def guardname(filename):
     return c_name(filename, protect=False).upper()
 
@@ -1978,36 +2019,44 @@ def parse_command_line(extra_options='', extra_long_options=[]):
 # Generate output files with boilerplate
 #
 
-
+#创建必要的目录
+#并打开c_file,h_file,并输出相应的comment
+#do_c,do_h表示是否真的打开c或者h文件
 def open_output(output_dir, do_c, do_h, prefix, c_file, h_file,
                 c_comment, h_comment):
     guard = guardname(prefix + h_file)
+    #c,h文件路径
     c_file = output_dir + prefix + c_file
     h_file = output_dir + prefix + h_file
 
     if output_dir:
         try:
+            #如果需要output_dir,尝试创建此目录
             os.makedirs(output_dir)
         except os.error as e:
+            #如目录已存在，不报错
             if e.errno != errno.EEXIST:
                 raise
 
     def maybe_open(really, name, opt):
         if really:
+            #是否打开文件
             return open(name, opt)
         else:
+            #构造字符串
             import StringIO
             return StringIO.StringIO()
 
     fdef = maybe_open(do_c, c_file, 'w')
     fdecl = maybe_open(do_h, h_file, 'w')
 
+    #生成c文件注释
     fdef.write(mcgen('''
 /* AUTOMATICALLY GENERATED, DO NOT MODIFY */
 %(comment)s
 ''',
                      comment=c_comment))
-
+    #生成h文件注释
     fdecl.write(mcgen('''
 /* AUTOMATICALLY GENERATED, DO NOT MODIFY */
 %(comment)s
@@ -2019,7 +2068,7 @@ def open_output(output_dir, do_c, do_h, prefix, c_file, h_file,
 
     return (fdef, fdecl)
 
-
+#关闭文件（关注宏保护)
 def close_output(fdef, fdecl):
     fdecl.write('''
 #endif

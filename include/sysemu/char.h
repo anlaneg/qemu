@@ -473,8 +473,8 @@ typedef struct ChardevClass {
     void (*open)(Chardev *chr, ChardevBackend *backend,
                  bool *be_opened, Error **errp);
 
-    int (*chr_write)(Chardev *s, const uint8_t *buf, int len);
-    int (*chr_sync_read)(Chardev *s, const uint8_t *buf, int len);
+    int (*chr_write)(Chardev *s, const uint8_t *buf, int len);//向字符设备中写入
+    int (*chr_sync_read)(Chardev *s, const uint8_t *buf, int len);//自字符设备中同步读取
     GSource *(*chr_add_watch)(Chardev *s, GIOCondition cond);
     void (*chr_update_read_handler)(Chardev *s, GMainContext *context);
     int (*chr_ioctl)(Chardev *s, int cmd, void *arg);
