@@ -665,6 +665,8 @@ static void vhost_commit(MemoryListener *listener)
     if (dev->log_size < log_size) {
         vhost_dev_log_resize(dev, log_size + VHOST_LOG_BUFFER);
     }
+
+    //发送内存表到对端
     r = dev->vhost_ops->vhost_set_mem_table(dev, dev->mem);
     if (r < 0) {
         VHOST_OPS_DEBUG("vhost_set_mem_table failed");
@@ -1208,7 +1210,7 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
     }
 
     file.fd = event_notifier_get_fd(&vq->masked_notifier);
-    r = dev->vhost_ops->vhost_set_vring_call(dev, &file);
+    r = dev->vhost_ops->vhost_set_vring_call(dev, &file);//发送vring call消息
     if (r) {
         VHOST_OPS_DEBUG("vhost_set_vring_call failed");
         r = -errno;
@@ -1242,11 +1244,13 @@ int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
     r = vhost_set_backend_type(hdev, backend_type);
     assert(r >= 0);
 
+    //后端初始化
     r = hdev->vhost_ops->vhost_backend_init(hdev, opaque);
     if (r < 0) {
         goto fail;
     }
 
+    //不能大于memslots支持的最大大小
     if (used_memslots > hdev->vhost_ops->vhost_backend_memslots_limit(hdev)) {
         error_report("vhost backend memory slots limit is less"
                 " than current number of present memory slots");
@@ -1254,6 +1258,7 @@ int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
         goto fail;
     }
 
+    //发送set owner消息
     r = hdev->vhost_ops->vhost_set_owner(hdev);
     if (r < 0) {
         VHOST_OPS_DEBUG("vhost_set_owner failed");

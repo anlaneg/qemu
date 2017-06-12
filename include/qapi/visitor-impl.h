@@ -107,7 +107,7 @@ struct Visitor
 
     /* Must be set for input visitors to visit structs, optional otherwise.
        The core takes care of the return type in the public interface. */
-    void (*optional)(Visitor *v, const char *name, bool *present);
+    void (*optional)(Visitor *v, const char *name, bool *present);//检查某个选项是否存在
 
     /* Must be set */
     VisitorType type;

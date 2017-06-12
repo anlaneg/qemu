@@ -711,6 +711,7 @@ out:
     return ret;
 }
 
+//vhost-user初始化
 static int vhost_user_init(struct vhost_dev *dev, void *opaque)
 {
     uint64_t features, protocol_features;
@@ -803,6 +804,7 @@ static int vhost_user_cleanup(struct vhost_dev *dev)
     return 0;
 }
 
+//返回虚队列index
 static int vhost_user_get_vq_index(struct vhost_dev *dev, int idx)
 {
     assert(idx >= dev->vq_index && idx < dev->vq_index + dev->nvqs);
@@ -918,6 +920,7 @@ static void vhost_user_set_iotlb_callback(struct vhost_dev *dev, int enabled)
     /* No-op as the receive channel is not dedicated to IOTLB messages. */
 }
 
+//vhost-user时挂接的操作集
 const VhostOps user_ops = {
         .backend_type = VHOST_BACKEND_TYPE_USER,
         .vhost_backend_init = vhost_user_init,

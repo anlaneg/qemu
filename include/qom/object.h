@@ -395,10 +395,10 @@ struct ObjectClass
 struct Object
 {
     /*< private >*/
-    ObjectClass *class;
+    ObjectClass *class;//对象所属的class
     ObjectFree *free;
-    GHashTable *properties;
-    uint32_t ref;
+    GHashTable *properties;//对象的属性表
+    uint32_t ref;//对象的引用计数
     Object *parent;
 };
 

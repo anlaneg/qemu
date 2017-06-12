@@ -570,11 +570,12 @@ static int default_driver_check(void *opaque, QemuOpts *opts, Error **errp)
     int i;
 
     if (!driver)
+    	//如果没有配置driver,则通过
         return 0;
     for (i = 0; i < ARRAY_SIZE(default_list); i++) {
         if (strcmp(default_list[i].driver, driver) != 0)
             continue;
-        *(default_list[i].flag) = 0;
+        *(default_list[i].flag) = 0;//遇到相应driver，修改flag
     }
     return 0;
 }
@@ -1216,6 +1217,7 @@ static QemuOptsList qemu_smp_opts = {
 static void smp_parse(QemuOpts *opts)
 {
     if (opts) {
+    	//取配置中关于cpu,socket,cores的配置
         unsigned cpus    = qemu_opt_get_number(opts, "cpus", 0);
         unsigned sockets = qemu_opt_get_number(opts, "sockets", 0);
         unsigned cores   = qemu_opt_get_number(opts, "cores", 0);
@@ -1223,11 +1225,11 @@ static void smp_parse(QemuOpts *opts)
 
         /* compute missing values, prefer sockets over cores over threads */
         if (cpus == 0 || sockets == 0) {
-            sockets = sockets > 0 ? sockets : 1;
-            cores = cores > 0 ? cores : 1;
-            threads = threads > 0 ? threads : 1;
+            sockets = sockets > 0 ? sockets : 1;//将socket由0改为1
+            cores = cores > 0 ? cores : 1;//将core最小置为1
+            threads = threads > 0 ? threads : 1;//将线程最小置为1
             if (cpus == 0) {
-                cpus = cores * threads * sockets;
+                cpus = cores * threads * sockets;//如果cpus未指定，则计算
             }
         } else if (cores == 0) {
             threads = threads > 0 ? threads : 1;
@@ -1259,6 +1261,7 @@ static void smp_parse(QemuOpts *opts)
             exit(1);
         }
 
+        //设置全局变量
         smp_cpus = cpus;
         smp_cores = cores;
         smp_threads = threads;
@@ -2345,6 +2348,7 @@ static int device_init_func(void *opaque, QemuOpts *opts, Error **errp)
     return 0;
 }
 
+//chardev初始化函数
 static int chardev_init_func(void *opaque, QemuOpts *opts, Error **errp)
 {
     Error *local_err = NULL;
@@ -2880,13 +2884,14 @@ static void set_memory_options(uint64_t *ram_slots, ram_addr_t *maxram_size,
     qemu_opts_loc_restore(opts);
 
     sz = 0;
-    mem_str = qemu_opt_get(opts, "size");
+    mem_str = qemu_opt_get(opts, "size");//取内存大小
     if (mem_str) {
         if (!*mem_str) {
             error_report("missing 'size' option value");
             exit(EXIT_FAILURE);
         }
 
+        //取内存大小，直接转为整数返回
         sz = qemu_opt_get_size(opts, "size", ram_size);
 
         /* Fix up legacy suffix-less format */
@@ -2906,14 +2911,16 @@ static void set_memory_options(uint64_t *ram_slots, ram_addr_t *maxram_size,
         sz = default_ram_size;
     }
 
-    sz = QEMU_ALIGN_UP(sz, 8192);
+    sz = QEMU_ALIGN_UP(sz, 8192);//对齐到8192
     ram_size = sz;
+    //防止32位机器上地址超限
     if (ram_size != sz) {
         error_report("ram size too large");
         exit(EXIT_FAILURE);
     }
 
     /* store value for the future use */
+    //更改内存大小
     qemu_opt_set_number(opts, "size", ram_size, &error_abort);
     *maxram_size = ram_size;
 
@@ -3046,7 +3053,7 @@ int main(int argc, char **argv, char **envp)
     qemu_add_drive_opts(&qemu_common_drive_opts);
     qemu_add_drive_opts(&qemu_drive_opts);
     qemu_add_drive_opts(&bdrv_runtime_opts);
-    qemu_add_opts(&qemu_chardev_opts);
+    qemu_add_opts(&qemu_chardev_opts);//加入chardev的opts
     qemu_add_opts(&qemu_device_opts);
     qemu_add_opts(&qemu_netdev_opts);
     qemu_add_opts(&qemu_net_opts);
@@ -3134,8 +3141,10 @@ int main(int argc, char **argv, char **envp)
         } else {
             const QEMUOption *popt;
 
+            //找到与argv[optind]指明的选项
             popt = lookup_opt(argc, argv, &optarg, &optind);
             if (!(popt->arch_mask & arch_type)) {
+            	//此选项不能用于本arch_type
                 error_report("Option not supported for this target");
                 exit(1);
             }
@@ -3279,7 +3288,7 @@ int main(int argc, char **argv, char **envp)
                 error_report("'-hdachs' is deprecated, please use '-device"
                              " ide-hd,cyls=c,heads=h,secs=s,...' instead");
                 break;
-            case QEMU_OPTION_numa:
+            case QEMU_OPTION_numa://-numa
                 opts = qemu_opts_parse_noisily(qemu_find_opts("numa"),
                                                optarg, true);
                 if (!opts) {
@@ -3404,7 +3413,7 @@ int main(int argc, char **argv, char **envp)
                 version();
                 exit(0);
                 break;
-            case QEMU_OPTION_m:
+            case QEMU_OPTION_m://-m选项处理 （将size＝$optarg存入)
                 opts = qemu_opts_parse_noisily(qemu_find_opts("memory"),
                                                optarg, true);
                 if (!opts) {
@@ -3421,7 +3430,7 @@ int main(int argc, char **argv, char **envp)
             case QEMU_OPTION_mempath:
                 mem_path = optarg;
                 break;
-            case QEMU_OPTION_mem_prealloc:
+            case QEMU_OPTION_mem_prealloc://-mem-prealloc
                 mem_prealloc = 1;
                 break;
             case QEMU_OPTION_d:
@@ -3737,9 +3746,9 @@ int main(int argc, char **argv, char **envp)
                     exit(1);
                 }
                 break;
-            case QEMU_OPTION_enable_kvm:
+            case QEMU_OPTION_enable_kvm://-enable-kvm选项处理
                 olist = qemu_find_opts("machine");
-                qemu_opts_parse_noisily(olist, "accel=kvm", false);
+                qemu_opts_parse_noisily(olist, "accel=kvm", false);//将accel=kvm参数加入machine，并解析
                 break;
             case QEMU_OPTION_enable_hax:
                 olist = qemu_find_opts("machine");
@@ -3799,13 +3808,13 @@ int main(int argc, char **argv, char **envp)
                 qemu_opts_parse_noisily(olist, "usb=on", false);
                 add_device_config(DEV_USB, optarg);
                 break;
-            case QEMU_OPTION_device:
+            case QEMU_OPTION_device://-device 选项处理，将driver=$optarg加入
                 if (!qemu_opts_parse_noisily(qemu_find_opts("device"),
                                              optarg, true)) {
                     exit(1);
                 }
                 break;
-            case QEMU_OPTION_smp:
+            case QEMU_OPTION_smp://-smp选项处理， 将cpus=$optarg加入
                 if (!qemu_opts_parse_noisily(qemu_find_opts("smp-opts"),
                                              optarg, true)) {
                     exit(1);
@@ -4057,7 +4066,7 @@ int main(int argc, char **argv, char **envp)
                 exit(1);
 #endif
                 break;
-            case QEMU_OPTION_object:
+            case QEMU_OPTION_object://-object
                 opts = qemu_opts_parse_noisily(qemu_find_opts("object"),
                                                optarg, true);
                 if (!opts) {
@@ -4144,6 +4153,7 @@ int main(int argc, char **argv, char **envp)
     }
 #endif
 
+    //构造machine实例
     current_machine = MACHINE(object_new(object_class_get_name(
                           OBJECT_CLASS(machine_class))));
     if (machine_help_func(qemu_get_machine_opts(), current_machine)) {
@@ -4490,6 +4500,7 @@ int main(int argc, char **argv, char **envp)
 
     colo_info_init();
 
+    //netdev前端初始化
     if (net_init_clients() < 0) {
         exit(1);
     }

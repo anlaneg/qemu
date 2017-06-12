@@ -38,23 +38,28 @@ void visit_free(Visitor *v)
     }
 }
 
+//调用start_struct
 void visit_start_struct(Visitor *v, const char *name, void **obj,
                         size_t size, Error **errp)
 {
     Error *err = NULL;
 
-    trace_visit_start_struct(v, name, obj, size);
+    trace_visit_start_struct(v, name, obj, size);//log显示
     if (obj) {
+    	//如果要返回obj,size必须为非0
         assert(size);
         assert(!(v->type & VISITOR_OUTPUT) || *obj);
     }
+    //调用start回调
     v->start_struct(v, name, obj, size, &err);
     if (obj && (v->type & VISITOR_INPUT)) {
         assert(!err != !*obj);
     }
+    //错误处理（如果有的话）
     error_propagate(errp, err);
 }
 
+//调用check_struct回调，检查结构体
 void visit_check_struct(Visitor *v, Error **errp)
 {
     trace_visit_check_struct(v);
@@ -63,6 +68,7 @@ void visit_check_struct(Visitor *v, Error **errp)
     }
 }
 
+//调用end_struct回调
 void visit_end_struct(Visitor *v, void **obj)
 {
     trace_visit_end_struct(v, obj);
@@ -130,13 +136,14 @@ void visit_end_alternate(Visitor *v, void **obj)
     }
 }
 
+//检查选项名name是否存在
 bool visit_optional(Visitor *v, const char *name, bool *present)
 {
     trace_visit_optional(v, name, present);
     if (v->optional) {
         v->optional(v, name, present);
     }
-    return *present;
+    return *present;//通过true,false表示是否存在
 }
 
 bool visit_is_input(Visitor *v)
@@ -286,6 +293,7 @@ void visit_type_bool(Visitor *v, const char *name, bool *obj, Error **errp)
     v->type_bool(v, name, obj, errp);
 }
 
+//调用type_str解析字符串类型
 void visit_type_str(Visitor *v, const char *name, char **obj, Error **errp)
 {
     Error *err = NULL;
@@ -331,6 +339,7 @@ void visit_type_null(Visitor *v, const char *name, Error **errp)
     v->type_null(v, name, errp);
 }
 
+//按枚举类型，将枚举值转换为字符串形式
 static void output_type_enum(Visitor *v, const char *name, int *obj,
                              const char *const strings[], Error **errp)
 {
@@ -348,6 +357,7 @@ static void output_type_enum(Visitor *v, const char *name, int *obj,
     visit_type_str(v, name, &enum_str, errp);
 }
 
+//按枚举字符串填充obj
 static void input_type_enum(Visitor *v, const char *name, int *obj,
                             const char *const strings[], Error **errp)
 {
@@ -355,12 +365,14 @@ static void input_type_enum(Visitor *v, const char *name, int *obj,
     int64_t value = 0;
     char *enum_str;
 
+    //取出name的选项值，存入enum_str
     visit_type_str(v, name, &enum_str, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         return;
     }
 
+    //遍历strings表，查看配置的值是否在string表中
     while (strings[value] != NULL) {
         if (strcmp(strings[value], enum_str) == 0) {
             break;
@@ -368,6 +380,7 @@ static void input_type_enum(Visitor *v, const char *name, int *obj,
         value++;
     }
 
+    //不在strings表中，报错
     if (strings[value] == NULL) {
         error_setg(errp, QERR_INVALID_PARAMETER, enum_str);
         g_free(enum_str);
@@ -375,9 +388,10 @@ static void input_type_enum(Visitor *v, const char *name, int *obj,
     }
 
     g_free(enum_str);
-    *obj = value;
+    *obj = value;//在string表中，使用string表的索引（即枚举值）
 }
 
+//解析枚举类型
 void visit_type_enum(Visitor *v, const char *name, int *obj,
                      const char *const strings[], Error **errp)
 {

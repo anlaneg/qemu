@@ -409,7 +409,7 @@ static void char_class_init(ObjectClass *oc, void *data)
 {
     ChardevClass *cc = CHARDEV_CLASS(oc);
 
-    cc->chr_write = null_chr_write;
+    cc->chr_write = null_chr_write;//挂载null write
 }
 
 static void char_finalize(Object *obj)
@@ -496,12 +496,12 @@ bool qemu_chr_fe_init(CharBackend *b, Chardev *s, Error **errp)
     } else if (s->be) {
         goto unavailable;
     } else {
-        s->be = b;
+        s->be = b;//将s的后端设置为b
     }
 
     b->fe_open = false;
     b->tag = tag;
-    b->chr = s;
+    b->chr = s;//设置其对应的字符设备
     return true;
 
 unavailable:
@@ -597,6 +597,7 @@ void qemu_chr_fe_take_focus(CharBackend *b)
     }
 }
 
+//调用字符设备的chr_wait_connected回调
 int qemu_chr_wait_connected(Chardev *chr, Error **errp)
 {
     ChardevClass *cc = CHARDEV_GET_CLASS(chr);
@@ -868,7 +869,7 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts,
     Chardev *chr;
     int i;
     ChardevBackend *backend = NULL;
-    const char *name = qemu_opt_get(opts, "backend");
+    const char *name = qemu_opt_get(opts, "backend");//支持多种取值，例如'socket'
     const char *id = qemu_opts_id(opts);
     char *bid = NULL;
 
@@ -904,7 +905,7 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts,
         }
     }
 
-    //加载对应驱动
+    //加载对应驱动(例如char_socket_class_init函数返回的cc)
     cc = char_get_class(name, errp);
     if (cc == NULL) {
         return NULL;
@@ -919,13 +920,14 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts,
 
     chr = NULL;
     if (cc->parse) {
-    	//解析命令行
+    	//解析命令行，填充backend
         cc->parse(opts, backend, &local_err);
         if (local_err) {
             error_propagate(errp, local_err);
             goto out;
         }
     } else {
+    	//没有parse时，解析公共命令行
         ChardevCommon *ccom = g_new0(ChardevCommon, 1);
         qemu_chr_parse_common(opts, ccom);
         backend->u.null.data = ccom; /* Any ChardevCommon member would work */

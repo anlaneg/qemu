@@ -92,13 +92,13 @@ struct NetClientState {
     int link_down;
     QTAILQ_ENTRY(NetClientState) next;
     NetClientState *peer;
-    NetQueue *incoming_queue;
-    char *model;
+    NetQueue *incoming_queue;//队列
+    char *model;//作用不明，取值比如"vhost_user"
     char *name;
     char info_str[256];
     unsigned receive_disabled : 1;
     NetClientDestructor *destructor;//nc释放时调用
-    unsigned int queue_index;
+    unsigned int queue_index;//队列索引
     unsigned rxfilter_notify_enabled:1;
     int vring_enable;
     QTAILQ_HEAD(NetFilterHead, NetFilterState) filters;

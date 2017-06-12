@@ -921,6 +921,7 @@ static int unix_connect_saddr(UnixSocketAddress *saddr,
         return -1;
     }
 
+    //创建socket
     sock = qemu_socket(PF_UNIX, SOCK_STREAM, 0);
     if (sock < 0) {
         error_setg_errno(errp, errno, "Failed to create socket");
@@ -949,6 +950,7 @@ static int unix_connect_saddr(UnixSocketAddress *saddr,
 
     if (connect_state != NULL && QEMU_SOCKET_RC_INPROGRESS(rc)) {
         connect_state->fd = sock;
+        //读写处理
         qemu_set_fd_handler(sock, NULL, wait_for_connect, connect_state);
         return sock;
     } else if (rc >= 0) {
@@ -1083,6 +1085,7 @@ int socket_connect(SocketAddress *addr, NonBlockingConnectHandler *callback,
         break;
 
     case SOCKET_ADDRESS_TYPE_UNIX:
+    	//unix socket连接
         fd = unix_connect_saddr(&addr->u.q_unix, callback, opaque, errp);
         break;
 

@@ -756,6 +756,7 @@ static gboolean tcp_chr_accept(QIOChannel *channel,
     return TRUE;
 }
 
+//unix socket时等待连接函数
 static int tcp_chr_wait_connected(Chardev *chr, Error **errp)
 {
     SocketChardev *s = SOCKET_CHARDEV(chr);
@@ -771,6 +772,7 @@ static int tcp_chr_wait_connected(Chardev *chr, Error **errp)
             tcp_chr_accept(QIO_CHANNEL(s->listen_ioc), G_IO_IN, chr);
             qio_channel_set_blocking(QIO_CHANNEL(s->listen_ioc), false, NULL);
         } else {
+        	//自已是客户端，与对端s->addr进行连接
             sioc = qio_channel_socket_new();
             tcp_chr_set_client_ioc_name(chr, sioc);
             if (qio_channel_socket_connect_sync(sioc, s->addr, errp) < 0) {
@@ -852,22 +854,24 @@ static gboolean socket_reconnect_timeout(gpointer opaque)
     return false;
 }
 
+//socket类型open时调用
 static void qmp_chardev_open_socket(Chardev *chr,
                                     ChardevBackend *backend,
                                     bool *be_opened,
                                     Error **errp)
 {
-    SocketChardev *s = SOCKET_CHARDEV(chr);
-    ChardevSocket *sock = backend->u.socket.data;
+    SocketChardev *s = SOCKET_CHARDEV(chr);//强转为子类
+    ChardevSocket *sock = backend->u.socket.data;//由命令行解析来的对象
     bool do_nodelay     = sock->has_nodelay ? sock->nodelay : false;
     bool is_listen      = sock->has_server  ? sock->server  : true;
     bool is_telnet      = sock->has_telnet  ? sock->telnet  : false;
     bool is_tn3270      = sock->has_tn3270  ? sock->tn3270  : false;
     bool is_waitconnect = sock->has_wait    ? sock->wait    : false;
-    int64_t reconnect   = sock->has_reconnect ? sock->reconnect : 0;
+    int64_t reconnect   = sock->has_reconnect ? sock->reconnect : 0;//是否支持重连
     QIOChannelSocket *sioc = NULL;
     SocketAddress *addr;
 
+    //将命令行解析来的对象，填充到socketchardev上
     s->is_listen = is_listen;
     s->is_telnet = is_telnet;
     s->is_tn3270 = is_tn3270;
@@ -910,6 +914,7 @@ static void qmp_chardev_open_socket(Chardev *chr,
     qemu_chr_set_feature(chr, QEMU_CHAR_FEATURE_RECONNECTABLE);
     /* TODO SOCKET_ADDRESS_FD where fd has AF_UNIX */
     if (addr->type == SOCKET_ADDRESS_TYPE_UNIX) {
+    	//设置fd_pass标记
         qemu_chr_set_feature(chr, QEMU_CHAR_FEATURE_FD_PASS);
     }
 
@@ -959,8 +964,8 @@ static void qmp_chardev_open_socket(Chardev *chr,
                     QIO_CHANNEL(s->listen_ioc), G_IO_IN,
                     tcp_chr_accept, chr, NULL);
             }
-        } else if (qemu_chr_wait_connected(chr, errp) < 0) {
-            goto error;
+        } else if (qemu_chr_wait_connected(chr, errp) < 0) {//与对端建立连接
+            goto error;//未连接成功时进入
         }
     }
 
@@ -989,7 +994,8 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
     SocketAddressLegacy *addr;
     ChardevSocket *sock;
 
-    backend->type = CHARDEV_BACKEND_KIND_SOCKET;
+    backend->type = CHARDEV_BACKEND_KIND_SOCKET;//设置backend类型
+    //参数有效性检查
     if (!path) {
         if (!host) {
             error_setg(errp, "chardev: socket: no host given");
@@ -1006,13 +1012,14 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
         }
     }
 
+    //创建socket方式需要的内存(填充backend->u.socket.data)
     sock = backend->u.socket.data = g_new0(ChardevSocket, 1);
     qemu_chr_parse_common(opts, qapi_ChardevSocket_base(sock));
 
     sock->has_nodelay = true;
     sock->nodelay = do_nodelay;
     sock->has_server = true;
-    sock->server = is_listen;
+    sock->server = is_listen;//标记是否为server
     sock->has_telnet = true;
     sock->telnet = is_telnet;
     sock->has_tn3270 = true;
@@ -1025,6 +1032,7 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
 
     addr = g_new0(SocketAddressLegacy, 1);
     if (path) {
+    	//给定path的情况
         UnixSocketAddress *q_unix;
         addr->type = SOCKET_ADDRESS_LEGACY_KIND_UNIX;
         q_unix = addr->u.q_unix.data = g_new0(UnixSocketAddress, 1);
@@ -1043,6 +1051,7 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
             .ipv6 = qemu_opt_get_bool(opts, "ipv6", 0),
         };
     }
+    //设置socket地址
     sock->addr = addr;
 }
 
@@ -1067,8 +1076,8 @@ static void char_socket_class_init(ObjectClass *oc, void *data)
 {
     ChardevClass *cc = CHARDEV_CLASS(oc);
 
-    cc->parse = qemu_chr_parse_socket;
-    cc->open = qmp_chardev_open_socket;
+    cc->parse = qemu_chr_parse_socket;//解析命令行
+    cc->open = qmp_chardev_open_socket;//打开字符文件
     cc->chr_wait_connected = tcp_chr_wait_connected;
     cc->chr_write = tcp_chr_write;
     cc->chr_sync_read = tcp_chr_sync_read;
@@ -1095,7 +1104,7 @@ static const TypeInfo char_socket_type_info = {
     .class_init = char_socket_class_init,
 };
 
-//注册类型
+//char_socket_type_info类型注册
 static void register_types(void)
 {
     type_register_static(&char_socket_type_info);

@@ -140,7 +140,7 @@ int qio_channel_socket_connect_sync(QIOChannelSocket *ioc,
     int fd;
 
     trace_qio_channel_socket_connect_sync(ioc, addr);
-    fd = socket_connect(addr, NULL, NULL, errp);
+    fd = socket_connect(addr, NULL, NULL, errp);//与对端建立连接
     if (fd < 0) {
         trace_qio_channel_socket_connect_fail(ioc);
         return -1;

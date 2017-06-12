@@ -240,14 +240,15 @@ static void net_vhost_user_event(void *opaque, int event)
     trace_vhost_user_event(chr->label, event);
     switch (event) {
     case CHR_EVENT_OPENED:
+    	//连接成功后
         if (vhost_user_start(queues, ncs, &s->chr) < 0) {
             qemu_chr_fe_disconnect(&s->chr);
             return;
         }
         s->watch = qemu_chr_fe_add_watch(&s->chr, G_IO_HUP,
                                          net_vhost_user_watch, s);
-        qmp_set_link(name, true, &err);
-        s->started = true;
+        qmp_set_link(name, true, &err);//设置link up
+        s->started = true;//设备启动
         break;
     case CHR_EVENT_CLOSED:
         /* a close event may happen during a read/write, but vhost
@@ -285,12 +286,14 @@ static int net_vhost_user_init(NetClientState *peer, const char *device,
     assert(name);
     assert(queues > 0);
 
+    //初始化多个队列
     for (i = 0; i < queues; i++) {
         nc = qemu_new_net_client(&net_vhost_user_info, peer, device, name);
         snprintf(nc->info_str, sizeof(nc->info_str), "vhost-user%d to %s",
                  i, chr->label);
         nc->queue_index = i;
         if (!nc0) {
+        	//首个nc
             nc0 = nc;
             s = DO_UPCAST(VhostUserState, nc, nc);
             if (!qemu_chr_fe_init(&s->chr, chr, &err)) {
@@ -303,6 +306,7 @@ static int net_vhost_user_init(NetClientState *peer, const char *device,
 
     s = DO_UPCAST(VhostUserState, nc, nc0);
     do {
+    	//等待与服务端或客户端建立连接
         if (qemu_chr_fe_wait_connected(&s->chr, &err) < 0) {
             error_report_err(err);
             return -1;
@@ -319,8 +323,10 @@ static int net_vhost_user_init(NetClientState *peer, const char *device,
 static Chardev *net_vhost_claim_chardev(
     const NetdevVhostUserOptions *opts, Error **errp)
 {
+	//取出选项指明的chardev
     Chardev *chr = qemu_chr_find(opts->chardev);
 
+    //chardev不存在，报错
     if (chr == NULL) {
         error_setg(errp, "chardev \"%s\" not found", opts->chardev);
         return NULL;
@@ -351,10 +357,12 @@ static int net_vhost_check_net(void *opaque, QemuOpts *opts, Error **errp)
     driver = qemu_opt_get(opts, "driver");
     netdev = qemu_opt_get(opts, "netdev");
 
+    //没有指定netdev的不看
     if (!driver || !netdev) {
         return 0;
     }
 
+    //vhost-user要求前端driver是virtio-net-X
     if (strcmp(netdev, name) == 0 &&
         !g_str_has_prefix(driver, "virtio-net-")) {
         error_setg(errp, "vhost-user requires frontend driver virtio-net-*");
@@ -374,12 +382,14 @@ int net_init_vhost_user(const Netdev *netdev, const char *name,
     assert(netdev->type == NET_CLIENT_DRIVER_VHOST_USER);
     vhost_user_opts = &netdev->u.vhost_user;
 
+    //取得此opts指定的chardev
     chr = net_vhost_claim_chardev(vhost_user_opts, errp);
     if (!chr) {
         return -1;
     }
 
     /* verify net frontend */
+    //遍历device选项，检查本dev对应的那一条device,是否正确使用前端driver
     if (qemu_opts_foreach(qemu_find_opts("device"), net_vhost_check_net,
                           (char *)name, errp)) {
         return -1;

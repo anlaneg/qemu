@@ -720,10 +720,12 @@ ssize_t qemu_deliver_packet_iov(NetClientState *sender,
     NetClientState *nc = opaque;
     int ret;
 
+    //如果link down,返回数据长度
     if (nc->link_down) {
         return iov_size(iov, iovcnt);
     }
 
+    //如果禁止收，返回0
     if (nc->receive_disabled) {
         return 0;
     }
@@ -979,9 +981,9 @@ static int net_client_init1(const void *object, bool is_netdev, Error **errp)
         netdev = object;
         name = netdev->id;
 
+        //对没有init_fun的报错（DUMP,NIC强制报错）
         if (netdev->type == NET_CLIENT_DRIVER_DUMP ||
             netdev->type == NET_CLIENT_DRIVER_NIC ||
-			//依据netdev在类型，调用不同的网络设备初始化函数
             !net_client_init_fun[netdev->type]) {
             error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "type",
                        "a netdev backend type");
@@ -1062,6 +1064,7 @@ static int net_client_init1(const void *object, bool is_netdev, Error **errp)
         }
     }
 
+    //按不同netdev类型，进行初始化
     if (net_client_init_fun[netdev->type](netdev, name, peer, errp) < 0) {
         /* FIXME drop when all init functions store an Error */
         if (errp && !*errp) {
@@ -1083,6 +1086,7 @@ int net_client_init(QemuOpts *opts, bool is_netdev, Error **errp)
 
     {
         /* Parse convenience option format ip6-net=fec0::0[/64] */
+    	//ipv6处理
         const char *ip6_net = qemu_opt_get(opts, "ipv6-net");
 
         if (ip6_net) {
@@ -1113,13 +1117,14 @@ int net_client_init(QemuOpts *opts, bool is_netdev, Error **errp)
     }
 
     if (is_netdev) {
-    	//-netdev类型配置处理(依据配置生成对应的netdev)
+    	//-netdev类型配置处理(依据配置解析并填充生成对应的netdev对象)
         visit_type_Netdev(v, NULL, (Netdev **)&object, &err);
     } else {
         visit_type_NetLegacy(v, NULL, (NetLegacy **)&object, &err);
     }
 
     if (!err) {
+    	//将构造好的对应传入
         ret = net_client_init1(object, is_netdev, &err);
     }
 
@@ -1411,6 +1416,7 @@ void qmp_set_link(const char *name, bool up, Error **errp)
         ncs[i]->link_down = !up;
     }
 
+    //触发链路状态变化
     if (nc->info->link_status_changed) {
         nc->info->link_status_changed(nc);
     }
@@ -1524,8 +1530,10 @@ static int net_init_netdev(void *dummy, QemuOpts *opts, Error **errp)
     Error *local_err = NULL;
     int ret;
 
+    //传入is_netdev为true
     ret = net_client_init(opts, true, &local_err);
     if (local_err) {
+    	//如果初始化有error，则报错，并返回失败
         error_report_err(local_err);
         return -1;
     }
@@ -1535,8 +1543,10 @@ static int net_init_netdev(void *dummy, QemuOpts *opts, Error **errp)
 
 int net_init_clients(void)
 {
+	//查找-net的所有配置
     QemuOptsList *net = qemu_find_opts("net");
 
+    //注册虚拟机状态变化时的回调（主要是清空报文队列）
     net_change_state_entry =
         qemu_add_vm_change_state_handler(net_vm_change_state_handler, NULL);
 
@@ -1548,6 +1558,7 @@ int net_init_clients(void)
         return -1;
     }
 
+    //针对每个-net选项，调用net初始化
     if (qemu_opts_foreach(net, net_init_client, NULL, NULL)) {
         return -1;
     }

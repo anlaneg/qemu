@@ -842,6 +842,7 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
         	//没有等号，或者下一个选项有‘＝’号
             /* found "foo,more" */
             if (p == params && firstname) {
+            	//如果支持firstname这种设置，则将key设置为firstname,将值置为P
                 /* implicitly named first option */
                 pstrcpy(option, sizeof(option), firstname);//将firstname做为option
                 p = get_opt_value(value, sizeof(value), p);//将p做为value
@@ -869,7 +870,7 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
             p = get_opt_value(value, sizeof(value), p);
         }
 
-        //如果option不是id,则加入此选项
+        //如果option不是id,则加入此选项（id选项不被加入）
         if (strcmp(option, "id") != 0) {
             /* store and parse */
             opt_set(opts, option, value, prepend, &local_err);
@@ -906,6 +907,7 @@ static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
     QemuOpts *opts;
     Error *local_err = NULL;
 
+    //如果支持缩写，则使用implied_opt_name值为默认缩写名称
     assert(!permit_abbrev || list->implied_opt_name);
     firstname = permit_abbrev ? list->implied_opt_name : NULL;
 
@@ -926,7 +928,7 @@ static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
      * (if unlikely) future misuse:
      */
     assert(!defaults || list->merge_lists);
-    opts = qemu_opts_create(list, id, !defaults, &local_err);
+    opts = qemu_opts_create(list, id, !defaults, &local_err);//生成opts
     if (opts == NULL) {
         error_propagate(errp, local_err);
         return NULL;
@@ -1165,6 +1167,7 @@ int qemu_opts_foreach(QemuOptsList *list, qemu_opts_loopfunc func,
         loc_restore(&opts->loc);
         rc = func(opaque, opts, errp);//针对每一个opts，调用函数func
         if (rc) {
+        	//如果调用失败，则不再继续
             break;
         }
         assert(!errp || !*errp);

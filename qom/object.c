@@ -55,8 +55,8 @@ struct TypeImpl
 
     void *class_data;
 
-    void (*instance_init)(Object *obj);
-    void (*instance_post_init)(Object *obj);
+    void (*instance_init)(Object *obj);//实例化对象时，自父类型向下初始化实例
+    void (*instance_post_init)(Object *obj);//实例化对象时，自子类型向上初始化实例
     void (*instance_finalize)(Object *obj);
 
     bool abstract;
@@ -145,7 +145,7 @@ static TypeImpl *type_new(const TypeInfo *info)
 static TypeImpl *type_register_internal(const TypeInfo *info)
 {
     TypeImpl *ti;
-    ti = type_new(info);//创建ti
+    ti = type_new(info);//由info创建ti
 
     type_table_add(ti);//加入hash表中
     return ti;
@@ -196,13 +196,15 @@ static bool type_has_parent(TypeImpl *type)
 static size_t type_class_get_size(TypeImpl *ti)
 {
     if (ti->class_size) {
-        return ti->class_size;
+        return ti->class_size;//如果自身有class_size，则使用
     }
 
+    //否则尝试使用父节点的class_size
     if (type_has_parent(ti)) {
         return type_class_get_size(type_get_parent(ti));
     }
 
+    //如果没有父节点，则使用objectclass
     return sizeof(ObjectClass);
 }
 
@@ -283,7 +285,7 @@ static void object_property_free(gpointer data)
     g_free(prop);
 }
 
-//type初始化
+//type初始化（可简单理解为对象的初始化，通过memcpy父类初始化好的内存来实现）
 //先调基类的class_init,再调class_base_init{到达下层后又会调回来}
 static void type_initialize(TypeImpl *ti)
 {
@@ -309,14 +311,14 @@ static void type_initialize(TypeImpl *ti)
 
     parent = type_get_parent(ti);
     if (parent) {
-    		//递归实例化父类
+    	//递归实例化父类
         type_initialize(parent);
         GSList *e;
         int i;
 
         //将父类型实例化好的数据copy到自身class上来
         g_assert_cmpint(parent->class_size, <=, ti->class_size);
-        memcpy(ti->class, parent->class, parent->class_size);
+        memcpy(ti->class, parent->class, parent->class_size);//将父类型创建好的class copy到自身
         ti->class->interfaces = NULL;
         //构造属性表
         ti->class->properties = g_hash_table_new_full(
@@ -349,7 +351,7 @@ static void type_initialize(TypeImpl *ti)
             type_initialize_interface(ti, t, t);
         }
     } else {
-    		//构造基类的属性表
+    	//构造基类的属性表
         ti->class->properties = g_hash_table_new_full(
             g_str_hash, g_str_equal, g_free, object_property_free);
     }
@@ -364,6 +366,7 @@ static void type_initialize(TypeImpl *ti)
         parent = type_get_parent(parent);
     }
 
+    //优先调用父类的class_init,然后再调用本类的class_init
     if (ti->class_init) {
         ti->class_init(ti->class, ti->class_data);
     }
@@ -372,9 +375,11 @@ static void type_initialize(TypeImpl *ti)
 static void object_init_with_type(Object *obj, TypeImpl *ti)
 {
     if (type_has_parent(ti)) {
+    	//递归至父类型执行instance_init
         object_init_with_type(obj, type_get_parent(ti));
     }
 
+    //自父节点向下执行instance_init
     if (ti->instance_init) {
         ti->instance_init(obj);
     }
@@ -382,6 +387,7 @@ static void object_init_with_type(Object *obj, TypeImpl *ti)
 
 static void object_post_init_with_type(Object *obj, TypeImpl *ti)
 {
+	//自底向上调用instance_post_init函数
     if (ti->instance_post_init) {
         ti->instance_post_init(obj);
     }
@@ -396,19 +402,20 @@ static void object_initialize_with_type(void *data, size_t size, TypeImpl *type)
     Object *obj = data;
 
     g_assert(type != NULL);
-    type_initialize(type);
+    type_initialize(type);//防止type的class未初始化
 
+    //可实例化的object都是object的子类，故大小必大于Object
     g_assert_cmpint(type->instance_size, >=, sizeof(Object));
-    g_assert(type->abstract == false);
+    g_assert(type->abstract == false);//可实例化的均不可能是抽象数据结构
     g_assert_cmpint(size, >=, type->instance_size);
 
     memset(obj, 0, type->instance_size);
-    obj->class = type->class;
+    obj->class = type->class;//清0后，指明对象所属的class
     object_ref(obj);
     obj->properties = g_hash_table_new_full(g_str_hash, g_str_equal,
                                             NULL, object_property_free);
-    object_init_with_type(obj, type);
-    object_post_init_with_type(obj, type);
+    object_init_with_type(obj, type);//调用instance_init回调
+    object_post_init_with_type(obj, type);//调用instance_post_init回调
 }
 
 void object_initialize(void *data, size_t size, const char *typename)
@@ -513,9 +520,9 @@ static Object *object_new_with_type(Type type)
     Object *obj;
 
     g_assert(type != NULL);
-    type_initialize(type);
+    type_initialize(type);//初始化类
 
-    obj = g_malloc(type->instance_size);
+    obj = g_malloc(type->instance_size);//为object申请内存
     object_initialize_with_type(obj, type->instance_size, type);
     obj->free = g_free;
 
@@ -812,7 +819,7 @@ ObjectClass *object_class_by_name(const char *typename)
         return NULL;
     }
 
-    type_initialize(type);
+    type_initialize(type);//初始化此类型的class
 
     return type->class;
 }

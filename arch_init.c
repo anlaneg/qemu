@@ -83,6 +83,7 @@ int graphic_depth = 32;
 #define QEMU_ARCH QEMU_ARCH_TRICORE
 #endif
 
+//常量表明本qemu用于模拟那种体系
 const uint32_t arch_type = QEMU_ARCH;
 
 int kvm_available(void)

@@ -44,22 +44,24 @@ struct NetPacket {
     QTAILQ_ENTRY(NetPacket) entry;
     NetClientState *sender;
     unsigned flags;
-    int size;
+    int size;//报文大小
     NetPacketSent *sent_cb;
-    uint8_t data[0];
+    uint8_t data[0];//报文内容
 };
 
+//队列
 struct NetQueue {
     void *opaque;
-    uint32_t nq_maxlen;
-    uint32_t nq_count;
+    uint32_t nq_maxlen;//队列最大大小
+    uint32_t nq_count;//队列中缓存的报文数
     NetQueueDeliverFunc *deliver;
 
-    QTAILQ_HEAD(packets, NetPacket) packets;
+    QTAILQ_HEAD(packets, NetPacket) packets;//缓存的报文
 
     unsigned delivering : 1;
 };
 
+//新建一个队列
 NetQueue *qemu_new_net_queue(NetQueueDeliverFunc *deliver, void *opaque)
 {
     NetQueue *queue;
@@ -107,7 +109,7 @@ static void qemu_net_queue_append(NetQueue *queue,
     packet->flags = flags;
     packet->size = size;
     packet->sent_cb = sent_cb;
-    memcpy(packet->data, buf, size);
+    memcpy(packet->data, buf, size);//将报文copy进buffer
 
     queue->nq_count++;
     QTAILQ_INSERT_TAIL(&queue->packets, packet, entry);
@@ -161,7 +163,7 @@ static ssize_t qemu_net_queue_deliver(NetQueue *queue,
     };
 
     queue->delivering = 1;
-    ret = queue->deliver(sender, flags, &iov, 1, queue->opaque);
+    ret = queue->deliver(sender, flags, &iov, 1, queue->opaque);//投递报文（返回0表示没有投递出去）
     queue->delivering = 0;
 
     return ret;
@@ -198,10 +200,12 @@ ssize_t qemu_net_queue_send(NetQueue *queue,
 
     ret = qemu_net_queue_deliver(queue, sender, flags, data, size);
     if (ret == 0) {
+    	//缓存报文
         qemu_net_queue_append(queue, sender, flags, data, size, sent_cb);
         return 0;
     }
 
+    //尝试着刷缓冲
     qemu_net_queue_flush(queue);
 
     return ret;
@@ -263,12 +267,14 @@ bool qemu_net_queue_flush(NetQueue *queue)
                                      packet->flags,
                                      packet->data,
                                      packet->size);
+        //没有转发出去，重新入队到队头
         if (ret == 0) {
             queue->nq_count++;
             QTAILQ_INSERT_HEAD(&queue->packets, packet, entry);
             return false;
         }
 
+        //发成成功，调用回调
         if (packet->sent_cb) {
             packet->sent_cb(packet->sender, ret);
         }

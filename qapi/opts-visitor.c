@@ -71,7 +71,7 @@ struct OptsVisitor
      * opts_next_list(). The list must have a struct element type in the
      * schema, with a single mandatory scalar member. */
     ListMode list_mode;
-    GQueue *repeated_opts;
+    GQueue *repeated_opts;//重复性选项，需要多次遍历（采用list回调方式）
 
     /* When parsing a list of repeating options as integers, values of the form
      * "a-b", representing a closed interval, are allowed. Elements in the
@@ -103,6 +103,7 @@ destroy_list(gpointer list)
 }
 
 
+//如果opt对应的name在表unprocessed_opts中不存在，则创建list,并加入，否则仅加入到已存链里
 static void
 opts_visitor_insert(GHashTable *unprocessed_opts, const QemuOpt *opt)
 {
@@ -124,6 +125,7 @@ opts_visitor_insert(GHashTable *unprocessed_opts, const QemuOpt *opt)
 }
 
 
+//创建obj需要的空间，创建unprocessed_opts表，并将opts中的选项逐个加入到unprocessed_opts表中
 static void
 opts_start_struct(Visitor *v, const char *name, void **obj,
                   size_t size, Error **errp)
@@ -132,6 +134,7 @@ opts_start_struct(Visitor *v, const char *name, void **obj,
     const QemuOpt *opt;
 
     if (obj) {
+    	//申请obj需要的空间
         *obj = g_malloc0(size);
     }
     if (ov->depth++ > 0) {
@@ -140,13 +143,15 @@ opts_start_struct(Visitor *v, const char *name, void **obj,
 
     ov->unprocessed_opts = g_hash_table_new_full(&g_str_hash, &g_str_equal,
                                                  NULL, &destroy_list);
+    //遍历opts_root，即某一组选项
     QTAILQ_FOREACH(opt, &ov->opts_root->head, next) {
         /* ensured by qemu-option.c::opts_do_parse() */
-        assert(strcmp(opt->name, "id") != 0);
+        assert(strcmp(opt->name, "id") != 0);//id选项不会被加入
 
         opts_visitor_insert(ov->unprocessed_opts, opt);
     }
 
+    //处理'id‘选项（将id也加入到unprocessed_opts表内）
     if (ov->opts_root->id != NULL) {
         ov->fake_id_opt = g_malloc0(sizeof *ov->fake_id_opt);
 
@@ -169,6 +174,7 @@ opts_check_struct(Visitor *v, Error **errp)
     }
 
     /* we should have processed all (distinct) QemuOpt instances */
+    //所有的选项应已被处理完了
     g_hash_table_iter_init(&iter, ov->unprocessed_opts);
     if (g_hash_table_iter_next(&iter, NULL, (void **)&any)) {
         const QemuOpt *first;
@@ -178,7 +184,7 @@ opts_check_struct(Visitor *v, Error **errp)
     }
 }
 
-
+//资源释放
 static void
 opts_end_struct(Visitor *v, void **obj)
 {
@@ -204,6 +210,7 @@ lookup_distinct(const OptsVisitor *ov, const char *name, Error **errp)
 {
     GQueue *list;
 
+    //自unprocessed_opts表中取出名称为name的选项
     list = g_hash_table_lookup(ov->unprocessed_opts, name);
     if (!list) {
         error_setg(errp, QERR_MISSING_PARAMETER, name);
@@ -224,7 +231,7 @@ opts_start_list(Visitor *v, const char *name, GenericList **list, size_t size,
     assert(list);
     ov->repeated_opts = lookup_distinct(ov, name, errp);
     if (ov->repeated_opts) {
-        ov->list_mode = LM_IN_PROGRESS;
+        ov->list_mode = LM_IN_PROGRESS;//更改访问方式
         *list = g_malloc0(size);
     } else {
         *list = NULL;
@@ -304,7 +311,7 @@ lookup_scalar(const OptsVisitor *ov, const char *name, Error **errp)
         /* the last occurrence of any QemuOpt takes effect when queried by name
          */
         list = lookup_distinct(ov, name, errp);
-        return list ? g_queue_peek_tail(list) : NULL;
+        return list ? g_queue_peek_tail(list) : NULL;//返回最后一个
     }
     assert(ov->list_mode == LM_IN_PROGRESS);
     return g_queue_peek_head(ov->repeated_opts);
@@ -315,6 +322,7 @@ static void
 processed(OptsVisitor *ov, const char *name)
 {
     if (ov->list_mode == LM_NONE) {
+    	//这种模式，将已处理的删除掉
         g_hash_table_remove(ov->unprocessed_opts, name);
         return;
     }
@@ -323,17 +331,21 @@ processed(OptsVisitor *ov, const char *name)
 }
 
 
+//字符串类型解析
 static void
 opts_type_str(Visitor *v, const char *name, char **obj, Error **errp)
 {
     OptsVisitor *ov = to_ov(v);
     const QemuOpt *opt;
 
+    //取出name对应的选项
     opt = lookup_scalar(ov, name, errp);
     if (!opt) {
+    	//不存在此选项obj为NULL
         *obj = NULL;
         return;
     }
+    //如果opt中有字符串，则obj使用此字符串
     *obj = g_strdup(opt->str ? opt->str : "");
     /* Note that we consume a string even if this is called as part of
      * an enum visit that later fails because the string is not a
@@ -508,7 +520,7 @@ opts_type_size(Visitor *v, const char *name, uint64_t *obj, Error **errp)
     processed(ov, name);
 }
 
-
+//检查是否存在选项name,如果有返回present=true,否则返回present=false
 static void
 opts_optional(Visitor *v, const char *name, bool *present)
 {
@@ -543,15 +555,18 @@ opts_visitor_new(const QemuOpts *opts)
 
     ov->visitor.type = VISITOR_INPUT;
 
-    ov->visitor.start_struct = &opts_start_struct;
-    ov->visitor.check_struct = &opts_check_struct;
-    ov->visitor.end_struct   = &opts_end_struct;
+    //结构体解析回调
+    ov->visitor.start_struct = &opts_start_struct;//构建unprocessed表
+    ov->visitor.check_struct = &opts_check_struct;//检查结构体解析是否正确
+    ov->visitor.end_struct   = &opts_end_struct;//资源释放
 
+    //list方式访问
     ov->visitor.start_list = &opts_start_list;
     ov->visitor.next_list  = &opts_next_list;
     ov->visitor.check_list = &opts_check_list;
     ov->visitor.end_list   = &opts_end_list;
 
+    //基础数据类型解析
     ov->visitor.type_int64  = &opts_type_int64;
     ov->visitor.type_uint64 = &opts_type_uint64;
     ov->visitor.type_size   = &opts_type_size;
@@ -564,7 +579,7 @@ opts_visitor_new(const QemuOpts *opts)
     ov->visitor.optional = &opts_optional;
     ov->visitor.free = opts_free;
 
-    ov->opts_root = opts;
+    ov->opts_root = opts;//将选项赋给opts_root
 
     return &ov->visitor;
 }
