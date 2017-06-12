@@ -1,3 +1,5 @@
+
+# encoding:utf-8
 #
 # QAPI helper library
 #
@@ -10,6 +12,7 @@
 #
 # This work is licensed under the terms of the GNU GPL, version 2.
 # See the COPYING file in the top-level directory.
+
 
 import errno
 import getopt
@@ -263,8 +266,7 @@ class QAPIDoc(object):
 class QAPISchemaParser(object):
 
     def __init__(self, fp, previously_included=[], incl_info=None):
-        #文件的绝对地址
-        abs_fname = os.path.abspath(fp.name)
+        abs_fname = os.path.abspath(fp.name) #文件的绝对地址
         #文件名称
         fname = fp.name
         self.fname = fname

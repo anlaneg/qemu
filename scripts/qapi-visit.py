@@ -1,3 +1,4 @@
+# encoding:utf-8
 #
 # QAPI visitor generator
 #
@@ -11,7 +12,6 @@
 #
 # This work is licensed under the terms of the GNU GPL, version 2.
 # See the COPYING file in the top-level directory.
-# encoding:utf-8
 from qapi import *
 
 

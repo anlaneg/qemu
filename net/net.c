@@ -253,6 +253,7 @@ static void qemu_net_client_setup(NetClientState *nc,
     }
 
     if (peer) {
+    	//对端信息维护
         assert(!peer->peer);
         nc->peer = peer;
         peer->peer = nc;

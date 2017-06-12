@@ -137,3 +137,4 @@ trace-ust-all.c
 .autotools
 .pydevproject
 .settings/
+build/

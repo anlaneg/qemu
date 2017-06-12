@@ -32,6 +32,7 @@ typedef struct NICPeers {
     int32_t queues;
 } NICPeers;
 
+//网卡的配置信息
 typedef struct NICConf {
     MACAddr macaddr;
     NICPeers peers;
@@ -96,7 +97,7 @@ struct NetClientState {
     char *name;
     char info_str[256];
     unsigned receive_disabled : 1;
-    NetClientDestructor *destructor;
+    NetClientDestructor *destructor;//nc释放时调用
     unsigned int queue_index;
     unsigned rxfilter_notify_enabled:1;
     int vring_enable;
@@ -182,8 +183,11 @@ void net_socket_rs_init(SocketReadState *rs,
 
 #define MAX_NICS 8
 
+// NICInfo代表一个虚拟网卡，也就是和客户机相关的，这里姑且称之为客户端，
+//通过NICInfo中的netdev指针，NICInfo和Hub ports相连接。
+//qemu中有一个全局的数组来表示NICInfo的空间，见nd_table变量
 struct NICInfo {
-    MACAddr macaddr;
+    MACAddr macaddr;//mac地址
     char *model;
     char *name;
     char *devaddr;

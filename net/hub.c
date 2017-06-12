@@ -28,9 +28,9 @@
 typedef struct NetHub NetHub;
 
 typedef struct NetHubPort {
-    NetClientState nc;
+    NetClientState nc;//端口的信息
     QLIST_ENTRY(NetHubPort) next;
-    NetHub *hub;
+    NetHub *hub;//属于那个hub
     int id;
 } NetHubPort;
 
@@ -38,7 +38,7 @@ struct NetHub {
     int id;
     QLIST_ENTRY(NetHub) next;
     int num_ports;
-    QLIST_HEAD(, NetHubPort) ports;
+    QLIST_HEAD(, NetHubPort) ports;//hub中的端口
 };
 
 static QLIST_HEAD(, NetHub) hubs = QLIST_HEAD_INITIALIZER(&hubs);
