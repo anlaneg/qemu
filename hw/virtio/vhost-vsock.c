@@ -401,6 +401,7 @@ static void vhost_vsock_class_init(ObjectClass *klass, void *data)
     vdc->guest_notifier_pending = vhost_vsock_guest_notifier_pending;
 }
 
+//vhost 类型注册
 static const TypeInfo vhost_vsock_info = {
     .name = TYPE_VHOST_VSOCK,
     .parent = TYPE_VIRTIO_DEVICE,
