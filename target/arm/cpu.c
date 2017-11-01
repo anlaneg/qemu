@@ -33,6 +33,7 @@
 #include "sysemu/sysemu.h"
 #include "sysemu/hw_accel.h"
 #include "kvm_arm.h"
+#include "disas/capstone.h"
 
 static void arm_cpu_set_pc(CPUState *cs, vaddr value)
 {
@@ -185,16 +186,28 @@ static void arm_cpu_reset(CPUState *s)
         uint32_t initial_pc; /* Loaded from 0x4 */
         uint8_t *rom;
 
-        /* For M profile we store FAULTMASK and PRIMASK in the
-         * PSTATE F and I bits; these are both clear at reset.
-         */
-        env->daif &= ~(PSTATE_I | PSTATE_F);
+        if (arm_feature(env, ARM_FEATURE_M_SECURITY)) {
+            env->v7m.secure = true;
+        } else {
+            /* This bit resets to 0 if security is supported, but 1 if
+             * it is not. The bit is not present in v7M, but we set it
+             * here so we can avoid having to make checks on it conditional
+             * on ARM_FEATURE_V8 (we don't let the guest see the bit).
+             */
+            env->v7m.aircr = R_V7M_AIRCR_BFHFNMINS_MASK;
+        }
 
-        /* The reset value of this bit is IMPDEF, but ARM recommends
+        /* In v7M the reset value of this bit is IMPDEF, but ARM recommends
          * that it resets to 1, so QEMU always does that rather than making
-         * it dependent on CPU model.
+         * it dependent on CPU model. In v8M it is RES1.
          */
-        env->v7m.ccr = R_V7M_CCR_STKALIGN_MASK;
+        env->v7m.ccr[M_REG_NS] = R_V7M_CCR_STKALIGN_MASK;
+        env->v7m.ccr[M_REG_S] = R_V7M_CCR_STKALIGN_MASK;
+        if (arm_feature(env, ARM_FEATURE_V8)) {
+            /* in v8M the NONBASETHRDENA bit [0] is RES1 */
+            env->v7m.ccr[M_REG_NS] |= R_V7M_CCR_NONBASETHRDENA_MASK;
+            env->v7m.ccr[M_REG_S] |= R_V7M_CCR_NONBASETHRDENA_MASK;
+        }
 
         /* Unlike A/R profile, M profile defines the reset LR value */
         env->regs[14] = 0xffffffff;
@@ -230,8 +243,61 @@ static void arm_cpu_reset(CPUState *s)
         env->regs[15] = 0xFFFF0000;
     }
 
+    /* M profile requires that reset clears the exclusive monitor;
+     * A profile does not, but clearing it makes more sense than having it
+     * set with an exclusive access on address zero.
+     */
+    arm_clear_exclusive(env);
+
     env->vfp.xregs[ARM_VFP_FPEXC] = 0;
 #endif
+
+    if (arm_feature(env, ARM_FEATURE_PMSA)) {
+        if (cpu->pmsav7_dregion > 0) {
+            if (arm_feature(env, ARM_FEATURE_V8)) {
+                memset(env->pmsav8.rbar[M_REG_NS], 0,
+                       sizeof(*env->pmsav8.rbar[M_REG_NS])
+                       * cpu->pmsav7_dregion);
+                memset(env->pmsav8.rlar[M_REG_NS], 0,
+                       sizeof(*env->pmsav8.rlar[M_REG_NS])
+                       * cpu->pmsav7_dregion);
+                if (arm_feature(env, ARM_FEATURE_M_SECURITY)) {
+                    memset(env->pmsav8.rbar[M_REG_S], 0,
+                           sizeof(*env->pmsav8.rbar[M_REG_S])
+                           * cpu->pmsav7_dregion);
+                    memset(env->pmsav8.rlar[M_REG_S], 0,
+                           sizeof(*env->pmsav8.rlar[M_REG_S])
+                           * cpu->pmsav7_dregion);
+                }
+            } else if (arm_feature(env, ARM_FEATURE_V7)) {
+                memset(env->pmsav7.drbar, 0,
+                       sizeof(*env->pmsav7.drbar) * cpu->pmsav7_dregion);
+                memset(env->pmsav7.drsr, 0,
+                       sizeof(*env->pmsav7.drsr) * cpu->pmsav7_dregion);
+                memset(env->pmsav7.dracr, 0,
+                       sizeof(*env->pmsav7.dracr) * cpu->pmsav7_dregion);
+            }
+        }
+        env->pmsav7.rnr[M_REG_NS] = 0;
+        env->pmsav7.rnr[M_REG_S] = 0;
+        env->pmsav8.mair0[M_REG_NS] = 0;
+        env->pmsav8.mair0[M_REG_S] = 0;
+        env->pmsav8.mair1[M_REG_NS] = 0;
+        env->pmsav8.mair1[M_REG_S] = 0;
+    }
+
+    if (arm_feature(env, ARM_FEATURE_M_SECURITY)) {
+        if (cpu->sau_sregion > 0) {
+            memset(env->sau.rbar, 0, sizeof(*env->sau.rbar) * cpu->sau_sregion);
+            memset(env->sau.rlar, 0, sizeof(*env->sau.rlar) * cpu->sau_sregion);
+        }
+        env->sau.rnr = 0;
+        /* SAU_CTRL reset value is IMPDEF; we choose 0, which is what
+         * the Cortex-M33 does.
+         */
+        env->sau.ctrl = 0;
+    }
+
     set_flush_to_zero(1, &env->vfp.standard_fp_status);
     set_flush_inputs_to_zero(1, &env->vfp.standard_fp_status);
     set_default_nan_mode(1, &env->vfp.standard_fp_status);
@@ -408,25 +474,11 @@ print_insn_thumb1(bfd_vma pc, disassemble_info *info)
   return print_insn_arm(pc | 1, info);
 }
 
-static int arm_read_memory_func(bfd_vma memaddr, bfd_byte *b,
-                                int length, struct disassemble_info *info)
-{
-    assert(info->read_memory_inner_func);
-    assert((info->flags & INSN_ARM_BE32) == 0 || length == 2 || length == 4);
-
-    if ((info->flags & INSN_ARM_BE32) != 0 && length == 2) {
-        assert(info->endian == BFD_ENDIAN_LITTLE);
-        return info->read_memory_inner_func(memaddr ^ 2, (bfd_byte *)b, 2,
-                                            info);
-    } else {
-        return info->read_memory_inner_func(memaddr, b, length, info);
-    }
-}
-
 static void arm_disas_set_info(CPUState *cpu, disassemble_info *info)
 {
     ARMCPU *ac = ARM_CPU(cpu);
     CPUARMState *env = &ac->env;
+    bool sctlr_b;
 
     if (is_a64(env)) {
         /* We might not be compiled with the A64 disassembler
@@ -436,26 +488,40 @@ static void arm_disas_set_info(CPUState *cpu, disassemble_info *info)
 #if defined(CONFIG_ARM_A64_DIS)
         info->print_insn = print_insn_arm_a64;
 #endif
-    } else if (env->thumb) {
-        info->print_insn = print_insn_thumb1;
+        info->cap_arch = CS_ARCH_ARM64;
     } else {
-        info->print_insn = print_insn_arm;
+        int cap_mode;
+        if (env->thumb) {
+            info->print_insn = print_insn_thumb1;
+            cap_mode = CS_MODE_THUMB;
+        } else {
+            info->print_insn = print_insn_arm;
+            cap_mode = CS_MODE_ARM;
+        }
+        if (arm_feature(env, ARM_FEATURE_V8)) {
+            cap_mode |= CS_MODE_V8;
+        }
+        if (arm_feature(env, ARM_FEATURE_M)) {
+            cap_mode |= CS_MODE_MCLASS;
+        }
+        info->cap_arch = CS_ARCH_ARM;
+        info->cap_mode = cap_mode;
     }
-    if (bswap_code(arm_sctlr_b(env))) {
+
+    sctlr_b = arm_sctlr_b(env);
+    if (bswap_code(sctlr_b)) {
 #ifdef TARGET_WORDS_BIGENDIAN
         info->endian = BFD_ENDIAN_LITTLE;
 #else
         info->endian = BFD_ENDIAN_BIG;
 #endif
     }
-    if (info->read_memory_inner_func == NULL) {
-        info->read_memory_inner_func = info->read_memory_func;
-        info->read_memory_func = arm_read_memory_func;
-    }
     info->flags &= ~INSN_ARM_BE32;
-    if (arm_sctlr_b(env)) {
+#ifndef CONFIG_USER_ONLY
+    if (sctlr_b) {
         info->flags |= INSN_ARM_BE32;
     }
+#endif
 }
 
 uint64_t arm_cpu_mp_affinity(int idx, uint8_t clustersz)
@@ -469,7 +535,6 @@ static void arm_cpu_initfn(Object *obj)
 {
     CPUState *cs = CPU(obj);
     ARMCPU *cpu = ARM_CPU(obj);
-    static bool inited;
 
     cs->env_ptr = &cpu->env;
     cpu->cp_regs = g_hash_table_new_full(g_int_hash, g_int_equal,
@@ -499,6 +564,8 @@ static void arm_cpu_initfn(Object *obj)
 
     qdev_init_gpio_out_named(DEVICE(cpu), &cpu->gicv3_maintenance_interrupt,
                              "gicv3-maintenance-interrupt", 1);
+    qdev_init_gpio_out_named(DEVICE(cpu), &cpu->pmu_interrupt,
+                             "pmu-interrupt", 1);
 #endif
 
     /* DTB consumers generally don't in fact care what the 'compatible'
@@ -511,10 +578,6 @@ static void arm_cpu_initfn(Object *obj)
 
     if (tcg_enabled()) {
         cpu->psci_version = 2; /* TCG implements PSCI 0.2 */
-        if (!inited) {
-            inited = true;
-            arm_translate_init();
-        }
     }
 }
 
@@ -543,8 +606,15 @@ static Property arm_cpu_has_pmu_property =
 static Property arm_cpu_has_mpu_property =
             DEFINE_PROP_BOOL("has-mpu", ARMCPU, has_mpu, true);
 
+/* This is like DEFINE_PROP_UINT32 but it doesn't set the default value,
+ * because the CPU initfn will have already set cpu->pmsav7_dregion to
+ * the right value for that particular CPU type, and we don't want
+ * to override that with an incorrect constant value.
+ */
 static Property arm_cpu_pmsav7_dregion_property =
-            DEFINE_PROP_UINT32("pmsav7-dregion", ARMCPU, pmsav7_dregion, 16);
+            DEFINE_PROP_UNSIGNED_NODEFAULT("pmsav7-dregion", ARMCPU,
+                                           pmsav7_dregion,
+                                           qdev_prop_uint32, uint32_t);
 
 static void arm_cpu_post_init(Object *obj)
 {
@@ -629,6 +699,9 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
     CPUARMState *env = &cpu->env;
     int pagebits;
     Error *local_err = NULL;
+#ifndef CONFIG_USER_ONLY
+    AddressSpace *as;
+#endif
 
     cpu_exec_realizefn(cs, &local_err);
     if (local_err != NULL) {
@@ -663,6 +736,7 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
     }
     if (arm_feature(env, ARM_FEATURE_V6)) {
         set_feature(env, ARM_FEATURE_V5);
+        set_feature(env, ARM_FEATURE_JAZELLE);
         if (!arm_feature(env, ARM_FEATURE_M)) {
             set_feature(env, ARM_FEATURE_AUXCR);
         }
@@ -791,9 +865,33 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
         }
 
         if (nr) {
-            env->pmsav7.drbar = g_new0(uint32_t, nr);
-            env->pmsav7.drsr = g_new0(uint32_t, nr);
-            env->pmsav7.dracr = g_new0(uint32_t, nr);
+            if (arm_feature(env, ARM_FEATURE_V8)) {
+                /* PMSAv8 */
+                env->pmsav8.rbar[M_REG_NS] = g_new0(uint32_t, nr);
+                env->pmsav8.rlar[M_REG_NS] = g_new0(uint32_t, nr);
+                if (arm_feature(env, ARM_FEATURE_M_SECURITY)) {
+                    env->pmsav8.rbar[M_REG_S] = g_new0(uint32_t, nr);
+                    env->pmsav8.rlar[M_REG_S] = g_new0(uint32_t, nr);
+                }
+            } else {
+                env->pmsav7.drbar = g_new0(uint32_t, nr);
+                env->pmsav7.drsr = g_new0(uint32_t, nr);
+                env->pmsav7.dracr = g_new0(uint32_t, nr);
+            }
+        }
+    }
+
+    if (arm_feature(env, ARM_FEATURE_M_SECURITY)) {
+        uint32_t nr = cpu->sau_sregion;
+
+        if (nr > 0xff) {
+            error_setg(errp, "v8M SAU #regions invalid %" PRIu32, nr);
+            return;
+        }
+
+        if (nr) {
+            env->sau.rbar = g_new0(uint32_t, nr);
+            env->sau.rlar = g_new0(uint32_t, nr);
         }
     }
 
@@ -807,26 +905,22 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
     init_cpreg_list(cpu);
 
 #ifndef CONFIG_USER_ONLY
-    if (cpu->has_el3) {
-        cs->num_ases = 2;
-    } else {
-        cs->num_ases = 1;
-    }
+    if (cpu->has_el3 || arm_feature(env, ARM_FEATURE_M_SECURITY)) {
+        as = g_new0(AddressSpace, 1);
 
-    if (cpu->has_el3) {
-        AddressSpace *as;
+        cs->num_ases = 2;
 
         if (!cpu->secure_memory) {
             cpu->secure_memory = cs->memory;
         }
-        as = address_space_init_shareable(cpu->secure_memory,
-                                          "cpu-secure-memory");
+        address_space_init(as, cpu->secure_memory, "cpu-secure-memory");
         cpu_address_space_init(cs, as, ARMASIdx_S);
+    } else {
+        cs->num_ases = 1;
     }
-    cpu_address_space_init(cs,
-                           address_space_init_shareable(cs->memory,
-                                                        "cpu-memory"),
-                           ARMASIdx_NS);
+    as = g_new0(AddressSpace, 1);
+    address_space_init(as, cs->memory, "cpu-memory");
+    cpu_address_space_init(cs, as, ARMASIdx_NS);
 #endif
 
     qemu_init_vcpu(cs);
@@ -841,12 +935,8 @@ static ObjectClass *arm_cpu_class_by_name(const char *cpu_model)
     char *typename;
     char **cpuname;
 
-    if (!cpu_model) {
-        return NULL;
-    }
-
     cpuname = g_strsplit(cpu_model, ",", 1);
-    typename = g_strdup_printf("%s-" TYPE_ARM_CPU, cpuname[0]);
+    typename = g_strdup_printf(ARM_CPU_TYPE_NAME("%s"), cpuname[0]);
     oc = object_class_by_name(typename);
     g_strfreev(cpuname);
     g_free(typename);
@@ -869,6 +959,7 @@ static void arm926_initfn(Object *obj)
     set_feature(&cpu->env, ARM_FEATURE_VFP);
     set_feature(&cpu->env, ARM_FEATURE_DUMMY_C15_REGS);
     set_feature(&cpu->env, ARM_FEATURE_CACHE_TEST_CLEAN);
+    set_feature(&cpu->env, ARM_FEATURE_JAZELLE);
     cpu->midr = 0x41069265;
     cpu->reset_fpsid = 0x41011090;
     cpu->ctr = 0x1dd20d2;
@@ -898,6 +989,7 @@ static void arm1026_initfn(Object *obj)
     set_feature(&cpu->env, ARM_FEATURE_AUXCR);
     set_feature(&cpu->env, ARM_FEATURE_DUMMY_C15_REGS);
     set_feature(&cpu->env, ARM_FEATURE_CACHE_TEST_CLEAN);
+    set_feature(&cpu->env, ARM_FEATURE_JAZELLE);
     cpu->midr = 0x4106a262;
     cpu->reset_fpsid = 0x410110a0;
     cpu->ctr = 0x1dd20d2;
@@ -1054,6 +1146,7 @@ static void cortex_m3_initfn(Object *obj)
     set_feature(&cpu->env, ARM_FEATURE_V7);
     set_feature(&cpu->env, ARM_FEATURE_M);
     cpu->midr = 0x410fc231;
+    cpu->pmsav7_dregion = 8;
 }
 
 static void cortex_m4_initfn(Object *obj)
@@ -1064,7 +1157,9 @@ static void cortex_m4_initfn(Object *obj)
     set_feature(&cpu->env, ARM_FEATURE_M);
     set_feature(&cpu->env, ARM_FEATURE_THUMB_DSP);
     cpu->midr = 0x410fc240; /* r0p0 */
+    cpu->pmsav7_dregion = 8;
 }
+
 static void arm_v7m_class_init(ObjectClass *oc, void *data)
 {
     CPUClass *cc = CPU_CLASS(oc);
@@ -1082,6 +1177,8 @@ static const ARMCPRegInfo cortexr5_cp_reginfo[] = {
       .access = PL1_RW, .type = ARM_CP_CONST },
     { .name = "BTCM", .cp = 15, .opc1 = 0, .crn = 9, .crm = 1, .opc2 = 1,
       .access = PL1_RW, .type = ARM_CP_CONST },
+    { .name = "DCACHE_INVAL", .cp = 15, .opc1 = 0, .crn = 15, .crm = 5,
+      .opc2 = 0, .access = PL1_W, .type = ARM_CP_NOP },
     REGINFO_SENTINEL
 };
 
@@ -1110,6 +1207,7 @@ static void cortex_r5_initfn(Object *obj)
     cpu->id_isar4 = 0x0010142;
     cpu->id_isar5 = 0x0;
     cpu->mp_is_up = true;
+    cpu->pmsav7_dregion = 16;
     define_arm_cp_regs(cpu, cortexr5_cp_reginfo);
 }
 
@@ -1587,7 +1685,7 @@ static Property arm_cpu_properties[] = {
     DEFINE_PROP_UINT32("midr", ARMCPU, midr, 0),
     DEFINE_PROP_UINT64("mp-affinity", ARMCPU,
                         mp_affinity, ARM64_AFFINITY_INVALID),
-    DEFINE_PROP_INT32("node-id", CPUState, numa_node, CPU_UNSET_NUMA_NODE_ID),
+    DEFINE_PROP_INT32("node-id", ARMCPU, node_id, CPU_UNSET_NUMA_NODE_ID),
     DEFINE_PROP_END_OF_LIST()
 };
 
@@ -1644,6 +1742,7 @@ static void arm_cpu_class_init(ObjectClass *oc, void *data)
 #else
     cc->do_interrupt = arm_cpu_do_interrupt;
     cc->do_unaligned_access = arm_cpu_do_unaligned_access;
+    cc->do_transaction_failed = arm_cpu_do_transaction_failed;
     cc->get_phys_page_attrs_debug = arm_cpu_get_phys_page_attrs_debug;
     cc->asidx_from_attrs = arm_asidx_from_attrs;
     cc->vmsd = &vmstate_arm_cpu;
@@ -1662,6 +1761,9 @@ static void arm_cpu_class_init(ObjectClass *oc, void *data)
 #endif
 
     cc->disas_set_info = arm_disas_set_info;
+#ifdef CONFIG_TCG
+    cc->tcg_initialize = arm_translate_init;
+#endif
 }
 
 static void cpu_register(const ARMCPUInfo *info)

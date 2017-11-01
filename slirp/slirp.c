@@ -25,7 +25,8 @@
 #include "qemu-common.h"
 #include "qemu/timer.h"
 #include "qemu/error-report.h"
-#include "sysemu/char.h"
+#include "chardev/char-fe.h"
+#include "migration/register.h"
 #include "slirp.h"
 #include "hw/hw.h"
 #include "qemu/cutils.h"
@@ -272,6 +273,11 @@ static void slirp_init_once(void)
 static void slirp_state_save(QEMUFile *f, void *opaque);
 static int slirp_state_load(QEMUFile *f, void *opaque, int version_id);
 
+static SaveVMHandlers savevm_slirp_state = {
+    .save_state = slirp_state_save,
+    .load_state = slirp_state_load,
+};
+
 Slirp *slirp_init(int restricted, bool in_enabled, struct in_addr vnetwork,
                   struct in_addr vnetmask, struct in_addr vhost,
                   bool in6_enabled,
@@ -321,8 +327,7 @@ Slirp *slirp_init(int restricted, bool in_enabled, struct in_addr vnetwork,
 
     slirp->opaque = opaque;
 
-    register_savevm(NULL, "slirp", 0, 4,
-                    slirp_state_save, slirp_state_load, slirp);
+    register_savevm_live(NULL, "slirp", 0, 4, &savevm_slirp_state, slirp);
 
     QTAILQ_INSERT_TAIL(&slirp_instances, slirp, entry);
 
@@ -1198,11 +1203,13 @@ struct sbuf_tmp {
     uint32_t roff, woff;
 };
 
-static void sbuf_tmp_pre_save(void *opaque)
+static int sbuf_tmp_pre_save(void *opaque)
 {
     struct sbuf_tmp *tmp = opaque;
     tmp->woff = tmp->parent->sb_wptr - tmp->parent->sb_data;
     tmp->roff = tmp->parent->sb_rptr - tmp->parent->sb_data;
+
+    return 0;
 }
 
 static int sbuf_tmp_post_load(void *opaque, int version)
@@ -1298,7 +1305,7 @@ typedef struct SS_FamilyTmpStruct {
 #define SS_FAMILY_MIG_IPV6  10  /* Linux */
 #define SS_FAMILY_MIG_OTHER 0xffff
 
-static void ss_family_pre_save(void *opaque)
+static int ss_family_pre_save(void *opaque)
 {
     SS_FamilyTmpStruct *tss = opaque;
 
@@ -1309,6 +1316,8 @@ static void ss_family_pre_save(void *opaque)
     } else if (tss->parent->ss.ss_family == AF_INET6) {
         tss->portable_family = SS_FAMILY_MIG_IPV6;
     }
+
+    return 0;
 }
 
 static int ss_family_post_load(void *opaque, int version_id)

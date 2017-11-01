@@ -701,34 +701,52 @@ static char *cpu_slot_to_string(const CPUArchId *cpu)
     return g_string_free(s, false);
 }
 
-static void machine_numa_validate(MachineState *machine)
+static void machine_numa_finish_init(MachineState *machine)
 {
     int i;
+    bool default_mapping;
     GString *s = g_string_new(NULL);
     MachineClass *mc = MACHINE_GET_CLASS(machine);
     const CPUArchIdList *possible_cpus = mc->possible_cpu_arch_ids(machine);
 
     assert(nb_numa_nodes);
     for (i = 0; i < possible_cpus->len; i++) {
+        if (possible_cpus->cpus[i].props.has_node_id) {
+            break;
+        }
+    }
+    default_mapping = (i == possible_cpus->len);
+
+    for (i = 0; i < possible_cpus->len; i++) {
         const CPUArchId *cpu_slot = &possible_cpus->cpus[i];
 
-        /* at this point numa mappings are initilized by CLI options
-         * or with default mappings so it's sufficient to list
-         * all not yet mapped CPUs here */
-        /* TODO: make it hard error in future */
         if (!cpu_slot->props.has_node_id) {
-            char *cpu_str = cpu_slot_to_string(cpu_slot);
-            g_string_append_printf(s, "%sCPU %d [%s]", s->len ? ", " : "", i,
-                                   cpu_str);
-            g_free(cpu_str);
+            /* fetch default mapping from board and enable it */
+            CpuInstanceProperties props = cpu_slot->props;
+
+            props.node_id = mc->get_default_cpu_node_id(machine, i);
+            if (!default_mapping) {
+                /* record slots with not set mapping,
+                 * TODO: make it hard error in future */
+                char *cpu_str = cpu_slot_to_string(cpu_slot);
+                g_string_append_printf(s, "%sCPU %d [%s]",
+                                       s->len ? ", " : "", i, cpu_str);
+                g_free(cpu_str);
+
+                /* non mapped cpus used to fallback to node 0 */
+                props.node_id = 0;
+            }
+
+            props.has_node_id = true;
+            machine_set_cpu_numa_node(machine, &props, &error_fatal);
         }
     }
     if (s->len && !qtest_enabled()) {
-        error_report("warning: CPU(s) not present in any NUMA nodes: %s",
-                     s->str);
-        error_report("warning: All CPU(s) up to maxcpus should be described "
-                     "in NUMA config, ability to start up with partial NUMA "
-                     "mappings is obsoleted and will be removed in future");
+        warn_report("CPU(s) not present in any NUMA nodes: %s",
+                    s->str);
+        warn_report("All CPU(s) up to maxcpus should be described "
+                    "in NUMA config, ability to start up with partial NUMA "
+                    "mappings is obsoleted and will be removed in future");
     }
     g_string_free(s, true);
 }
@@ -738,8 +756,40 @@ void machine_run_board_init(MachineState *machine)
     MachineClass *machine_class = MACHINE_GET_CLASS(machine);
 
     if (nb_numa_nodes) {
-        machine_numa_validate(machine);
+        machine_numa_finish_init(machine);
     }
+
+    /* If the machine supports the valid_cpu_types check and the user
+     * specified a CPU with -cpu check here that the user CPU is supported.
+     */
+    if (machine_class->valid_cpu_types && machine->cpu_type) {
+        ObjectClass *class = object_class_by_name(machine->cpu_type);
+        int i;
+
+        for (i = 0; machine_class->valid_cpu_types[i]; i++) {
+            if (object_class_dynamic_cast(class,
+                                          machine_class->valid_cpu_types[i])) {
+                /* The user specificed CPU is in the valid field, we are
+                 * good to go.
+                 */
+                break;
+            }
+        }
+
+        if (!machine_class->valid_cpu_types[i]) {
+            /* The user specified CPU is not valid */
+            error_report("Invalid CPU type: %s", machine->cpu_type);
+            error_printf("The valid types are: %s",
+                         machine_class->valid_cpu_types[0]);
+            for (i = 1; machine_class->valid_cpu_types[i]; i++) {
+                error_printf(", %s", machine_class->valid_cpu_types[i]);
+            }
+            error_printf("\n");
+
+            exit(1);
+        }
+    }
+
     machine_class->init(machine);
 }
 
@@ -753,31 +803,11 @@ static void machine_class_finalize(ObjectClass *klass, void *data)
     g_free(mc->name);
 }
 
-static void register_compat_prop(const char *driver,
-                                 const char *property,
-                                 const char *value)
-{
-    GlobalProperty *p = g_new0(GlobalProperty, 1);
-    /* Machine compat_props must never cause errors: */
-    p->errp = &error_abort;
-    p->driver = driver;
-    p->property = property;
-    p->value = value;
-    qdev_prop_register_global(p);
-}
-
-static void machine_register_compat_for_subclass(ObjectClass *oc, void *opaque)
-{
-    GlobalProperty *p = opaque;
-    register_compat_prop(object_class_get_name(oc), p->property, p->value);
-}
-
 void machine_register_compat_props(MachineState *machine)
 {
     MachineClass *mc = MACHINE_GET_CLASS(machine);
     int i;
     GlobalProperty *p;
-    ObjectClass *oc;
 
     if (!mc->compat_props) {
         return;
@@ -785,22 +815,9 @@ void machine_register_compat_props(MachineState *machine)
 
     for (i = 0; i < mc->compat_props->len; i++) {
         p = g_array_index(mc->compat_props, GlobalProperty *, i);
-        oc = object_class_by_name(p->driver);
-        if (oc && object_class_is_abstract(oc)) {
-            /* temporary hack to make sure we do not override
-             * globals set explicitly on -global: if an abstract class
-             * is on compat_props, register globals for all its
-             * non-abstract subtypes instead.
-             *
-             * This doesn't solve the problem for cases where
-             * a non-abstract typename mentioned on compat_props
-             * has subclasses, like spapr-pci-host-bridge.
-             */
-            object_class_foreach(machine_register_compat_for_subclass,
-                                 p->driver, false, p);
-        } else {
-            register_compat_prop(p->driver, p->property, p->value);
-        }
+        /* Machine compat_props must never cause errors: */
+        p->errp = &error_abort;
+        qdev_prop_register_global(p);
     }
 }
 

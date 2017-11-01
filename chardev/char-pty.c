@@ -24,12 +24,12 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu-common.h"
-#include "sysemu/char.h"
+#include "chardev/char.h"
 #include "io/channel-file.h"
 #include "qemu/sockets.h"
 #include "qemu/error-report.h"
 
-#include "char-io.h"
+#include "chardev/char-io.h"
 
 #if defined(__linux__) || defined(__sun__) || defined(__FreeBSD__)      \
     || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__) \
@@ -112,8 +112,7 @@ static void pty_chr_update_read_handler_locked(Chardev *chr)
     }
 }
 
-static void pty_chr_update_read_handler(Chardev *chr,
-                                        GMainContext *context)
+static void pty_chr_update_read_handler(Chardev *chr)
 {
     qemu_mutex_lock(&chr->chr_write_lock);
     pty_chr_update_read_handler_locked(chr);
@@ -219,7 +218,7 @@ static void pty_chr_state(Chardev *chr, int connected)
             chr->gsource = io_add_watch_poll(chr, s->ioc,
                                                pty_chr_read_poll,
                                                pty_chr_read,
-                                               chr, NULL);
+                                               chr, chr->gcontext);
         }
     }
 }

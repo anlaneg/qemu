@@ -1,6 +1,17 @@
 #ifndef HW_COMPAT_H
 #define HW_COMPAT_H
 
+#define HW_COMPAT_2_10 \
+    {\
+        .driver   = "virtio-mouse-device",\
+        .property = "wheel-axis",\
+        .value    = "false",\
+    },{\
+        .driver   = "virtio-tablet-device",\
+        .property = "wheel-axis",\
+        .value    = "false",\
+    },
+
 #define HW_COMPAT_2_9 \
     {\
         .driver   = "pci-bridge",\
@@ -14,6 +25,10 @@
         .driver   = "virtio-net-device",\
         .property = "x-mtu-bypass-backend",\
         .value    = "off",\
+    },{\
+        .driver   = "pcie-root-port",\
+        .property = "x-migrate-msix",\
+        .value    = "false",\
     },
 
 #define HW_COMPAT_2_8 \
@@ -146,10 +161,6 @@
         .driver   = "fw_cfg_io",\
         .property = "dma_enabled",\
         .value    = "off",\
-    },{\
-        .driver   = "vmgenid",\
-        .property = "x-write-pointer-available",\
-        .value    = "off",\
     },
 
 #define HW_COMPAT_2_3 \
@@ -176,6 +187,18 @@
     },{\
         .driver   = TYPE_PCI_DEVICE,\
         .property = "x-pcie-lnksta-dllla",\
+        .value    = "off",\
+    },{\
+        .driver   = "migration",\
+        .property = "send-configuration",\
+        .value    = "off",\
+    },{\
+        .driver   = "migration",\
+        .property = "send-section-footer",\
+        .value    = "off",\
+    },{\
+        .driver   = "migration",\
+        .property = "store-global-state",\
         .value    = "off",\
     },
 

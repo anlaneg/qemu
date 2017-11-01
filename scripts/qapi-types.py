@@ -293,6 +293,10 @@ fdef.write(mcgen('''
 ''',
                  prefix=prefix))
 
+fdecl.write(mcgen('''
+#include "qapi/util.h"
+'''))
+
 schema = QAPISchema(input_file)
 gen = QAPISchemaGenTypeVisitor()
 schema.visit(gen)

@@ -14,7 +14,7 @@
 #include "qemu-common.h"
 #include "exec/cpu-common.h"
 #include "qemu-file.h"
-#include "migration/migration.h"
+#include "migration.h"
 #include "migration/vmstate.h"
 #include "qemu/error-report.h"
 #include "qemu/queue.h"
@@ -126,6 +126,9 @@ static int get_int32_equal(QEMUFile *f, void *pv, size_t size,
         return 0;
     }
     error_report("%" PRIx32 " != %" PRIx32, *v, v2);
+    if (field->err_hint) {
+        error_printf("%s\n", field->err_hint);
+    }
     return -EINVAL;
 }
 
@@ -267,6 +270,9 @@ static int get_uint32_equal(QEMUFile *f, void *pv, size_t size,
         return 0;
     }
     error_report("%" PRIx32 " != %" PRIx32, *v, v2);
+    if (field->err_hint) {
+        error_printf("%s\n", field->err_hint);
+    }
     return -EINVAL;
 }
 
@@ -341,6 +347,9 @@ static int get_uint64_equal(QEMUFile *f, void *pv, size_t size,
         return 0;
     }
     error_report("%" PRIx64 " != %" PRIx64, *v, v2);
+    if (field->err_hint) {
+        error_printf("%s\n", field->err_hint);
+    }
     return -EINVAL;
 }
 
@@ -364,6 +373,9 @@ static int get_uint8_equal(QEMUFile *f, void *pv, size_t size,
         return 0;
     }
     error_report("%x != %x", *v, v2);
+    if (field->err_hint) {
+        error_printf("%s\n", field->err_hint);
+    }
     return -EINVAL;
 }
 
@@ -387,6 +399,9 @@ static int get_uint16_equal(QEMUFile *f, void *pv, size_t size,
         return 0;
     }
     error_report("%x != %x", *v, v2);
+    if (field->err_hint) {
+        error_printf("%s\n", field->err_hint);
+    }
     return -EINVAL;
 }
 
@@ -535,13 +550,14 @@ static int put_tmp(QEMUFile *f, void *pv, size_t size, VMStateField *field,
 {
     const VMStateDescription *vmsd = field->vmsd;
     void *tmp = g_malloc(size);
+    int ret;
 
     /* Writes the parent field which is at the start of the tmp */
     *(void **)tmp = pv;
-    vmstate_save_state(f, vmsd, tmp, vmdesc);
+    ret = vmstate_save_state(f, vmsd, tmp, vmdesc);
     g_free(tmp);
 
-    return 0;
+    return ret;
 }
 
 const VMStateInfo vmstate_info_tmp = {
@@ -642,12 +658,16 @@ static int put_qtailq(QEMUFile *f, void *pv, size_t unused_size,
     /* offset of the QTAILQ entry in a QTAILQ element*/
     size_t entry_offset = field->start;
     void *elm;
+    int ret;
 
     trace_put_qtailq(vmsd->name, vmsd->version_id);
 
     QTAILQ_RAW_FOREACH(elm, pv, entry_offset) {
         qemu_put_byte(f, true);
-        vmstate_save_state(f, vmsd, elm, vmdesc);
+        ret = vmstate_save_state(f, vmsd, elm, vmdesc);
+        if (ret) {
+            return ret;
+        }
     }
     qemu_put_byte(f, false);
 

@@ -28,7 +28,7 @@ static int handle_payload_3270_read(EmulatedCcw3270Device *dev, CCW1 *ccw)
         return -EFAULT;
     }
 
-    len = ck->read_payload_3270(dev, ccw->cda, ccw->count);
+    len = ck->read_payload_3270(dev);
     ccw_dev->sch->curr_status.scsw.count = ccw->count - len;
 
     return 0;
@@ -45,7 +45,7 @@ static int handle_payload_3270_write(EmulatedCcw3270Device *dev, CCW1 *ccw)
         return -EFAULT;
     }
 
-    len = ck->write_payload_3270(dev, ccw->cmd_code, ccw->cda, ccw->count);
+    len = ck->write_payload_3270(dev, ccw->cmd_code);
 
     if (len <= 0) {
         return -EIO;
@@ -126,6 +126,7 @@ static void emulated_ccw_3270_realize(DeviceState *ds, Error **errp)
     sch->id.cu_type = EMULATED_CCW_3270_CU_TYPE;
     css_sch_build_virtual_schib(sch, (uint8_t)chpid,
                                 EMULATED_CCW_3270_CHPID_TYPE);
+    sch->do_subchannel_work = do_subchannel_work_virtual;
     sch->ccw_cb = emulated_ccw_3270_cb;
 
     ck->init(dev, &err);
@@ -159,6 +160,7 @@ static void emulated_ccw_3270_class_init(ObjectClass *klass, void *data)
     dc->bus_type = TYPE_VIRTUAL_CSS_BUS;
     dc->realize = emulated_ccw_3270_realize;
     dc->hotpluggable = false;
+    set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
 }
 
 static const TypeInfo emulated_ccw_3270_info = {
