@@ -100,7 +100,8 @@ static int get_str_sep(char *buf, int buf_size, const char **pp, int sep)
     return 0;
 }
 
-int parse_host_port(struct sockaddr_in *saddr, const char *str)
+int parse_host_port(struct sockaddr_in *saddr, const char *str,
+                    Error **errp)
 {
     char buf[512];
     struct hostent *he;
@@ -108,24 +109,35 @@ int parse_host_port(struct sockaddr_in *saddr, const char *str)
     int port;
 
     p = str;
-    if (get_str_sep(buf, sizeof(buf), &p, ':') < 0)
+    if (get_str_sep(buf, sizeof(buf), &p, ':') < 0) {
+        error_setg(errp, "host address '%s' doesn't contain ':' "
+                   "separating host from port", str);
         return -1;
+    }
     saddr->sin_family = AF_INET;
     if (buf[0] == '\0') {
         saddr->sin_addr.s_addr = 0;
     } else {
         if (qemu_isdigit(buf[0])) {
-            if (!inet_aton(buf, &saddr->sin_addr))
+            if (!inet_aton(buf, &saddr->sin_addr)) {
+                error_setg(errp, "host address '%s' is not a valid "
+                           "IPv4 address", buf);
                 return -1;
+            }
         } else {
-            if ((he = gethostbyname(buf)) == NULL)
+            he = gethostbyname(buf);
+            if (he == NULL) {
+                error_setg(errp, "can't resolve host address '%s'", buf);
                 return - 1;
+            }
             saddr->sin_addr = *(struct in_addr *)he->h_addr;
         }
     }
     port = strtol(p, (char **)&r, 0);
-    if (r == p)
+    if (r == p) {
+        error_setg(errp, "port number '%s' is invalid", p);
         return -1;
+    }
     saddr->sin_port = htons(port);
     return 0;
 }
@@ -253,6 +265,7 @@ static void qemu_net_client_setup(NetClientState *nc,
     }
 
     if (peer) {
+    	//对端信息维护
         assert(!peer->peer);
         nc->peer = peer;
         peer->peer = nc;
@@ -492,6 +505,7 @@ void qemu_set_vnet_hdr_len(NetClientState *nc, int len)
         return;
     }
 
+    nc->vnet_hdr_len = len;
     nc->info->set_vnet_hdr_len(nc, len);
 }
 
@@ -719,10 +733,12 @@ ssize_t qemu_deliver_packet_iov(NetClientState *sender,
     NetClientState *nc = opaque;
     int ret;
 
+    //如果link down,返回数据长度
     if (nc->link_down) {
         return iov_size(iov, iovcnt);
     }
 
+    //如果禁止收，返回0
     if (nc->receive_disabled) {
         return 0;
     }
@@ -978,9 +994,9 @@ static int net_client_init1(const void *object, bool is_netdev, Error **errp)
         netdev = object;
         name = netdev->id;
 
+        //对没有init_fun的报错（DUMP,NIC强制报错）
         if (netdev->type == NET_CLIENT_DRIVER_DUMP ||
             netdev->type == NET_CLIENT_DRIVER_NIC ||
-			//依据netdev在类型，调用不同的网络设备初始化函数
             !net_client_init_fun[netdev->type]) {
             error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "type",
                        "a netdev backend type");
@@ -1061,11 +1077,12 @@ static int net_client_init1(const void *object, bool is_netdev, Error **errp)
         }
     }
 
+    //按不同netdev类型，进行初始化
     if (net_client_init_fun[netdev->type](netdev, name, peer, errp) < 0) {
         /* FIXME drop when all init functions store an Error */
         if (errp && !*errp) {
             error_setg(errp, QERR_DEVICE_INIT_FAILED,
-                       NetClientDriver_lookup[netdev->type]);
+                       NetClientDriver_str(netdev->type));
         }
         return -1;
     }
@@ -1082,6 +1099,7 @@ int net_client_init(QemuOpts *opts, bool is_netdev, Error **errp)
 
     {
         /* Parse convenience option format ip6-net=fec0::0[/64] */
+    	//ipv6处理
         const char *ip6_net = qemu_opt_get(opts, "ipv6-net");
 
         if (ip6_net) {
@@ -1112,13 +1130,14 @@ int net_client_init(QemuOpts *opts, bool is_netdev, Error **errp)
     }
 
     if (is_netdev) {
-    	//-netdev类型配置处理(依据配置生成对应的netdev)
+    	//-netdev类型配置处理(依据配置解析并填充生成对应的netdev对象)
         visit_type_Netdev(v, NULL, (Netdev **)&object, &err);
     } else {
         visit_type_NetLegacy(v, NULL, (NetLegacy **)&object, &err);
     }
 
     if (!err) {
+    	//将构造好的对应传入
         ret = net_client_init1(object, is_netdev, &err);
     }
 
@@ -1290,7 +1309,7 @@ void print_net_client(Monitor *mon, NetClientState *nc)
 
     monitor_printf(mon, "%s: index=%d,type=%s,%s\n", nc->name,
                    nc->queue_index,
-                   NetClientDriver_lookup[nc->info->type],
+                   NetClientDriver_str(nc->info->type),
                    nc->info_str);
     if (!QTAILQ_EMPTY(&nc->filters)) {
         monitor_printf(mon, "filters:\n");
@@ -1410,6 +1429,7 @@ void qmp_set_link(const char *name, bool up, Error **errp)
         ncs[i]->link_down = !up;
     }
 
+    //触发链路状态变化
     if (nc->info->link_status_changed) {
         nc->info->link_status_changed(nc);
     }
@@ -1483,9 +1503,10 @@ void net_check_clients(void)
 
     QTAILQ_FOREACH(nc, &net_clients, next) {
         if (!nc->peer) {
-            fprintf(stderr, "Warning: %s %s has no peer\n",
-                    nc->info->type == NET_CLIENT_DRIVER_NIC ?
-                    "nic" : "netdev", nc->name);
+            warn_report("%s %s has no peer",
+                        nc->info->type == NET_CLIENT_DRIVER_NIC
+                        ? "nic" : "netdev",
+                        nc->name);
         }
     }
 
@@ -1496,10 +1517,10 @@ void net_check_clients(void)
     for (i = 0; i < MAX_NICS; i++) {
         NICInfo *nd = &nd_table[i];
         if (nd->used && !nd->instantiated) {
-            fprintf(stderr, "Warning: requested NIC (%s, model %s) "
-                    "was not created (not supported by this machine?)\n",
-                    nd->name ? nd->name : "anonymous",
-                    nd->model ? nd->model : "unspecified");
+            warn_report("requested NIC (%s, model %s) "
+                        "was not created (not supported by this machine?)",
+                        nd->name ? nd->name : "anonymous",
+                        nd->model ? nd->model : "unspecified");
         }
     }
 }
@@ -1523,8 +1544,10 @@ static int net_init_netdev(void *dummy, QemuOpts *opts, Error **errp)
     Error *local_err = NULL;
     int ret;
 
+    //传入is_netdev为true
     ret = net_client_init(opts, true, &local_err);
     if (local_err) {
+    	//如果初始化有error，则报错，并返回失败
         error_report_err(local_err);
         return -1;
     }
@@ -1534,8 +1557,10 @@ static int net_init_netdev(void *dummy, QemuOpts *opts, Error **errp)
 
 int net_init_clients(void)
 {
+	//查找-net的所有配置
     QemuOptsList *net = qemu_find_opts("net");
 
+    //注册虚拟机状态变化时的回调（主要是清空报文队列）
     net_change_state_entry =
         qemu_add_vm_change_state_handler(net_vm_change_state_handler, NULL);
 
@@ -1547,6 +1572,7 @@ int net_init_clients(void)
         return -1;
     }
 
+    //针对每个-net选项，调用net初始化
     if (qemu_opts_foreach(net, net_init_client, NULL, NULL)) {
         return -1;
     }
@@ -1621,11 +1647,14 @@ QemuOptsList qemu_net_opts = {
 };
 
 void net_socket_rs_init(SocketReadState *rs,
-                        SocketReadStateFinalize *finalize)
+                        SocketReadStateFinalize *finalize,
+                        bool vnet_hdr)
 {
     rs->state = 0;
+    rs->vnet_hdr = vnet_hdr;
     rs->index = 0;
     rs->packet_len = 0;
+    rs->vnet_hdr_len = 0;
     memset(rs->buf, 0, sizeof(rs->buf));
     rs->finalize = finalize;
 }
@@ -1640,8 +1669,12 @@ int net_fill_rstate(SocketReadState *rs, const uint8_t *buf, int size)
     unsigned int l;
 
     while (size > 0) {
-        /* reassemble a packet from the network */
-        switch (rs->state) { /* 0 = getting length, 1 = getting data */
+        /* Reassemble a packet from the network.
+         * 0 = getting length.
+         * 1 = getting vnet header length.
+         * 2 = getting data.
+         */
+        switch (rs->state) {
         case 0:
             l = 4 - rs->index;
             if (l > size) {
@@ -1655,10 +1688,31 @@ int net_fill_rstate(SocketReadState *rs, const uint8_t *buf, int size)
                 /* got length */
                 rs->packet_len = ntohl(*(uint32_t *)rs->buf);
                 rs->index = 0;
-                rs->state = 1;
+                if (rs->vnet_hdr) {
+                    rs->state = 1;
+                } else {
+                    rs->state = 2;
+                    rs->vnet_hdr_len = 0;
+                }
             }
             break;
         case 1:
+            l = 4 - rs->index;
+            if (l > size) {
+                l = size;
+            }
+            memcpy(rs->buf + rs->index, buf, l);
+            buf += l;
+            size -= l;
+            rs->index += l;
+            if (rs->index == 4) {
+                /* got vnet header length */
+                rs->vnet_hdr_len = ntohl(*(uint32_t *)rs->buf);
+                rs->index = 0;
+                rs->state = 2;
+            }
+            break;
+        case 2:
             l = rs->packet_len - rs->index;
             if (l > size) {
                 l = size;

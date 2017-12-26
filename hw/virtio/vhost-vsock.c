@@ -254,13 +254,15 @@ static void vhost_vsock_post_load_timer_cb(void *opaque)
     vhost_vsock_send_transport_reset(vsock);
 }
 
-static void vhost_vsock_pre_save(void *opaque)
+static int vhost_vsock_pre_save(void *opaque)
 {
     VHostVSock *vsock = opaque;
 
     /* At this point, backend must be stopped, otherwise
      * it might keep writing to memory. */
     assert(!vsock->vhost_dev.started);
+
+    return 0;
 }
 
 static int vhost_vsock_post_load(void *opaque, int version_id)
@@ -341,7 +343,7 @@ static void vhost_vsock_device_realize(DeviceState *dev, Error **errp)
     vsock->vhost_dev.nvqs = ARRAY_SIZE(vsock->vhost_vqs);
     vsock->vhost_dev.vqs = vsock->vhost_vqs;
     ret = vhost_dev_init(&vsock->vhost_dev, (void *)(uintptr_t)vhostfd,
-                         VHOST_BACKEND_TYPE_KERNEL, 0);
+                         VHOST_BACKEND_TYPE_KERNEL, 0);//kernel方式的vhost
     if (ret < 0) {
         error_setg_errno(errp, -ret, "vhost-vsock: vhost_dev_init failed");
         goto err_virtio;

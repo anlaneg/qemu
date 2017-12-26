@@ -40,6 +40,7 @@ static AioContext *iohandler_ctx;
 static void iohandler_init(void)
 {
     if (!iohandler_ctx) {
+    	//创建aio上下文
         iohandler_ctx = aio_context_new(&error_abort);
     }
 }

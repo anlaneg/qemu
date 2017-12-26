@@ -32,6 +32,7 @@
 #include "hw/usb/ehci-regs.h"
 #include "hw/usb/hcd-ehci.h"
 #include "trace.h"
+#include "qemu/error-report.h"
 
 #define FRAME_TIMER_FREQ 1000
 #define FRAME_TIMER_NS   (NANOSECONDS_PER_SECOND / FRAME_TIMER_FREQ)
@@ -348,7 +349,7 @@ static void ehci_trace_sitd(EHCIState *s, hwaddr addr,
 static void ehci_trace_guest_bug(EHCIState *s, const char *message)
 {
     trace_usb_ehci_guest_bug(message);
-    fprintf(stderr, "ehci warning: %s\n", message);
+    warn_report("%s", message);
 }
 
 static inline bool ehci_enabled(EHCIState *s)
@@ -1728,7 +1729,7 @@ static int ehci_state_fetchsitd(EHCIState *ehci, int async)
         /* siTD is not active, nothing to do */;
     } else {
         /* TODO: split transfers are not implemented */
-        fprintf(stderr, "WARNING: Skipping active siTD\n");
+        warn_report("Skipping active siTD");
     }
 
     ehci_set_fetch_addr(ehci, async, sitd.next);
@@ -2241,6 +2242,11 @@ static void ehci_work_bh(void *opaque)
     uint64_t uframes, skipped_uframes;
     int i;
 
+    if (ehci->working) {
+        return;
+    }
+    ehci->working = true;
+
     t_now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     ns_elapsed = t_now - ehci->last_run_ns;
     uframes = ns_elapsed / UFRAME_TIMER_NS;
@@ -2322,6 +2328,8 @@ static void ehci_work_bh(void *opaque)
         }
         timer_mod(ehci->frame_timer, expire_time);
     }
+
+    ehci->working = false;
 }
 
 static void ehci_work_timer(void *opaque)
@@ -2373,7 +2381,7 @@ static USBBusOps ehci_bus_ops_standalone = {
     .wakeup_endpoint = ehci_wakeup_endpoint,
 };
 
-static void usb_ehci_pre_save(void *opaque)
+static int usb_ehci_pre_save(void *opaque)
 {
     EHCIState *ehci = opaque;
     uint32_t new_frindex;
@@ -2382,6 +2390,8 @@ static void usb_ehci_pre_save(void *opaque)
     new_frindex = ehci->frindex & ~7;
     ehci->last_run_ns -= (ehci->frindex - new_frindex) * UFRAME_TIMER_NS;
     ehci->frindex = new_frindex;
+
+    return 0;
 }
 
 static int usb_ehci_post_load(void *opaque, int version_id)
@@ -2474,6 +2484,11 @@ void usb_ehci_realize(EHCIState *s, DeviceState *dev, Error **errp)
     if (s->portnr > NB_PORTS) {
         error_setg(errp, "Too many ports! Max. port number is %d.",
                    NB_PORTS);
+        return;
+    }
+    if (s->maxframes < 8 || s->maxframes > 512)  {
+        error_setg(errp, "maxframes %d out if range (8 .. 512)",
+                   s->maxframes);
         return;
     }
 

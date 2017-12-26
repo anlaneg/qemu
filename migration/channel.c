@@ -13,15 +13,24 @@
 #include "qemu/osdep.h"
 #include "channel.h"
 #include "tls.h"
-#include "migration/migration.h"
+#include "migration.h"
 #include "qemu-file-channel.h"
 #include "trace.h"
 #include "qapi/error.h"
 #include "io/channel-tls.h"
 
-void migration_channel_process_incoming(MigrationState *s,
-                                        QIOChannel *ioc)
+/**
+ * @migration_channel_process_incoming - Create new incoming migration channel
+ *
+ * Notice that TLS is special.  For it we listen in a listener socket,
+ * and then create a new client socket from the TLS library.
+ *
+ * @ioc: Channel to which we are connecting
+ */
+void migration_channel_process_incoming(QIOChannel *ioc)
 {
+    MigrationState *s = migrate_get_current();
+
     trace_migration_set_incoming_channel(
         ioc, object_get_typename(OBJECT(ioc)));
 
@@ -35,12 +44,18 @@ void migration_channel_process_incoming(MigrationState *s,
             error_report_err(local_err);
         }
     } else {
-        QEMUFile *f = qemu_fopen_channel_input(ioc);
-        migration_fd_process_incoming(f);
+        migration_ioc_process_incoming(ioc);
     }
 }
 
 
+/**
+ * @migration_channel_connect - Create new outgoing migration channel
+ *
+ * @s: Current migration state
+ * @ioc: Channel to which we are connecting
+ * @hostname: Where we want to connect
+ */
 void migration_channel_connect(MigrationState *s,
                                QIOChannel *ioc,
                                const char *hostname)

@@ -31,8 +31,10 @@
 #include "block/thread-pool.h"
 #include "qemu/iov.h"
 #include "block/raw-aio.h"
-#include "qapi/util.h"
 #include "qapi/qmp/qstring.h"
+
+#include "scsi/pr-manager.h"
+#include "scsi/constants.h"
 
 #if defined(__APPLE__) && (__MACH__)
 #include <paths.h>
@@ -156,6 +158,8 @@ typedef struct BDRVRawState {
     bool page_cache_inconsistent:1;
     bool has_fallocate;
     bool needs_alignment;
+
+    PRManager *pr_mgr;
 } BDRVRawState;
 
 typedef struct BDRVRawReopenState {
@@ -403,6 +407,11 @@ static QemuOptsList raw_runtime_opts = {
             .type = QEMU_OPT_STRING,
             .help = "file locking mode (on/off/auto, default: auto)",
         },
+        {
+            .name = "pr-manager",
+            .type = QEMU_OPT_STRING,
+            .help = "id of persistent reservation manager object (default: none)",
+        },
         { /* end of list */ }
     },
 };
@@ -414,6 +423,7 @@ static int raw_open_common(BlockDriverState *bs, QDict *options,
     QemuOpts *opts;
     Error *local_err = NULL;
     const char *filename = NULL;
+    const char *str;
     BlockdevAioOptions aio, aio_default;
     int fd, ret;
     struct stat st;
@@ -438,8 +448,9 @@ static int raw_open_common(BlockDriverState *bs, QDict *options,
     aio_default = (bdrv_flags & BDRV_O_NATIVE_AIO)
                   ? BLOCKDEV_AIO_OPTIONS_NATIVE
                   : BLOCKDEV_AIO_OPTIONS_THREADS;
-    aio = qapi_enum_parse(BlockdevAioOptions_lookup, qemu_opt_get(opts, "aio"),
-                          BLOCKDEV_AIO_OPTIONS__MAX, aio_default, &local_err);
+    aio = qapi_enum_parse(&BlockdevAioOptions_lookup,
+                          qemu_opt_get(opts, "aio"),
+                          aio_default, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         ret = -EINVAL;
@@ -447,8 +458,9 @@ static int raw_open_common(BlockDriverState *bs, QDict *options,
     }
     s->use_linux_aio = (aio == BLOCKDEV_AIO_OPTIONS_NATIVE);
 
-    locking = qapi_enum_parse(OnOffAuto_lookup, qemu_opt_get(opts, "locking"),
-                              ON_OFF_AUTO__MAX, ON_OFF_AUTO_AUTO, &local_err);
+    locking = qapi_enum_parse(&OnOffAuto_lookup,
+                              qemu_opt_get(opts, "locking"),
+                              ON_OFF_AUTO_AUTO, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         ret = -EINVAL;
@@ -457,25 +469,32 @@ static int raw_open_common(BlockDriverState *bs, QDict *options,
     switch (locking) {
     case ON_OFF_AUTO_ON:
         s->use_lock = true;
-#ifndef F_OFD_SETLK
-        fprintf(stderr,
-                "File lock requested but OFD locking syscall is unavailable, "
-                "falling back to POSIX file locks.\n"
-                "Due to the implementation, locks can be lost unexpectedly.\n");
-#endif
+        if (!qemu_has_ofd_lock()) {
+            fprintf(stderr,
+                    "File lock requested but OFD locking syscall is "
+                    "unavailable, falling back to POSIX file locks.\n"
+                    "Due to the implementation, locks can be lost "
+                    "unexpectedly.\n");
+        }
         break;
     case ON_OFF_AUTO_OFF:
         s->use_lock = false;
         break;
     case ON_OFF_AUTO_AUTO:
-#ifdef F_OFD_SETLK
-        s->use_lock = true;
-#else
-        s->use_lock = false;
-#endif
+        s->use_lock = qemu_has_ofd_lock();
         break;
     default:
         abort();
+    }
+
+    str = qemu_opt_get(opts, "pr-manager");
+    if (str) {
+        s->pr_mgr = pr_manager_lookup(str, &local_err);
+        if (local_err) {
+            error_propagate(errp, local_err);
+            ret = -EINVAL;
+            goto fail;
+        }
     }
 
     s->open_flags = open_flags;
@@ -1339,6 +1358,9 @@ static ssize_t handle_aiocb_write_zeroes(RawPosixAIOData *aiocb)
 #if defined(CONFIG_FALLOCATE) || defined(CONFIG_XFS)
     BDRVRawState *s = aiocb->bs->opaque;
 #endif
+#ifdef CONFIG_FALLOCATE
+    int64_t len;
+#endif
 
     if (aiocb->aio_type & QEMU_AIO_BLKDEV) {
         return handle_aiocb_write_zeroes_block(aiocb);
@@ -1381,7 +1403,10 @@ static ssize_t handle_aiocb_write_zeroes(RawPosixAIOData *aiocb)
 #endif
 
 #ifdef CONFIG_FALLOCATE
-    if (s->has_fallocate && aiocb->aio_offset >= bdrv_getlength(aiocb->bs)) {
+    /* Last resort: we are trying to extend the file with zeroed data. This
+     * can be done via fallocate(fd, 0) */
+    len = bdrv_getlength(aiocb->bs);
+    if (s->has_fallocate && len >= 0 && aiocb->aio_offset >= len) {
         int ret = do_fallocate(s->fd, 0, aiocb->aio_offset, aiocb->aio_nbytes);
         if (ret == 0 || ret != -ENOTSUP) {
             return ret;
@@ -1485,7 +1510,7 @@ static int aio_worker(void *arg)
 
 static int paio_submit_co(BlockDriverState *bs, int fd,
                           int64_t offset, QEMUIOVector *qiov,
-                          int count, int type)
+                          int bytes, int type)
 {
     RawPosixAIOData *acb = g_new(RawPosixAIOData, 1);
     ThreadPool *pool;
@@ -1494,22 +1519,22 @@ static int paio_submit_co(BlockDriverState *bs, int fd,
     acb->aio_type = type;
     acb->aio_fildes = fd;
 
-    acb->aio_nbytes = count;
+    acb->aio_nbytes = bytes;
     acb->aio_offset = offset;
 
     if (qiov) {
         acb->aio_iov = qiov->iov;
         acb->aio_niov = qiov->niov;
-        assert(qiov->size == count);
+        assert(qiov->size == bytes);
     }
 
-    trace_paio_submit_co(offset, count, type);
+    trace_paio_submit_co(offset, bytes, type);
     pool = aio_get_thread_pool(bdrv_get_aio_context(bs));
     return thread_pool_submit_co(pool, aio_worker, acb);
 }
 
 static BlockAIOCB *paio_submit(BlockDriverState *bs, int fd,
-        int64_t offset, QEMUIOVector *qiov, int count,
+        int64_t offset, QEMUIOVector *qiov, int bytes,
         BlockCompletionFunc *cb, void *opaque, int type)
 {
     RawPosixAIOData *acb = g_new(RawPosixAIOData, 1);
@@ -1519,7 +1544,7 @@ static BlockAIOCB *paio_submit(BlockDriverState *bs, int fd,
     acb->aio_type = type;
     acb->aio_fildes = fd;
 
-    acb->aio_nbytes = count;
+    acb->aio_nbytes = bytes;
     acb->aio_offset = offset;
 
     if (qiov) {
@@ -1528,7 +1553,7 @@ static BlockAIOCB *paio_submit(BlockDriverState *bs, int fd,
         assert(qiov->size == acb->aio_nbytes);
     }
 
-    trace_paio_submit(acb, opaque, offset, count, type);
+    trace_paio_submit(acb, opaque, offset, bytes, type);
     pool = aio_get_thread_pool(bdrv_get_aio_context(bs));
     return thread_pool_submit_aio(pool, aio_worker, acb, cb, opaque);
 }
@@ -1624,7 +1649,122 @@ static void raw_close(BlockDriverState *bs)
     }
 }
 
-static int raw_truncate(BlockDriverState *bs, int64_t offset, Error **errp)
+/**
+ * Truncates the given regular file @fd to @offset and, when growing, fills the
+ * new space according to @prealloc.
+ *
+ * Returns: 0 on success, -errno on failure.
+ */
+static int raw_regular_truncate(int fd, int64_t offset, PreallocMode prealloc,
+                                Error **errp)
+{
+    int result = 0;
+    int64_t current_length = 0;
+    char *buf = NULL;
+    struct stat st;
+
+    if (fstat(fd, &st) < 0) {
+        result = -errno;
+        error_setg_errno(errp, -result, "Could not stat file");
+        return result;
+    }
+
+    current_length = st.st_size;
+    if (current_length > offset && prealloc != PREALLOC_MODE_OFF) {
+        error_setg(errp, "Cannot use preallocation for shrinking files");
+        return -ENOTSUP;
+    }
+
+    switch (prealloc) {
+#ifdef CONFIG_POSIX_FALLOCATE
+    case PREALLOC_MODE_FALLOC:
+        /*
+         * Truncating before posix_fallocate() makes it about twice slower on
+         * file systems that do not support fallocate(), trying to check if a
+         * block is allocated before allocating it, so don't do that here.
+         */
+        result = -posix_fallocate(fd, current_length, offset - current_length);
+        if (result != 0) {
+            /* posix_fallocate() doesn't set errno. */
+            error_setg_errno(errp, -result,
+                             "Could not preallocate new data");
+        }
+        goto out;
+#endif
+    case PREALLOC_MODE_FULL:
+    {
+        int64_t num = 0, left = offset - current_length;
+
+        /*
+         * Knowing the final size from the beginning could allow the file
+         * system driver to do less allocations and possibly avoid
+         * fragmentation of the file.
+         */
+        if (ftruncate(fd, offset) != 0) {
+            result = -errno;
+            error_setg_errno(errp, -result, "Could not resize file");
+            goto out;
+        }
+
+        buf = g_malloc0(65536);
+
+        result = lseek(fd, current_length, SEEK_SET);
+        if (result < 0) {
+            result = -errno;
+            error_setg_errno(errp, -result,
+                             "Failed to seek to the old end of file");
+            goto out;
+        }
+
+        while (left > 0) {
+            num = MIN(left, 65536);
+            result = write(fd, buf, num);
+            if (result < 0) {
+                result = -errno;
+                error_setg_errno(errp, -result,
+                                 "Could not write zeros for preallocation");
+                goto out;
+            }
+            left -= result;
+        }
+        if (result >= 0) {
+            result = fsync(fd);
+            if (result < 0) {
+                result = -errno;
+                error_setg_errno(errp, -result,
+                                 "Could not flush file to disk");
+                goto out;
+            }
+        }
+        goto out;
+    }
+    case PREALLOC_MODE_OFF:
+        if (ftruncate(fd, offset) != 0) {
+            result = -errno;
+            error_setg_errno(errp, -result, "Could not resize file");
+        }
+        return result;
+    default:
+        result = -ENOTSUP;
+        error_setg(errp, "Unsupported preallocation mode: %s",
+                   PreallocMode_str(prealloc));
+        return result;
+    }
+
+out:
+    if (result < 0) {
+        if (ftruncate(fd, current_length) < 0) {
+            error_report("Failed to restore old file length: %s",
+                         strerror(errno));
+        }
+    }
+
+    g_free(buf);
+    return result;
+}
+
+static int raw_truncate(BlockDriverState *bs, int64_t offset,
+                        PreallocMode prealloc, Error **errp)
 {
     BDRVRawState *s = bs->opaque;
     struct stat st;
@@ -1637,12 +1777,16 @@ static int raw_truncate(BlockDriverState *bs, int64_t offset, Error **errp)
     }
 
     if (S_ISREG(st.st_mode)) {
-        if (ftruncate(s->fd, offset) < 0) {
-            ret = -errno;
-            error_setg_errno(errp, -ret, "Failed to resize the file");
-            return ret;
-        }
-    } else if (S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode)) {
+        return raw_regular_truncate(s->fd, offset, prealloc, errp);
+    }
+
+    if (prealloc != PREALLOC_MODE_OFF) {
+        error_setg(errp, "Preallocation mode '%s' unsupported for this "
+                   "non-regular file", PreallocMode_str(prealloc));
+        return -ENOTSUP;
+    }
+
+    if (S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode)) {
         if (offset > raw_getlength(bs)) {
             error_setg(errp, "Cannot grow device files");
             return -EINVAL;
@@ -1853,9 +1997,8 @@ static int raw_create(const char *filename, QemuOpts *opts, Error **errp)
     nocow = qemu_opt_get_bool(opts, BLOCK_OPT_NOCOW, false);
     //取preallocation模式
     buf = qemu_opt_get_del(opts, BLOCK_OPT_PREALLOC);
-    prealloc = qapi_enum_parse(PreallocMode_lookup, buf,
-                               PREALLOC_MODE__MAX, PREALLOC_MODE_OFF,
-                               &local_err);
+    prealloc = qapi_enum_parse(&PreallocMode_lookup, buf,
+                               PREALLOC_MODE_OFF, &local_err);
     g_free(buf);
     if (local_err) {
         error_propagate(errp, local_err);
@@ -1888,72 +2031,9 @@ static int raw_create(const char *filename, QemuOpts *opts, Error **errp)
     }
 
     //按预分配方式来写文件
-    switch (prealloc) {
-#ifdef CONFIG_POSIX_FALLOCATE
-    case PREALLOC_MODE_FALLOC:
-        /*
-         * Truncating before posix_fallocate() makes it about twice slower on
-         * file systems that do not support fallocate(), trying to check if a
-         * block is allocated before allocating it, so don't do that here.
-         */
-        result = -posix_fallocate(fd, 0, total_size);
-        if (result != 0) {
-            /* posix_fallocate() doesn't set errno. */
-            error_setg_errno(errp, -result,
-                             "Could not preallocate data for the new file");
-        }
-        break;
-#endif
-    case PREALLOC_MODE_FULL:
-    {
-        /*
-         * Knowing the final size from the beginning could allow the file
-         * system driver to do less allocations and possibly avoid
-         * fragmentation of the file.
-         */
-        if (ftruncate(fd, total_size) != 0) {
-            result = -errno;
-            error_setg_errno(errp, -result, "Could not resize file");
-            goto out_close;
-        }
-
-        int64_t num = 0, left = total_size;
-        buf = g_malloc0(65536);
-
-        while (left > 0) {
-            num = MIN(left, 65536);
-            result = write(fd, buf, num);
-            if (result < 0) {
-                result = -errno;
-                error_setg_errno(errp, -result,
-                                 "Could not write to the new file");
-                break;
-            }
-            left -= result;
-        }
-        if (result >= 0) {
-            result = fsync(fd);
-            if (result < 0) {
-                result = -errno;
-                error_setg_errno(errp, -result,
-                                 "Could not flush new file to disk");
-            }
-        }
-        g_free(buf);
-        break;
-    }
-    case PREALLOC_MODE_OFF:
-    	//采用ftruncate直接扩充或者缩减大小
-        if (ftruncate(fd, total_size) != 0) {
-            result = -errno;
-            error_setg_errno(errp, -result, "Could not resize file");
-        }
-        break;
-    default:
-        result = -EINVAL;
-        error_setg(errp, "Unsupported preallocation mode: %s",
-                   PreallocMode_lookup[prealloc]);
-        break;
+    result = raw_regular_truncate(fd, total_size, prealloc, errp);
+    if (result < 0) {
+        goto out_close;
     }
 
 out_close:
@@ -2113,26 +2193,26 @@ static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
 }
 
 static coroutine_fn BlockAIOCB *raw_aio_pdiscard(BlockDriverState *bs,
-    int64_t offset, int count,
+    int64_t offset, int bytes,
     BlockCompletionFunc *cb, void *opaque)
 {
     BDRVRawState *s = bs->opaque;
 
-    return paio_submit(bs, s->fd, offset, NULL, count,
+    return paio_submit(bs, s->fd, offset, NULL, bytes,
                        cb, opaque, QEMU_AIO_DISCARD);
 }
 
 static int coroutine_fn raw_co_pwrite_zeroes(
     BlockDriverState *bs, int64_t offset,
-    int count, BdrvRequestFlags flags)
+    int bytes, BdrvRequestFlags flags)
 {
     BDRVRawState *s = bs->opaque;
 
     if (!(flags & BDRV_REQ_MAY_UNMAP)) {
-        return paio_submit_co(bs, s->fd, offset, NULL, count,
+        return paio_submit_co(bs, s->fd, offset, NULL, bytes,
                               QEMU_AIO_WRITE_ZEROES);
     } else if (s->discard_zeroes) {
-        return paio_submit_co(bs, s->fd, offset, NULL, count,
+        return paio_submit_co(bs, s->fd, offset, NULL, bytes,
                               QEMU_AIO_DISCARD);
     }
     return -ENOTSUP;
@@ -2543,6 +2623,15 @@ static BlockAIOCB *hdev_aio_ioctl(BlockDriverState *bs,
     if (fd_open(bs) < 0)
         return NULL;
 
+    if (req == SG_IO && s->pr_mgr) {
+        struct sg_io_hdr *io_hdr = buf;
+        if (io_hdr->cmdp[0] == PERSISTENT_RESERVE_OUT ||
+            io_hdr->cmdp[0] == PERSISTENT_RESERVE_IN) {
+            return pr_manager_execute(s->pr_mgr, bdrv_get_aio_context(bs),
+                                      s->fd, io_hdr, cb, opaque);
+        }
+    }
+
     acb = g_new(RawPosixAIOData, 1);
     acb->bs = bs;
     acb->aio_type = QEMU_AIO_IOCTL;
@@ -2566,7 +2655,7 @@ static int fd_open(BlockDriverState *bs)
 }
 
 static coroutine_fn BlockAIOCB *hdev_aio_pdiscard(BlockDriverState *bs,
-    int64_t offset, int count,
+    int64_t offset, int bytes,
     BlockCompletionFunc *cb, void *opaque)
 {
     BDRVRawState *s = bs->opaque;
@@ -2574,12 +2663,12 @@ static coroutine_fn BlockAIOCB *hdev_aio_pdiscard(BlockDriverState *bs,
     if (fd_open(bs) < 0) {
         return NULL;
     }
-    return paio_submit(bs, s->fd, offset, NULL, count,
+    return paio_submit(bs, s->fd, offset, NULL, bytes,
                        cb, opaque, QEMU_AIO_DISCARD|QEMU_AIO_BLKDEV);
 }
 
 static coroutine_fn int hdev_co_pwrite_zeroes(BlockDriverState *bs,
-    int64_t offset, int count, BdrvRequestFlags flags)
+    int64_t offset, int bytes, BdrvRequestFlags flags)
 {
     BDRVRawState *s = bs->opaque;
     int rc;
@@ -2589,10 +2678,10 @@ static coroutine_fn int hdev_co_pwrite_zeroes(BlockDriverState *bs,
         return rc;
     }
     if (!(flags & BDRV_REQ_MAY_UNMAP)) {
-        return paio_submit_co(bs, s->fd, offset, NULL, count,
+        return paio_submit_co(bs, s->fd, offset, NULL, bytes,
                               QEMU_AIO_WRITE_ZEROES|QEMU_AIO_BLKDEV);
     } else if (s->discard_zeroes) {
-        return paio_submit_co(bs, s->fd, offset, NULL, count,
+        return paio_submit_co(bs, s->fd, offset, NULL, bytes,
                               QEMU_AIO_DISCARD|QEMU_AIO_BLKDEV);
     }
     return -ENOTSUP;
@@ -2651,6 +2740,16 @@ static int hdev_create(const char *filename, QemuOpts *opts,
         ret = -ENOSPC;
     }
 
+    if (!ret && total_size) {
+        uint8_t buf[BDRV_SECTOR_SIZE] = { 0 };
+        int64_t zero_size = MIN(BDRV_SECTOR_SIZE, total_size);
+        if (lseek(fd, 0, SEEK_SET) == -1) {
+            ret = -errno;
+        } else {
+            ret = qemu_write_full(fd, buf, zero_size);
+            ret = ret == zero_size ? 0 : -errno;
+        }
+    }
     qemu_close(fd);
     return ret;
 }

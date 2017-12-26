@@ -142,13 +142,33 @@ typedef struct x86_FPReg_tmp {
     uint16_t tmp_exp;
 } x86_FPReg_tmp;
 
-static void fpreg_pre_save(void *opaque)
+static void cpu_get_fp80(uint64_t *pmant, uint16_t *pexp, floatx80 f)
+{
+    CPU_LDoubleU temp;
+
+    temp.d = f;
+    *pmant = temp.l.lower;
+    *pexp = temp.l.upper;
+}
+
+static floatx80 cpu_set_fp80(uint64_t mant, uint16_t upper)
+{
+    CPU_LDoubleU temp;
+
+    temp.l.upper = upper;
+    temp.l.lower = mant;
+    return temp.d;
+}
+
+static int fpreg_pre_save(void *opaque)
 {
     x86_FPReg_tmp *tmp = opaque;
 
     /* we save the real CPU data (in case of MMX usage only 'mant'
        contains the MMX register */
     cpu_get_fp80(&tmp->tmp_mant, &tmp->tmp_exp, tmp->parent->d);
+
+    return 0;
 }
 
 static int fpreg_post_load(void *opaque, int version)
@@ -178,7 +198,7 @@ static const VMStateDescription vmstate_fpreg = {
     }
 };
 
-static void cpu_pre_save(void *opaque)
+static int cpu_pre_save(void *opaque)
 {
     X86CPU *cpu = opaque;
     CPUX86State *env = &cpu->env;
@@ -210,6 +230,7 @@ static void cpu_pre_save(void *opaque)
         env->segs[R_SS].flags &= ~(env->segs[R_SS].flags & DESC_DPL_MASK);
     }
 
+    return 0;
 }
 
 static int cpu_post_load(void *opaque, int version_id)
@@ -262,22 +283,21 @@ static int cpu_post_load(void *opaque, int version_id)
     for(i = 0; i < 8; i++) {
         env->fptags[i] = (env->fptag_vmstate >> i) & 1;
     }
-    update_fp_status(env);
+    if (tcg_enabled()) {
+        target_ulong dr7;
+        update_fp_status(env);
+        update_mxcsr_status(env);
 
-    cpu_breakpoint_remove_all(cs, BP_CPU);
-    cpu_watchpoint_remove_all(cs, BP_CPU);
-    {
+        cpu_breakpoint_remove_all(cs, BP_CPU);
+        cpu_watchpoint_remove_all(cs, BP_CPU);
+
         /* Indicate all breakpoints disabled, as they are, then
            let the helper re-enable them.  */
-        target_ulong dr7 = env->dr[7];
+        dr7 = env->dr[7];
         env->dr[7] = dr7 & ~(DR7_GLOBAL_BP_MASK | DR7_LOCAL_BP_MASK);
         cpu_x86_update_dr7(env, dr7);
     }
     tlb_flush(cs);
-
-    if (tcg_enabled()) {
-        cpu_smm_update(cpu);
-    }
     return 0;
 }
 
@@ -570,7 +590,7 @@ static bool hyperv_crash_enable_needed(void *opaque)
     CPUX86State *env = &cpu->env;
     int i;
 
-    for (i = 0; i < HV_X64_MSR_CRASH_PARAMS; i++) {
+    for (i = 0; i < HV_CRASH_PARAMS; i++) {
         if (env->msr_hv_crash_params[i]) {
             return true;
         }
@@ -584,8 +604,7 @@ static const VMStateDescription vmstate_msr_hyperv_crash = {
     .minimum_version_id = 1,
     .needed = hyperv_crash_enable_needed,
     .fields = (VMStateField[]) {
-        VMSTATE_UINT64_ARRAY(env.msr_hv_crash_params,
-                             X86CPU, HV_X64_MSR_CRASH_PARAMS),
+        VMSTATE_UINT64_ARRAY(env.msr_hv_crash_params, X86CPU, HV_CRASH_PARAMS),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -643,8 +662,7 @@ static const VMStateDescription vmstate_msr_hyperv_synic = {
         VMSTATE_UINT64(env.msr_hv_synic_control, X86CPU),
         VMSTATE_UINT64(env.msr_hv_synic_evt_page, X86CPU),
         VMSTATE_UINT64(env.msr_hv_synic_msg_page, X86CPU),
-        VMSTATE_UINT64_ARRAY(env.msr_hv_synic_sint, X86CPU,
-                             HV_SYNIC_SINT_COUNT),
+        VMSTATE_UINT64_ARRAY(env.msr_hv_synic_sint, X86CPU, HV_SINT_COUNT),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -669,10 +687,9 @@ static const VMStateDescription vmstate_msr_hyperv_stimer = {
     .minimum_version_id = 1,
     .needed = hyperv_stimer_enable_needed,
     .fields = (VMStateField[]) {
-        VMSTATE_UINT64_ARRAY(env.msr_hv_stimer_config,
-                             X86CPU, HV_SYNIC_STIMER_COUNT),
-        VMSTATE_UINT64_ARRAY(env.msr_hv_stimer_count,
-                             X86CPU, HV_SYNIC_STIMER_COUNT),
+        VMSTATE_UINT64_ARRAY(env.msr_hv_stimer_config, X86CPU,
+                             HV_STIMER_COUNT),
+        VMSTATE_UINT64_ARRAY(env.msr_hv_stimer_count, X86CPU, HV_STIMER_COUNT),
         VMSTATE_END_OF_LIST()
     }
 };

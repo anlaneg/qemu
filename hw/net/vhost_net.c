@@ -153,8 +153,8 @@ struct vhost_net *vhost_net_init(VhostNetOptions *options)
     }
     net->nc = options->net_backend;
 
-    net->dev.max_queues = 1;
-    net->dev.nvqs = 2;
+    net->dev.max_queues = 1;//最大队列数为1
+    net->dev.nvqs = 2;//默认初始化2个队列（读＋写）
     net->dev.vqs = net->vqs;
 
     if (backend_kernel) {

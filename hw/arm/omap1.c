@@ -3850,7 +3850,7 @@ static int omap_validate_tipb_mpui_addr(struct omap_mpu_state_s *s,
 
 struct omap_mpu_state_s *omap310_mpu_init(MemoryRegion *system_memory,
                 unsigned long sdram_size,
-                const char *core)
+                const char *cpu_type)
 {
     int i;
     struct omap_mpu_state_s *s = g_new0(struct omap_mpu_state_s, 1);
@@ -3858,16 +3858,9 @@ struct omap_mpu_state_s *omap310_mpu_init(MemoryRegion *system_memory,
     DriveInfo *dinfo;
     SysBusDevice *busdev;
 
-    if (!core)
-        core = "ti925t";
-
     /* Core */
     s->mpu_model = omap310;
-    s->cpu = cpu_arm_init(core);
-    if (s->cpu == NULL) {
-        fprintf(stderr, "Unable to find CPU definition\n");
-        exit(1);
-    }
+    s->cpu = ARM_CPU(cpu_create(cpu_type));
     s->sdram_size = sdram_size;
     s->sram_size = OMAP15XX_SRAM_SIZE;
 
@@ -3882,7 +3875,6 @@ struct omap_mpu_state_s *omap310_mpu_init(MemoryRegion *system_memory,
     memory_region_add_subregion(system_memory, OMAP_EMIFF_BASE, &s->emiff_ram);
     memory_region_init_ram(&s->imif_ram, NULL, "omap1.sram", s->sram_size,
                            &error_fatal);
-    vmstate_register_ram_global(&s->imif_ram);
     memory_region_add_subregion(system_memory, OMAP_IMIF_BASE, &s->imif_ram);
 
     omap_clkm_init(system_memory, 0xfffece00, 0xe1008000, s);

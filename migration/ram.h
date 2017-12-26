@@ -32,31 +32,21 @@
 #include "qemu-common.h"
 #include "exec/cpu-common.h"
 
-int64_t xbzrle_cache_resize(int64_t new_size);
-uint64_t dup_mig_pages_transferred(void);
-uint64_t norm_mig_pages_transferred(void);
-uint64_t xbzrle_mig_bytes_transferred(void);
-uint64_t xbzrle_mig_pages_transferred(void);
-uint64_t xbzrle_mig_pages_cache_miss(void);
-double xbzrle_mig_cache_miss_rate(void);
-uint64_t xbzrle_mig_pages_overflow(void);
-uint64_t ram_bytes_transferred(void);
+extern MigrationStats ram_counters;
+extern XBZRLECacheStats xbzrle_counters;
+
+int xbzrle_cache_resize(int64_t new_size, Error **errp);
 uint64_t ram_bytes_remaining(void);
-uint64_t ram_dirty_sync_count(void);
-uint64_t ram_dirty_pages_rate(void);
-uint64_t ram_postcopy_requests(void);
 uint64_t ram_bytes_total(void);
 
-void migrate_compress_threads_create(void);
-void migrate_compress_threads_join(void);
-void migrate_decompress_threads_create(void);
-void migrate_decompress_threads_join(void);
+int multifd_save_setup(void);
+int multifd_save_cleanup(Error **errp);
+int multifd_load_setup(void);
+int multifd_load_cleanup(Error **errp);
 
 uint64_t ram_pagesize_summary(void);
-void migration_page_queue_free(void);
 int ram_save_queue_pages(const char *rbname, ram_addr_t start, ram_addr_t len);
 void acct_update_position(QEMUFile *f, size_t size, bool zero);
-void free_xbzrle_decoded_buf(void);
 void ram_debug_dump_bitmap(unsigned long *todump, bool expected,
                            unsigned long pages);
 void ram_postcopy_migrated_memory_release(MigrationState *ms);
@@ -67,4 +57,9 @@ int ram_discard_range(const char *block_name, uint64_t start, size_t length);
 int ram_postcopy_incoming_init(MigrationIncomingState *mis);
 
 void ram_handle_compressed(void *host, uint8_t ch, uint64_t size);
+
+int ramblock_recv_bitmap_test(RAMBlock *rb, void *host_addr);
+void ramblock_recv_bitmap_set(RAMBlock *rb, void *host_addr);
+void ramblock_recv_bitmap_set_range(RAMBlock *rb, void *host_addr, size_t nr);
+
 #endif

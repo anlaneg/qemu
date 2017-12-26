@@ -23,6 +23,7 @@
 #include "hw/net/ftgmac100.h"
 
 #define ASPEED_SPIS_NUM  2
+#define ASPEED_WDTS_NUM  3
 
 typedef struct AspeedSoCState {
     /*< private >*/
@@ -39,7 +40,7 @@ typedef struct AspeedSoCState {
     AspeedSMCState fmc;
     AspeedSMCState spi[ASPEED_SPIS_NUM];
     AspeedSDMCState sdmc;
-    AspeedWDTState wdt;
+    AspeedWDTState wdt[ASPEED_WDTS_NUM];
     FTGMAC100State ftgmac100;
 } AspeedSoCState;
 
@@ -48,7 +49,7 @@ typedef struct AspeedSoCState {
 
 typedef struct AspeedSoCInfo {
     const char *name;
-    const char *cpu_model;
+    const char *cpu_type;
     uint32_t silicon_rev;
     hwaddr sdram_base;
     uint64_t sram_size;
@@ -56,6 +57,7 @@ typedef struct AspeedSoCInfo {
     const hwaddr *spi_bases;
     const char *fmc_typename;
     const char **spi_typename;
+    int wdts_num;
 } AspeedSoCInfo;
 
 typedef struct AspeedSoCClass {

@@ -13,7 +13,7 @@
 #include "hw/virtio/vhost.h"
 #include "hw/virtio/vhost-backend.h"
 #include "hw/virtio/virtio-net.h"
-#include "sysemu/char.h"
+#include "chardev/char-fe.h"
 #include "sysemu/kvm.h"
 #include "qemu/error-report.h"
 #include "qemu/sockets.h"
@@ -33,6 +33,7 @@ enum VhostUserProtocolFeature {
     VHOST_USER_PROTOCOL_F_REPLY_ACK = 3,
     VHOST_USER_PROTOCOL_F_NET_MTU = 4,
     VHOST_USER_PROTOCOL_F_SLAVE_REQ = 5,
+    VHOST_USER_PROTOCOL_F_CROSS_ENDIAN = 6,
 
     VHOST_USER_PROTOCOL_F_MAX
 };
@@ -63,6 +64,7 @@ typedef enum VhostUserRequest {
     VHOST_USER_NET_SET_MTU = 20,
     VHOST_USER_SET_SLAVE_REQ_FD = 21,
     VHOST_USER_IOTLB_MSG = 22,
+    VHOST_USER_SET_VRING_ENDIAN = 23,
     VHOST_USER_MAX
 } VhostUserRequest;
 
@@ -369,8 +371,25 @@ static int vhost_user_set_vring_addr(struct vhost_dev *dev,
 static int vhost_user_set_vring_endian(struct vhost_dev *dev,
                                        struct vhost_vring_state *ring)
 {
-    error_report("vhost-user trying to send unhandled ioctl");
-    return -1;
+    bool cross_endian = virtio_has_feature(dev->protocol_features,
+                                           VHOST_USER_PROTOCOL_F_CROSS_ENDIAN);
+    VhostUserMsg msg = {
+        .request = VHOST_USER_SET_VRING_ENDIAN,
+        .flags = VHOST_USER_VERSION,
+        .payload.state = *ring,
+        .size = sizeof(msg.payload.state),
+    };
+
+    if (!cross_endian) {
+        error_report("vhost-user trying to send unhandled ioctl");
+        return -1;
+    }
+
+    if (vhost_user_write(dev, &msg, NULL, 0) < 0) {
+        return -1;
+    }
+
+    return 0;
 }
 
 static int vhost_set_vring(struct vhost_dev *dev,
@@ -711,6 +730,7 @@ out:
     return ret;
 }
 
+//vhost-user初始化
 static int vhost_user_init(struct vhost_dev *dev, void *opaque)
 {
     uint64_t features, protocol_features;
@@ -794,6 +814,7 @@ static int vhost_user_cleanup(struct vhost_dev *dev)
 
     u = dev->opaque;
     if (u->slave_fd >= 0) {
+        qemu_set_fd_handler(u->slave_fd, NULL, NULL, NULL);
         close(u->slave_fd);
         u->slave_fd = -1;
     }
@@ -803,6 +824,7 @@ static int vhost_user_cleanup(struct vhost_dev *dev)
     return 0;
 }
 
+//返回虚队列index
 static int vhost_user_get_vq_index(struct vhost_dev *dev, int idx)
 {
     assert(idx >= dev->vq_index && idx < dev->vq_index + dev->nvqs);
@@ -918,6 +940,7 @@ static void vhost_user_set_iotlb_callback(struct vhost_dev *dev, int enabled)
     /* No-op as the receive channel is not dedicated to IOTLB messages. */
 }
 
+//vhost-user时挂接的操作集
 const VhostOps user_ops = {
         .backend_type = VHOST_BACKEND_TYPE_USER,
         .vhost_backend_init = vhost_user_init,

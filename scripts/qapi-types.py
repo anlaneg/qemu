@@ -10,6 +10,7 @@
 #
 # This work is licensed under the terms of the GNU GPL, version 2.
 # See the COPYING file in the top-level directory.
+# -*- coding:utf-8 -*-  
 
 from qapi import *
 
@@ -291,6 +292,10 @@ fdef.write(mcgen('''
 #include "%(prefix)sqapi-visit.h"
 ''',
                  prefix=prefix))
+
+fdecl.write(mcgen('''
+#include "qapi/util.h"
+'''))
 
 schema = QAPISchema(input_file)
 gen = QAPISchemaGenTypeVisitor()

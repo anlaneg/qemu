@@ -31,7 +31,6 @@
 #include "qemu/module.h"
 #include "qapi/qmp/qbool.h"
 #include "qapi/qmp/qdict.h"
-#include "qapi/qmp/qint.h"
 #include "qapi/qmp/qstring.h"
 #include "sysemu/qtest.h"
 
@@ -150,20 +149,6 @@ static QemuOptsList *config_groups[] = {
     NULL
 };
 
-static int get_event_by_name(const char *name, BlkdebugEvent *event)
-{
-    int i;
-
-    for (i = 0; i < BLKDBG__MAX; i++) {
-        if (!strcmp(BlkdebugEvent_lookup[i], name)) {
-            *event = i;
-            return 0;
-        }
-    }
-
-    return -1;
-}
-
 struct add_rule_data {
     BDRVBlkdebugState *s;
     int action;
@@ -174,7 +159,7 @@ static int add_rule(void *opaque, QemuOpts *opts, Error **errp)
     struct add_rule_data *d = opaque;
     BDRVBlkdebugState *s = d->s;
     const char* event_name;
-    BlkdebugEvent event;
+    int event;
     struct BlkdebugRule *rule;
     int64_t sector;
 
@@ -183,8 +168,9 @@ static int add_rule(void *opaque, QemuOpts *opts, Error **errp)
     if (!event_name) {
         error_setg(errp, "Missing event name for rule");
         return -1;
-    } else if (get_event_by_name(event_name, &event) < 0) {
-        error_setg(errp, "Invalid event name \"%s\"", event_name);
+    }
+    event = qapi_enum_parse(&BlkdebugEvent_lookup, event_name, -1, errp);
+    if (event < 0) {
         return -1;
     }
 
@@ -258,7 +244,6 @@ static int read_config(BDRVBlkdebugState *s, const char *filename,
         ret = qemu_config_parse(f, config_groups, filename);
         if (ret < 0) {
             error_setg(errp, "Could not parse blkdebug config file");
-            ret = -EINVAL;
             goto fail;
         }
     }
@@ -576,7 +561,7 @@ static int blkdebug_co_flush(BlockDriverState *bs)
 }
 
 static int coroutine_fn blkdebug_co_pwrite_zeroes(BlockDriverState *bs,
-                                                  int64_t offset, int count,
+                                                  int64_t offset, int bytes,
                                                   BdrvRequestFlags flags)
 {
     uint32_t align = MAX(bs->bl.request_alignment,
@@ -587,29 +572,29 @@ static int coroutine_fn blkdebug_co_pwrite_zeroes(BlockDriverState *bs,
      * preferred alignment (so that we test the fallback to writes on
      * unaligned portions), and check that the block layer never hands
      * us anything unaligned that crosses an alignment boundary.  */
-    if (count < align) {
+    if (bytes < align) {
         assert(QEMU_IS_ALIGNED(offset, align) ||
-               QEMU_IS_ALIGNED(offset + count, align) ||
+               QEMU_IS_ALIGNED(offset + bytes, align) ||
                DIV_ROUND_UP(offset, align) ==
-               DIV_ROUND_UP(offset + count, align));
+               DIV_ROUND_UP(offset + bytes, align));
         return -ENOTSUP;
     }
     assert(QEMU_IS_ALIGNED(offset, align));
-    assert(QEMU_IS_ALIGNED(count, align));
+    assert(QEMU_IS_ALIGNED(bytes, align));
     if (bs->bl.max_pwrite_zeroes) {
-        assert(count <= bs->bl.max_pwrite_zeroes);
+        assert(bytes <= bs->bl.max_pwrite_zeroes);
     }
 
-    err = rule_check(bs, offset, count);
+    err = rule_check(bs, offset, bytes);
     if (err) {
         return err;
     }
 
-    return bdrv_co_pwrite_zeroes(bs->file, offset, count, flags);
+    return bdrv_co_pwrite_zeroes(bs->file, offset, bytes, flags);
 }
 
 static int coroutine_fn blkdebug_co_pdiscard(BlockDriverState *bs,
-                                             int64_t offset, int count)
+                                             int64_t offset, int bytes)
 {
     uint32_t align = bs->bl.pdiscard_alignment;
     int err;
@@ -617,29 +602,40 @@ static int coroutine_fn blkdebug_co_pdiscard(BlockDriverState *bs,
     /* Only pass through requests that are larger than requested
      * minimum alignment, and ensure that unaligned requests do not
      * cross optimum discard boundaries. */
-    if (count < bs->bl.request_alignment) {
+    if (bytes < bs->bl.request_alignment) {
         assert(QEMU_IS_ALIGNED(offset, align) ||
-               QEMU_IS_ALIGNED(offset + count, align) ||
+               QEMU_IS_ALIGNED(offset + bytes, align) ||
                DIV_ROUND_UP(offset, align) ==
-               DIV_ROUND_UP(offset + count, align));
+               DIV_ROUND_UP(offset + bytes, align));
         return -ENOTSUP;
     }
     assert(QEMU_IS_ALIGNED(offset, bs->bl.request_alignment));
-    assert(QEMU_IS_ALIGNED(count, bs->bl.request_alignment));
-    if (align && count >= align) {
+    assert(QEMU_IS_ALIGNED(bytes, bs->bl.request_alignment));
+    if (align && bytes >= align) {
         assert(QEMU_IS_ALIGNED(offset, align));
-        assert(QEMU_IS_ALIGNED(count, align));
+        assert(QEMU_IS_ALIGNED(bytes, align));
     }
     if (bs->bl.max_pdiscard) {
-        assert(count <= bs->bl.max_pdiscard);
+        assert(bytes <= bs->bl.max_pdiscard);
     }
 
-    err = rule_check(bs, offset, count);
+    err = rule_check(bs, offset, bytes);
     if (err) {
         return err;
     }
 
-    return bdrv_co_pdiscard(bs->file->bs, offset, count);
+    return bdrv_co_pdiscard(bs->file->bs, offset, bytes);
+}
+
+static int64_t coroutine_fn blkdebug_co_get_block_status(
+    BlockDriverState *bs, int64_t sector_num, int nb_sectors, int *pnum,
+    BlockDriverState **file)
+{
+    assert(QEMU_IS_ALIGNED(sector_num | nb_sectors,
+                           DIV_ROUND_UP(bs->bl.request_alignment,
+                                        BDRV_SECTOR_SIZE)));
+    return bdrv_co_get_block_status_from_file(bs, sector_num, nb_sectors,
+                                              pnum, file);
 }
 
 static void blkdebug_close(BlockDriverState *bs)
@@ -734,12 +730,12 @@ static int blkdebug_debug_breakpoint(BlockDriverState *bs, const char *event,
 {
     BDRVBlkdebugState *s = bs->opaque;
     struct BlkdebugRule *rule;
-    BlkdebugEvent blkdebug_event;
+    int blkdebug_event;
 
-    if (get_event_by_name(event, &blkdebug_event) < 0) {
+    blkdebug_event = qapi_enum_parse(&BlkdebugEvent_lookup, event, -1, NULL);
+    if (blkdebug_event < 0) {
         return -ENOENT;
     }
-
 
     rule = g_malloc(sizeof(*rule));
     *rule = (struct BlkdebugRule) {
@@ -812,11 +808,6 @@ static int64_t blkdebug_getlength(BlockDriverState *bs)
     return bdrv_getlength(bs->file->bs);
 }
 
-static int blkdebug_truncate(BlockDriverState *bs, int64_t offset, Error **errp)
-{
-    return bdrv_truncate(bs->file, offset, errp);
-}
-
 static void blkdebug_refresh_filename(BlockDriverState *bs, QDict *options)
 {
     BDRVBlkdebugState *s = bs->opaque;
@@ -840,9 +831,13 @@ static void blkdebug_refresh_filename(BlockDriverState *bs, QDict *options)
     }
 
     if (!force_json && bs->file->bs->exact_filename[0]) {
-        snprintf(bs->exact_filename, sizeof(bs->exact_filename),
-                 "blkdebug:%s:%s", s->config_file ?: "",
-                 bs->file->bs->exact_filename);
+        int ret = snprintf(bs->exact_filename, sizeof(bs->exact_filename),
+                           "blkdebug:%s:%s", s->config_file ?: "",
+                           bs->file->bs->exact_filename);
+        if (ret >= sizeof(bs->exact_filename)) {
+            /* An overflow makes the filename unusable, so do not report any */
+            bs->exact_filename[0] = 0;
+        }
     }
 
     opts = qdict_new();
@@ -895,6 +890,7 @@ static BlockDriver bdrv_blkdebug = {
     .format_name            = "blkdebug",
     .protocol_name          = "blkdebug",
     .instance_size          = sizeof(BDRVBlkdebugState),
+    .is_filter              = true,
 
     .bdrv_parse_filename    = blkdebug_parse_filename,
     .bdrv_file_open         = blkdebug_open,
@@ -903,7 +899,6 @@ static BlockDriver bdrv_blkdebug = {
     .bdrv_child_perm        = bdrv_filter_default_perms,
 
     .bdrv_getlength         = blkdebug_getlength,
-    .bdrv_truncate          = blkdebug_truncate,
     .bdrv_refresh_filename  = blkdebug_refresh_filename,
     .bdrv_refresh_limits    = blkdebug_refresh_limits,
 
@@ -912,6 +907,7 @@ static BlockDriver bdrv_blkdebug = {
     .bdrv_co_flush_to_disk  = blkdebug_co_flush,
     .bdrv_co_pwrite_zeroes  = blkdebug_co_pwrite_zeroes,
     .bdrv_co_pdiscard       = blkdebug_co_pdiscard,
+    .bdrv_co_get_block_status = blkdebug_co_get_block_status,
 
     .bdrv_debug_event           = blkdebug_debug_event,
     .bdrv_debug_breakpoint      = blkdebug_debug_breakpoint,

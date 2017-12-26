@@ -43,7 +43,7 @@ typedef struct QIOChannelSocket QIOChannelSocket;
 
 struct QIOChannelSocket {
     QIOChannel parent;
-    int fd;
+    int fd;//向对端发送报文的fd
     struct sockaddr_storage localAddr;
     socklen_t localAddrLen;
     struct sockaddr_storage remoteAddr;

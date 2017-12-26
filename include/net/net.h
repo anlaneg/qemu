@@ -32,6 +32,7 @@ typedef struct NICPeers {
     int32_t queues;
 } NICPeers;
 
+//网卡的配置信息
 typedef struct NICConf {
     MACAddr macaddr;
     NICPeers peers;
@@ -91,15 +92,16 @@ struct NetClientState {
     int link_down;
     QTAILQ_ENTRY(NetClientState) next;
     NetClientState *peer;
-    NetQueue *incoming_queue;
-    char *model;
+    NetQueue *incoming_queue;//队列
+    char *model;//作用不明，取值比如"vhost_user"
     char *name;
     char info_str[256];
     unsigned receive_disabled : 1;
-    NetClientDestructor *destructor;
-    unsigned int queue_index;
+    NetClientDestructor *destructor;//nc释放时调用
+    unsigned int queue_index;//队列索引
     unsigned rxfilter_notify_enabled:1;
     int vring_enable;
+    int vnet_hdr_len;
     QTAILQ_HEAD(NetFilterHead, NetFilterState) filters;
 };
 
@@ -111,9 +113,13 @@ typedef struct NICState {
 } NICState;
 
 struct SocketReadState {
-    int state; /* 0 = getting length, 1 = getting data */
+    /* 0 = getting length, 1 = getting vnet header length, 2 = getting data */
+    int state;
+    /* This flag decide whether to read the vnet_hdr_len field */
+    bool vnet_hdr;
     uint32_t index;
     uint32_t packet_len;
+    uint32_t vnet_hdr_len;
     uint8_t buf[NET_BUFSIZE];
     SocketReadStateFinalize *finalize;
 };
@@ -176,14 +182,18 @@ ssize_t qemu_deliver_packet_iov(NetClientState *sender,
 void print_net_client(Monitor *mon, NetClientState *nc);
 void hmp_info_network(Monitor *mon, const QDict *qdict);
 void net_socket_rs_init(SocketReadState *rs,
-                        SocketReadStateFinalize *finalize);
+                        SocketReadStateFinalize *finalize,
+                        bool vnet_hdr);
 
 /* NIC info */
 
 #define MAX_NICS 8
 
+// NICInfo代表一个虚拟网卡，也就是和客户机相关的，这里姑且称之为客户端，
+//通过NICInfo中的netdev指针，NICInfo和Hub ports相连接。
+//qemu中有一个全局的数组来表示NICInfo的空间，见nd_table变量
 struct NICInfo {
-    MACAddr macaddr;
+    MACAddr macaddr;//mac地址
     char *model;
     char *name;
     char *devaddr;

@@ -27,7 +27,6 @@
 #include "qom/qom-qobject.h"
 #include "qapi/qmp/qobject.h"
 #include "qapi/qmp/qbool.h"
-#include "qapi/qmp/qint.h"
 #include "qapi/qmp/qstring.h"
 
 #define MAX_INTERFACES 32
@@ -55,8 +54,8 @@ struct TypeImpl
 
     void *class_data;
 
-    void (*instance_init)(Object *obj);
-    void (*instance_post_init)(Object *obj);
+    void (*instance_init)(Object *obj);//实例化对象时，自父类型向下初始化实例
+    void (*instance_post_init)(Object *obj);//实例化对象时，自子类型向上初始化实例
     void (*instance_finalize)(Object *obj);
 
     bool abstract;
@@ -145,7 +144,7 @@ static TypeImpl *type_new(const TypeInfo *info)
 static TypeImpl *type_register_internal(const TypeInfo *info)
 {
     TypeImpl *ti;
-    ti = type_new(info);//创建ti
+    ti = type_new(info);//由info创建ti
 
     type_table_add(ti);//加入hash表中
     return ti;
@@ -163,6 +162,15 @@ TypeImpl *type_register(const TypeInfo *info)
 TypeImpl *type_register_static(const TypeInfo *info)
 {
     return type_register(info);
+}
+
+void type_register_static_array(const TypeInfo *infos, int nr_infos)
+{
+    int i;
+
+    for (i = 0; i < nr_infos; i++) {
+        type_register_static(&infos[i]);
+    }
 }
 
 //给定名称查询TypeImpl
@@ -196,13 +204,15 @@ static bool type_has_parent(TypeImpl *type)
 static size_t type_class_get_size(TypeImpl *ti)
 {
     if (ti->class_size) {
-        return ti->class_size;
+        return ti->class_size;//如果自身有class_size，则使用
     }
 
+    //否则尝试使用父节点的class_size
     if (type_has_parent(ti)) {
         return type_class_get_size(type_get_parent(ti));
     }
 
+    //如果没有父节点，则使用objectclass
     return sizeof(ObjectClass);
 }
 
@@ -283,7 +293,7 @@ static void object_property_free(gpointer data)
     g_free(prop);
 }
 
-//type初始化
+//type初始化（可简单理解为对象的初始化，通过memcpy父类初始化好的内存来实现）
 //先调基类的class_init,再调class_base_init{到达下层后又会调回来}
 static void type_initialize(TypeImpl *ti)
 {
@@ -309,14 +319,14 @@ static void type_initialize(TypeImpl *ti)
 
     parent = type_get_parent(ti);
     if (parent) {
-    		//递归实例化父类
+    	//递归实例化父类
         type_initialize(parent);
         GSList *e;
         int i;
 
         //将父类型实例化好的数据copy到自身class上来
         g_assert_cmpint(parent->class_size, <=, ti->class_size);
-        memcpy(ti->class, parent->class, parent->class_size);
+        memcpy(ti->class, parent->class, parent->class_size);//将父类型创建好的class copy到自身
         ti->class->interfaces = NULL;
         //构造属性表
         ti->class->properties = g_hash_table_new_full(
@@ -349,7 +359,7 @@ static void type_initialize(TypeImpl *ti)
             type_initialize_interface(ti, t, t);
         }
     } else {
-    		//构造基类的属性表
+    	//构造基类的属性表
         ti->class->properties = g_hash_table_new_full(
             g_str_hash, g_str_equal, g_free, object_property_free);
     }
@@ -364,6 +374,7 @@ static void type_initialize(TypeImpl *ti)
         parent = type_get_parent(parent);
     }
 
+    //优先调用父类的class_init,然后再调用本类的class_init
     if (ti->class_init) {
         ti->class_init(ti->class, ti->class_data);
     }
@@ -372,9 +383,11 @@ static void type_initialize(TypeImpl *ti)
 static void object_init_with_type(Object *obj, TypeImpl *ti)
 {
     if (type_has_parent(ti)) {
+    	//递归至父类型执行instance_init
         object_init_with_type(obj, type_get_parent(ti));
     }
 
+    //自父节点向下执行instance_init
     if (ti->instance_init) {
         ti->instance_init(obj);
     }
@@ -382,6 +395,7 @@ static void object_init_with_type(Object *obj, TypeImpl *ti)
 
 static void object_post_init_with_type(Object *obj, TypeImpl *ti)
 {
+	//自底向上调用instance_post_init函数
     if (ti->instance_post_init) {
         ti->instance_post_init(obj);
     }
@@ -396,19 +410,20 @@ static void object_initialize_with_type(void *data, size_t size, TypeImpl *type)
     Object *obj = data;
 
     g_assert(type != NULL);
-    type_initialize(type);
+    type_initialize(type);//防止type的class未初始化
 
+    //可实例化的object都是object的子类，故大小必大于Object
     g_assert_cmpint(type->instance_size, >=, sizeof(Object));
-    g_assert(type->abstract == false);
+    g_assert(type->abstract == false);//可实例化的均不可能是抽象数据结构
     g_assert_cmpint(size, >=, type->instance_size);
 
     memset(obj, 0, type->instance_size);
-    obj->class = type->class;
+    obj->class = type->class;//清0后，指明对象所属的class
     object_ref(obj);
     obj->properties = g_hash_table_new_full(g_str_hash, g_str_equal,
                                             NULL, object_property_free);
-    object_init_with_type(obj, type);
-    object_post_init_with_type(obj, type);
+    object_init_with_type(obj, type);//调用instance_init回调
+    object_post_init_with_type(obj, type);//调用instance_post_init回调
 }
 
 void object_initialize(void *data, size_t size, const char *typename)
@@ -513,9 +528,9 @@ static Object *object_new_with_type(Type type)
     Object *obj;
 
     g_assert(type != NULL);
-    type_initialize(type);
+    type_initialize(type);//初始化类
 
-    obj = g_malloc(type->instance_size);
+    obj = g_malloc(type->instance_size);//为object申请内存
     object_initialize_with_type(obj, type->instance_size, type);
     obj->free = g_free;
 
@@ -782,7 +797,7 @@ out:
     return ret;
 }
 
-const char *object_get_typename(Object *obj)
+const char *object_get_typename(const Object *obj)
 {
     return obj->class->type->name;
 }
@@ -812,7 +827,7 @@ ObjectClass *object_class_by_name(const char *typename)
         return NULL;
     }
 
-    type_initialize(type);
+    type_initialize(type);//初始化此类型的class
 
     return type->class;
 }
@@ -1169,7 +1184,7 @@ char *object_property_get_str(Object *obj, const char *name,
         retval = g_strdup(qstring_get_str(qstring));
     }
 
-    QDECREF(qstring);
+    qobject_decref(ret);
     return retval;
 }
 
@@ -1230,43 +1245,71 @@ bool object_property_get_bool(Object *obj, const char *name,
         retval = qbool_get_bool(qbool);
     }
 
-    QDECREF(qbool);
+    qobject_decref(ret);
     return retval;
 }
 
 void object_property_set_int(Object *obj, int64_t value,
                              const char *name, Error **errp)
 {
-    QInt *qint = qint_from_int(value);
-    object_property_set_qobject(obj, QOBJECT(qint), name, errp);
+    QNum *qnum = qnum_from_int(value);
+    object_property_set_qobject(obj, QOBJECT(qnum), name, errp);
 
-    QDECREF(qint);
+    QDECREF(qnum);
 }
 
 int64_t object_property_get_int(Object *obj, const char *name,
                                 Error **errp)
 {
     QObject *ret = object_property_get_qobject(obj, name, errp);
-    QInt *qint;
+    QNum *qnum;
     int64_t retval;
 
     if (!ret) {
         return -1;
     }
-    qint = qobject_to_qint(ret);
-    if (!qint) {
+
+    qnum = qobject_to_qnum(ret);
+    if (!qnum || !qnum_get_try_int(qnum, &retval)) {
         error_setg(errp, QERR_INVALID_PARAMETER_TYPE, name, "int");
         retval = -1;
-    } else {
-        retval = qint_get_int(qint);
     }
 
-    QDECREF(qint);
+    qobject_decref(ret);
+    return retval;
+}
+
+void object_property_set_uint(Object *obj, uint64_t value,
+                              const char *name, Error **errp)
+{
+    QNum *qnum = qnum_from_uint(value);
+
+    object_property_set_qobject(obj, QOBJECT(qnum), name, errp);
+    QDECREF(qnum);
+}
+
+uint64_t object_property_get_uint(Object *obj, const char *name,
+                                  Error **errp)
+{
+    QObject *ret = object_property_get_qobject(obj, name, errp);
+    QNum *qnum;
+    uint64_t retval;
+
+    if (!ret) {
+        return 0;
+    }
+    qnum = qobject_to_qnum(ret);
+    if (!qnum || !qnum_get_try_uint(qnum, &retval)) {
+        error_setg(errp, QERR_INVALID_PARAMETER_TYPE, name, "uint");
+        retval = 0;
+    }
+
+    qobject_decref(ret);
     return retval;
 }
 
 typedef struct EnumProperty {
-    const char * const *strings;
+    const QEnumLookup *lookup;
     int (*get)(Object *, Error **);
     void (*set)(Object *, int, Error **);
 } EnumProperty;
@@ -1304,7 +1347,7 @@ int object_property_get_enum(Object *obj, const char *name,
     visit_complete(v, &str);
     visit_free(v);
     v = string_input_visitor_new(str);
-    visit_type_enum(v, name, &ret, enumprop->strings, errp);
+    visit_type_enum(v, name, &ret, enumprop->lookup, errp);
 
     g_free(str);
     visit_free(v);
@@ -1390,6 +1433,17 @@ Object *object_get_objects_root(void)
     return container_get(object_get_root(), "/objects");
 }
 
+Object *object_get_internal_root(void)
+{
+    static Object *internal_root;
+
+    if (!internal_root) {
+        internal_root = object_new("container");
+    }
+
+    return internal_root;
+}
+
 static void object_get_child_property(Object *obj, Visitor *v,
                                       const char *name, void *opaque,
                                       Error **errp)
@@ -1448,7 +1502,7 @@ out:
     g_free(type);
 }
 
-void object_property_allow_set_link(Object *obj, const char *name,
+void object_property_allow_set_link(const Object *obj, const char *name,
                                     Object *val, Error **errp)
 {
     /* Allow the link to be set, always */
@@ -1456,7 +1510,7 @@ void object_property_allow_set_link(Object *obj, const char *name,
 
 typedef struct {
     Object **child;
-    void (*check)(Object *, const char *, Object *, Error **);
+    void (*check)(const Object *, const char *, Object *, Error **);
     ObjectPropertyLinkFlags flags;
 } LinkProperty;
 
@@ -1572,7 +1626,7 @@ static void object_release_link_property(Object *obj, const char *name,
 
 void object_property_add_link(Object *obj, const char *name,
                               const char *type, Object **child,
-                              void (*check)(Object *, const char *,
+                              void (*check)(const Object *, const char *,
                                             Object *, Error **),
                               ObjectPropertyLinkFlags flags,
                               Error **errp)
@@ -1732,15 +1786,13 @@ static Object *object_resolve_partial_path(Object *parent,
                                             typename, ambiguous);
         if (found) {
             if (obj) {
-                if (ambiguous) {
-                    *ambiguous = true;
-                }
+                *ambiguous = true;
                 return NULL;
             }
             obj = found;
         }
 
-        if (ambiguous && *ambiguous) {
+        if (*ambiguous) {
             return NULL;
         }
     }
@@ -1749,7 +1801,7 @@ static Object *object_resolve_partial_path(Object *parent,
 }
 
 Object *object_resolve_path_type(const char *path, const char *typename,
-                                 bool *ambiguous)
+                                 bool *ambiguousp)
 {
     Object *obj;
     gchar **parts;
@@ -1758,11 +1810,12 @@ Object *object_resolve_path_type(const char *path, const char *typename,
     assert(parts);
 
     if (parts[0] == NULL || strcmp(parts[0], "") != 0) {
-        if (ambiguous) {
-            *ambiguous = false;
-        }
+        bool ambiguous = false;
         obj = object_resolve_partial_path(object_get_root(), parts,
-                                          typename, ambiguous);
+                                          typename, &ambiguous);
+        if (ambiguousp) {
+            *ambiguousp = ambiguous;
+        }
     } else {
         obj = object_resolve_abs_path(object_get_root(), parts, typename, 1);
     }
@@ -1974,7 +2027,7 @@ static void property_get_enum(Object *obj, Visitor *v, const char *name,
         return;
     }
 
-    visit_type_enum(v, name, &value, prop->strings, errp);
+    visit_type_enum(v, name, &value, prop->lookup, errp);
 }
 
 static void property_set_enum(Object *obj, Visitor *v, const char *name,
@@ -1984,7 +2037,7 @@ static void property_set_enum(Object *obj, Visitor *v, const char *name,
     int value;
     Error *err = NULL;
 
-    visit_type_enum(v, name, &value, prop->strings, &err);
+    visit_type_enum(v, name, &value, prop->lookup, &err);
     if (err) {
         error_propagate(errp, err);
         return;
@@ -2001,7 +2054,7 @@ static void property_release_enum(Object *obj, const char *name,
 
 void object_property_add_enum(Object *obj, const char *name,
                               const char *typename,
-                              const char * const *strings,
+                              const QEnumLookup *lookup,
                               int (*get)(Object *, Error **),
                               void (*set)(Object *, int, Error **),
                               Error **errp)
@@ -2009,7 +2062,7 @@ void object_property_add_enum(Object *obj, const char *name,
     Error *local_err = NULL;
     EnumProperty *prop = g_malloc(sizeof(*prop));
 
-    prop->strings = strings;
+    prop->lookup = lookup;
     prop->get = get;
     prop->set = set;
 
@@ -2026,7 +2079,7 @@ void object_property_add_enum(Object *obj, const char *name,
 
 void object_class_property_add_enum(ObjectClass *klass, const char *name,
                                     const char *typename,
-                                    const char * const *strings,
+                                    const QEnumLookup *lookup,
                                     int (*get)(Object *, Error **),
                                     void (*set)(Object *, int, Error **),
                                     Error **errp)
@@ -2034,7 +2087,7 @@ void object_class_property_add_enum(ObjectClass *klass, const char *name,
     Error *local_err = NULL;
     EnumProperty *prop = g_malloc(sizeof(*prop));
 
-    prop->strings = strings;
+    prop->lookup = lookup;
     prop->get = get;
     prop->set = set;
 

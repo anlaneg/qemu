@@ -27,18 +27,11 @@ int socket_set_fast_reuse(int fd);
 #define SHUT_RDWR 2
 #endif
 
-/* callback function for nonblocking connect
- * valid fd on success, negative error code on failure
- */
-typedef void NonBlockingConnectHandler(int fd, Error *err, void *opaque);
-
 int inet_ai_family_from_address(InetSocketAddress *addr,
                                 Error **errp);
 int inet_parse(InetSocketAddress *addr, const char *str, Error **errp);
 int inet_connect(const char *str, Error **errp);
-int inet_connect_saddr(InetSocketAddress *saddr,
-                       NonBlockingConnectHandler *callback, void *opaque,
-                       Error **errp);
+int inet_connect_saddr(InetSocketAddress *saddr, Error **errp);
 
 NetworkAddressFamily inet_netfamily(int family);
 
@@ -46,14 +39,14 @@ int unix_listen(const char *path, char *ostr, int olen, Error **errp);
 int unix_connect(const char *path, Error **errp);
 
 SocketAddress *socket_parse(const char *str, Error **errp);
-int socket_connect(SocketAddress *addr, NonBlockingConnectHandler *callback,
-                   void *opaque, Error **errp);
+int socket_connect(SocketAddress *addr, Error **errp);
 int socket_listen(SocketAddress *addr, Error **errp);
 void socket_listen_cleanup(int fd, Error **errp);
 int socket_dgram(SocketAddress *remote, SocketAddress *local, Error **errp);
 
 /* Old, ipv4 only bits.  Don't use for new code. */
-int parse_host_port(struct sockaddr_in *saddr, const char *str);
+int parse_host_port(struct sockaddr_in *saddr, const char *str,
+                    Error **errp);
 int socket_init(void);
 
 /**
@@ -104,21 +97,6 @@ SocketAddress *socket_local_address(int fd, Error **errp);
  * Returns: the socket address struct, or NULL on error
  */
 SocketAddress *socket_remote_address(int fd, Error **errp);
-
-/**
- * socket_address_to_string:
- * @addr: the socket address struct
- * @errp: pointer to uninitialized error object
- *
- * Get the string representation of the socket
- * address. A pointer to the char array containing
- * string format will be returned, the caller is
- * required to release the returned value when no
- * longer required with g_free.
- *
- * Returns: the socket address in string format, or NULL on error
- */
-char *socket_address_to_string(struct SocketAddress *addr, Error **errp);
 
 /**
  * socket_address_flatten:

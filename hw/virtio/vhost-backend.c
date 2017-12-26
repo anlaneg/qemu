@@ -52,11 +52,13 @@ static int vhost_kernel_memslots_limit(struct vhost_dev *dev)
                             &s, NULL, NULL)) {
         uint64_t val = g_ascii_strtoull(s, NULL, 10);
         if (!((val == G_MAXUINT64 || !val) && errno)) {
+            g_free(s);
             return val;
         }
         error_report("ignoring invalid max_mem_regions value in vhost module:"
                      " %s", s);
     }
+    g_free(s);
     return limit;
 }
 
@@ -309,7 +311,10 @@ int vhost_backend_update_device_iotlb(struct vhost_dev *dev,
         return -EINVAL;
     }
 
-    return dev->vhost_ops->vhost_send_device_iotlb_msg(dev, &imsg);
+    if (dev->vhost_ops && dev->vhost_ops->vhost_send_device_iotlb_msg)
+        return dev->vhost_ops->vhost_send_device_iotlb_msg(dev, &imsg);
+
+    return -ENODEV;
 }
 
 int vhost_backend_invalidate_device_iotlb(struct vhost_dev *dev,
@@ -321,7 +326,10 @@ int vhost_backend_invalidate_device_iotlb(struct vhost_dev *dev,
     imsg.size = len;
     imsg.type = VHOST_IOTLB_INVALIDATE;
 
-    return dev->vhost_ops->vhost_send_device_iotlb_msg(dev, &imsg);
+    if (dev->vhost_ops && dev->vhost_ops->vhost_send_device_iotlb_msg)
+        return dev->vhost_ops->vhost_send_device_iotlb_msg(dev, &imsg);
+
+    return -ENODEV;
 }
 
 int vhost_backend_handle_iotlb_msg(struct vhost_dev *dev,

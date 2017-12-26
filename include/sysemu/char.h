@@ -97,7 +97,7 @@ struct Chardev {
 
     QemuMutex chr_write_lock;
     CharBackend *be;
-    char *label;
+    char *label;//设备名称（例如socket)
     char *filename;
     int logfd;
     int be_open;

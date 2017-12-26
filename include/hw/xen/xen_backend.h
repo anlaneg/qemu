@@ -16,6 +16,7 @@
 /* variables */
 extern struct xs_handle *xenstore;
 extern const char *xen_protocol;
+extern bool xen_feature_grant_copy;
 extern DeviceState *xen_sysdev;
 extern BusState *xen_sysbus;
 
@@ -54,8 +55,6 @@ extern struct XenDevOps xen_netdev_ops;       /* xen_nic.c         */
 #ifdef CONFIG_USB_LIBUSB
 extern struct XenDevOps xen_usb_ops;          /* xen-usb.c         */
 #endif
-
-void xen_init_display(int domid);
 
 /* configuration (aka xenbus setup) */
 void xen_config_cleanup(void);

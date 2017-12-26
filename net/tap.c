@@ -47,7 +47,7 @@
 
 typedef struct TAPState {
     NetClientState nc;
-    int fd;
+    int fd;//tap口fd
     char down_script[1024];
     char down_script_arg[128];
     uint8_t buf[NET_BUFSIZE];

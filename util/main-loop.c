@@ -32,6 +32,7 @@
 #include "slirp/libslirp.h"
 #include "qemu/main-loop.h"
 #include "block/aio.h"
+#include "qemu/error-report.h"
 
 #ifndef _WIN32
 
@@ -236,9 +237,8 @@ static int os_host_main_loop_wait(int64_t timeout)
         static bool notified;
 
         if (!notified && !qtest_enabled() && !qtest_driver()) {
-            fprintf(stderr,
-                    "main-loop: WARNING: I/O thread spun for %d iterations\n",
-                    MAX_MAIN_LOOP_SPIN);
+            warn_report("I/O thread spun for %d iterations",
+                        MAX_MAIN_LOOP_SPIN);
             notified = true;
         }
 
@@ -487,7 +487,7 @@ static int os_host_main_loop_wait(int64_t timeout)
 }
 #endif
 
-int main_loop_wait(int nonblocking)
+void main_loop_wait(int nonblocking)
 {
     int ret;
     uint32_t timeout = UINT32_MAX;
@@ -500,9 +500,7 @@ int main_loop_wait(int nonblocking)
     /* poll any events */
     g_array_set_size(gpollfds, 0); /* reset for new iteration */
     /* XXX: separate device handlers from system ones */
-#ifdef CONFIG_SLIRP
     slirp_pollfds_fill(gpollfds, &timeout);
-#endif
 
     if (timeout == UINT32_MAX) {
         timeout_ns = -1;
@@ -515,16 +513,12 @@ int main_loop_wait(int nonblocking)
                                           &main_loop_tlg));
 
     ret = os_host_main_loop_wait(timeout_ns);
-#ifdef CONFIG_SLIRP
     slirp_pollfds_poll(gpollfds, (ret < 0));
-#endif
 
     /* CPU thread can infinitely wait for event after
        missing the warp */
     qemu_start_warp_timer();
     qemu_clock_run_all_timers();
-
-    return ret;
 }
 
 /* Functions to operate on the main QEMU AioContext.  */

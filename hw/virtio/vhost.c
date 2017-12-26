@@ -70,7 +70,7 @@ static void vhost_dev_sync_region(struct vhost_dev *dev,
     uint64_t end = MIN(mlast, rlast);
     vhost_log_chunk_t *from = log + start / VHOST_LOG_CHUNK;
     vhost_log_chunk_t *to = log + end / VHOST_LOG_CHUNK + 1;
-    uint64_t addr = (start / VHOST_LOG_CHUNK) * VHOST_LOG_CHUNK;
+    uint64_t addr = QEMU_ALIGN_DOWN(start, VHOST_LOG_CHUNK);
 
     if (end < start) {
         return;
@@ -375,8 +375,6 @@ static void vhost_log_put(struct vhost_dev *dev, bool sync)
     if (!log) {
         return;
     }
-    dev->log = NULL;
-    dev->log_size = 0;
 
     --log->refcnt;
     if (log->refcnt == 0) {
@@ -396,6 +394,9 @@ static void vhost_log_put(struct vhost_dev *dev, bool sync)
 
         g_free(log);
     }
+
+    dev->log = NULL;
+    dev->log_size = 0;
 }
 
 static bool vhost_dev_log_is_shared(struct vhost_dev *dev)
@@ -665,6 +666,8 @@ static void vhost_commit(MemoryListener *listener)
     if (dev->log_size < log_size) {
         vhost_dev_log_resize(dev, log_size + VHOST_LOG_BUFFER);
     }
+
+    //发送内存表到对端
     r = dev->vhost_ops->vhost_set_mem_table(dev, dev->mem);
     if (r < 0) {
         VHOST_OPS_DEBUG("vhost_set_mem_table failed");
@@ -1208,7 +1211,7 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
     }
 
     file.fd = event_notifier_get_fd(&vq->masked_notifier);
-    r = dev->vhost_ops->vhost_set_vring_call(dev, &file);
+    r = dev->vhost_ops->vhost_set_vring_call(dev, &file);//发送vring call消息
     if (r) {
         VHOST_OPS_DEBUG("vhost_set_vring_call failed");
         r = -errno;
@@ -1242,11 +1245,13 @@ int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
     r = vhost_set_backend_type(hdev, backend_type);
     assert(r >= 0);
 
+    //后端初始化
     r = hdev->vhost_ops->vhost_backend_init(hdev, opaque);
     if (r < 0) {
         goto fail;
     }
 
+    //不能大于memslots支持的最大大小
     if (used_memslots > hdev->vhost_ops->vhost_backend_memslots_limit(hdev)) {
         error_report("vhost backend memory slots limit is less"
                 " than current number of present memory slots");
@@ -1254,6 +1259,7 @@ int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
         goto fail;
     }
 
+    //发送set owner消息
     r = hdev->vhost_ops->vhost_set_owner(hdev);
     if (r < 0) {
         VHOST_OPS_DEBUG("vhost_set_owner failed");
@@ -1358,6 +1364,10 @@ void vhost_dev_cleanup(struct vhost_dev *hdev)
     if (hdev->mem) {
         /* those are only safe after successful init */
         memory_listener_unregister(&hdev->memory_listener);
+        for (i = 0; i < hdev->n_mem_sections; ++i) {
+            MemoryRegionSection *section = &hdev->mem_sections[i];
+            memory_region_unref(section->mr);
+        }
         QLIST_REMOVE(hdev, entry);
     }
     if (hdev->migration_blocker) {
