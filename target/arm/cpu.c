@@ -489,13 +489,19 @@ static void arm_disas_set_info(CPUState *cpu, disassemble_info *info)
         info->print_insn = print_insn_arm_a64;
 #endif
         info->cap_arch = CS_ARCH_ARM64;
+        info->cap_insn_unit = 4;
+        info->cap_insn_split = 4;
     } else {
         int cap_mode;
         if (env->thumb) {
             info->print_insn = print_insn_thumb1;
+            info->cap_insn_unit = 2;
+            info->cap_insn_split = 4;
             cap_mode = CS_MODE_THUMB;
         } else {
             info->print_insn = print_insn_arm;
+            info->cap_insn_unit = 4;
+            info->cap_insn_split = 4;
             cap_mode = CS_MODE_ARM;
         }
         if (arm_feature(env, ARM_FEATURE_V8)) {
@@ -699,9 +705,6 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
     CPUARMState *env = &cpu->env;
     int pagebits;
     Error *local_err = NULL;
-#ifndef CONFIG_USER_ONLY
-    AddressSpace *as;
-#endif
 
     cpu_exec_realizefn(cs, &local_err);
     if (local_err != NULL) {
@@ -906,21 +909,17 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
 
 #ifndef CONFIG_USER_ONLY
     if (cpu->has_el3 || arm_feature(env, ARM_FEATURE_M_SECURITY)) {
-        as = g_new0(AddressSpace, 1);
-
         cs->num_ases = 2;
 
         if (!cpu->secure_memory) {
             cpu->secure_memory = cs->memory;
         }
-        address_space_init(as, cpu->secure_memory, "cpu-secure-memory");
-        cpu_address_space_init(cs, as, ARMASIdx_S);
+        cpu_address_space_init(cs, ARMASIdx_S, "cpu-secure-memory",
+                               cpu->secure_memory);
     } else {
         cs->num_ases = 1;
     }
-    as = g_new0(AddressSpace, 1);
-    address_space_init(as, cs->memory, "cpu-memory");
-    cpu_address_space_init(cs, as, ARMASIdx_NS);
+    cpu_address_space_init(cs, ARMASIdx_NS, "cpu-memory", cs->memory);
 #endif
 
     qemu_init_vcpu(cs);

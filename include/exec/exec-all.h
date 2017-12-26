@@ -45,6 +45,17 @@ void restore_state_to_opc(CPUArchState *env, struct TranslationBlock *tb,
                           target_ulong *data);
 
 void cpu_gen_init(void);
+
+/**
+ * cpu_restore_state:
+ * @cpu: the vCPU state is to be restore to
+ * @searched_pc: the host PC the fault occurred at
+ * @return: true if state was restored, false otherwise
+ *
+ * Attempt to restore the state for a fault occurring in translated
+ * code. If the searched_pc is not in translated code no state is
+ * restored and the function returns false.
+ */
 bool cpu_restore_state(CPUState *cpu, uintptr_t searched_pc);
 
 void QEMU_NORETURN cpu_loop_exit_noexc(CPUState *cpu);
@@ -63,8 +74,9 @@ void cpu_reloading_memory_map(void);
 /**
  * cpu_address_space_init:
  * @cpu: CPU to add this address space to
- * @as: address space to add
  * @asidx: integer index of this address space
+ * @prefix: prefix to be used as name of address space
+ * @mr: the root memory region of address space
  *
  * Add the specified address space to the CPU's cpu_ases list.
  * The address space added with @asidx 0 is the one used for the
@@ -78,7 +90,8 @@ void cpu_reloading_memory_map(void);
  *
  * Note that with KVM only one address space is supported.
  */
-void cpu_address_space_init(CPUState *cpu, AddressSpace *as, int asidx);
+void cpu_address_space_init(CPUState *cpu, int asidx,
+                            const char *prefix, MemoryRegion *mr);
 #endif
 
 #if !defined(CONFIG_USER_ONLY) && defined(CONFIG_TCG)

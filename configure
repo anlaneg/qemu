@@ -267,10 +267,13 @@ stack_protector=""
 
 if test -e "$source_path/.git"
 then
+    git_update=yes
     git_submodules="ui/keycodemapdb"
 else
+    git_update=no
     git_submodules=""
 fi
+git="git"
 
 # Don't accept a target_list environment variable.
 unset target_list
@@ -423,6 +426,7 @@ vxhs=""
 supported_cpu="no"
 supported_os="no"
 bogus_os="no"
+malloc_trim=""
 
 # parse CC options first
 for opt do
@@ -479,6 +483,7 @@ ccas="${CCAS-$cc}"
 cpp="${CPP-$cc -E}"
 objcopy="${OBJCOPY-${cross_prefix}objcopy}"
 ld="${LD-${cross_prefix}ld}"
+ranlib="${RANLIB-${cross_prefix}ranlib}"
 nm="${NM-${cross_prefix}nm}"
 strip="${STRIP-${cross_prefix}strip}"
 windres="${WINDRES-${cross_prefix}windres}"
@@ -1043,6 +1048,10 @@ for opt do
   ;;
   --enable-tcg) tcg="yes"
   ;;
+  --disable-malloc-trim) malloc_trim="no"
+  ;;
+  --enable-malloc-trim) malloc_trim="yes"
+  ;;
   --disable-spice) spice="no"
   ;;
   --enable-spice) spice="yes"
@@ -1303,6 +1312,12 @@ for opt do
   ;;
   --enable-capstone=system) capstone="system"
   ;;
+  --with-git=*) git="$optarg"
+  ;;
+  --enable-git-update) git_update=yes
+  ;;
+  --disable-git-update) git_update=no
+  ;;
   *)
       echo "ERROR: unknown option $opt"
       echo "Try '$0 --help' for more information"
@@ -1456,6 +1471,7 @@ Advanced options (experts only):
                            Default:trace-<pid>
   --disable-slirp          disable SLIRP userspace network connectivity
   --enable-tcg-interpreter enable TCG with bytecode interpreter (TCI)
+  --enable-malloc-trim     enable libc malloc_trim() for memory optimization
   --oss-lib                path to OSS library
   --cpu=CPU                Build for host CPU [$cpu]
   --with-coroutine=BACKEND coroutine backend. Supported options:
@@ -1572,6 +1588,20 @@ fi
 # Suppress writing compiled files
 python="$python -B"
 
+# Check that the C compiler works. Doing this here before testing
+# the host CPU ensures that we had a valid CC to autodetect the
+# $cpu var (and we should bail right here if that's not the case).
+# It also allows the help message to be printed without a CC.
+write_c_skeleton;
+if compile_object ; then
+  : C compiler works ok
+else
+    error_exit "\"$cc\" either does not exist or does not work"
+fi
+if ! compile_prog ; then
+    error_exit "\"$cc\" cannot build an executable (is your linker broken?)"
+fi
+
 # Now we have handled --enable-tcg-interpreter and know we're not just
 # printing the help message, bail out if the host CPU isn't supported.
 if test "$ARCH" = "unknown"; then
@@ -1591,17 +1621,6 @@ if test -z "$werror" ; then
     else
         werror="no"
     fi
-fi
-
-# check that the C compiler works.
-write_c_skeleton;
-if compile_object ; then
-  : C compiler works ok
-else
-    error_exit "\"$cc\" either does not exist or does not work"
-fi
-if ! compile_prog ; then
-    error_exit "\"$cc\" cannot build an executable (is your linker broken?)"
 fi
 
 if test "$bogus_os" = "yes"; then
@@ -1667,6 +1686,19 @@ EOF
       error_exit "Stack protector not supported"
     fi
   fi
+fi
+
+# Disable -Wmissing-braces on older compilers that warn even for
+# the "universal" C zero initializer {0}.
+cat > $TMPC << EOF
+struct {
+  int a[2];
+} x = {0};
+EOF
+if compile_object "-Werror" "" ; then
+  :
+else
+  QEMU_CFLAGS="$QEMU_CFLAGS -Wno-missing-braces"
 fi
 
 # Workaround for http://gcc.gnu.org/PR55489.  Happens with -fPIE/-fPIC and
@@ -3834,6 +3866,30 @@ if test "$tcmalloc" = "yes" && test "$jemalloc" = "yes" ; then
     exit 1
 fi
 
+# Even if malloc_trim() is available, these non-libc memory allocators
+# do not support it.
+if test "$tcmalloc" = "yes" || test "$jemalloc" = "yes" ; then
+    if test "$malloc_trim" = "yes" ; then
+        echo "Disabling malloc_trim with non-libc memory allocator"
+    fi
+    malloc_trim="no"
+fi
+
+#######################################
+# malloc_trim
+
+if test "$malloc_trim" != "no" ; then
+    cat > $TMPC << EOF
+#include <malloc.h>
+int main(void) { malloc_trim(0); return 0; }
+EOF
+    if compile_prog "" "" ; then
+        malloc_trim="yes"
+    else
+        malloc_trim="no"
+    fi
+fi
+
 ##########################################
 # tcmalloc probe
 
@@ -3897,7 +3953,7 @@ fi
 # check if memfd is supported
 memfd=no
 cat > $TMPC << EOF
-#include <sys/memfd.h>
+#include <sys/mman.h>
 
 int main(void)
 {
@@ -5279,9 +5335,9 @@ if test \( "$cpu" = "i386" -o "$cpu" = "x86_64" \) -a \
         "$targetos" != "Darwin" -a "$targetos" != "SunOS" -a \
         "$softmmu" = yes ; then
     # Different host OS linkers have different ideas about the name of the ELF
-    # emulation. Linux and OpenBSD use 'elf_i386'; FreeBSD uses the _fbsd
-    # variant; and Windows uses i386pe.
-    for emu in elf_i386 elf_i386_fbsd i386pe; do
+    # emulation. Linux and OpenBSD/amd64 use 'elf_i386'; FreeBSD uses the _fbsd
+    # variant; OpenBSD/i386 uses the _obsd variant; and Windows uses i386pe.
+    for emu in elf_i386 elf_i386_fbsd elf_i386_obsd i386pe; do
         if "$ld" -verbose 2>&1 | grep -q "^[[:space:]]*$emu[[:space:]]*$"; then
             ld_i386_emulation="$emu"
             roms="optionrom"
@@ -5400,6 +5456,7 @@ echo "local state directory   queried at runtime"
 echo "Windows SDK       $win_sdk"
 fi
 echo "Source path       $source_path"
+echo "GIT binary        $git"
 echo "GIT submodules    $git_submodules"
 echo "C compiler        $cc"
 echo "Host C compiler   $host_cc"
@@ -5478,6 +5535,7 @@ if test "$tcg" = "yes" ; then
     echo "TCG debug enabled $debug_tcg"
     echo "TCG interpreter   $tcg_interpreter"
 fi
+echo "malloc trim support $malloc_trim"
 echo "RDMA support      $rdma"
 echo "fdt support       $fdt"
 echo "preadv support    $preadv"
@@ -5591,7 +5649,9 @@ echo "extra_cxxflags=$EXTRA_CXXFLAGS" >> $config_host_mak
 echo "extra_ldflags=$EXTRA_LDFLAGS" >> $config_host_mak
 echo "qemu_localedir=$qemu_localedir" >> $config_host_mak
 echo "libs_softmmu=$libs_softmmu" >> $config_host_mak
+echo "GIT=$git" >> $config_host_mak
 echo "GIT_SUBMODULES=$git_submodules" >> $config_host_mak
+echo "GIT_UPDATE=$git_update" >> $config_host_mak
 
 echo "ARCH=$ARCH" >> $config_host_mak
 
@@ -5986,6 +6046,10 @@ if test "$opengl" = "yes" ; then
   fi
 fi
 
+if test "$malloc_trim" = "yes" ; then
+  echo "CONFIG_MALLOC_TRIM=y" >> $config_host_mak
+fi
+
 if test "$avx2_opt" = "yes" ; then
   echo "CONFIG_AVX2_OPT=y" >> $config_host_mak
 fi
@@ -6263,6 +6327,7 @@ echo "CCAS=$ccas" >> $config_host_mak
 echo "CPP=$cpp" >> $config_host_mak
 echo "OBJCOPY=$objcopy" >> $config_host_mak
 echo "LD=$ld" >> $config_host_mak
+echo "RANLIB=$ranlib" >> $config_host_mak
 echo "NM=$nm" >> $config_host_mak
 echo "WINDRES=$windres" >> $config_host_mak
 echo "CFLAGS=$CFLAGS" >> $config_host_mak
@@ -6757,6 +6822,7 @@ for rom in seabios vgabios ; do
     echo "OBJCOPY=objcopy" >> $config_mak
     echo "IASL=$iasl" >> $config_mak
     echo "LD=$ld" >> $config_mak
+    echo "RANLIB=$ranlib" >> $config_mak
 done
 
 # set up tests data directory

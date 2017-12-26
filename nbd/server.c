@@ -386,6 +386,10 @@ static int nbd_negotiate_handle_info(NBDClient *client, uint32_t length,
         msg = "name length is incorrect";
         goto invalid;
     }
+    if (namelen >= sizeof(name)) {
+        msg = "name too long for qemu";
+        goto invalid;
+    }
     if (nbd_read(client->ioc, name, namelen, errp) < 0) {
         return -EIO;
     }
@@ -423,6 +427,7 @@ static int nbd_negotiate_handle_info(NBDClient *client, uint32_t length,
             break;
         }
     }
+    assert(length == 0);
 
     exp = nbd_export_find(name);
     if (!exp) {
@@ -433,7 +438,7 @@ static int nbd_negotiate_handle_info(NBDClient *client, uint32_t length,
 
     /* Don't bother sending NBD_INFO_NAME unless client requested it */
     if (sendname) {
-        rc = nbd_negotiate_send_info(client, opt, NBD_INFO_NAME, length, name,
+        rc = nbd_negotiate_send_info(client, opt, NBD_INFO_NAME, namelen, name,
                                      errp);
         if (rc < 0) {
             return rc;
@@ -671,6 +676,12 @@ static int nbd_negotiate_options(NBDClient *client, uint16_t myflags,
             return -EINVAL;
         }
         length = be32_to_cpu(length);
+
+        if (length > NBD_MAX_BUFFER_SIZE) {
+            error_setg(errp, "len (%" PRIu32" ) is larger than max len (%u)",
+                       length, NBD_MAX_BUFFER_SIZE);
+            return -EINVAL;
+        }
 
         trace_nbd_negotiate_options_check_option(option,
                                                  nbd_opt_lookup(option));
@@ -1272,6 +1283,21 @@ static inline void set_be_chunk(NBDStructuredReplyChunk *chunk, uint16_t flags,
     stl_be_p(&chunk->length, length);
 }
 
+static int coroutine_fn nbd_co_send_structured_done(NBDClient *client,
+                                                    uint64_t handle,
+                                                    Error **errp)
+{
+    NBDStructuredReplyChunk chunk;
+    struct iovec iov[] = {
+        {.iov_base = &chunk, .iov_len = sizeof(chunk)},
+    };
+
+    trace_nbd_co_send_structured_done(handle);
+    set_be_chunk(&chunk, NBD_REPLY_FLAG_DONE, NBD_REPLY_TYPE_NONE, handle, 0);
+
+    return nbd_co_send_iov(client, iov, 1, errp);
+}
+
 static int coroutine_fn nbd_co_send_structured_read(NBDClient *client,
                                                     uint64_t handle,
                                                     uint64_t offset,
@@ -1279,12 +1305,13 @@ static int coroutine_fn nbd_co_send_structured_read(NBDClient *client,
                                                     size_t size,
                                                     Error **errp)
 {
-    NBDStructuredRead chunk;
+    NBDStructuredReadData chunk;
     struct iovec iov[] = {
         {.iov_base = &chunk, .iov_len = sizeof(chunk)},
         {.iov_base = data, .iov_len = size}
     };
 
+    assert(size);
     trace_nbd_co_send_structured_read(handle, offset, data, size);
     set_be_chunk(&chunk.h, NBD_REPLY_FLAG_DONE, NBD_REPLY_TYPE_OFFSET_DATA,
                  handle, sizeof(chunk) - sizeof(chunk.h) + size);
@@ -1349,15 +1376,6 @@ static int nbd_co_receive_request(NBDRequestData *req, NBDRequest *request,
         return -EIO;
     }
 
-    /* Check for sanity in the parameters, part 1.  Defer as many
-     * checks as possible until after reading any NBD_CMD_WRITE
-     * payload, so we can try and keep the connection alive.  */
-    if ((request->from + request->len) < request->from) {
-        error_setg(errp,
-                   "integer overflow detected, you're probably being attacked");
-        return -EINVAL;
-    }
-
     if (request->type == NBD_CMD_READ || request->type == NBD_CMD_WRITE) {
         if (request->len > NBD_MAX_BUFFER_SIZE) {
             error_setg(errp, "len (%" PRIu32" ) is larger than max len (%u)",
@@ -1382,12 +1400,21 @@ static int nbd_co_receive_request(NBDRequestData *req, NBDRequest *request,
                                                       request->len);
     }
 
-    /* Sanity checks, part 2. */
-    if (request->from + request->len > client->exp->size) {
+    /* Sanity checks. */
+    if (client->exp->nbdflags & NBD_FLAG_READ_ONLY &&
+        (request->type == NBD_CMD_WRITE ||
+         request->type == NBD_CMD_WRITE_ZEROES ||
+         request->type == NBD_CMD_TRIM)) {
+        error_setg(errp, "Export is read-only");
+        return -EROFS;
+    }
+    if (request->from > client->exp->size ||
+        request->from + request->len > client->exp->size) {
         error_setg(errp, "operation past EOF; From: %" PRIu64 ", Len: %" PRIu32
                    ", Size: %" PRIu64, request->from, request->len,
                    (uint64_t)client->exp->size);
-        return request->type == NBD_CMD_WRITE ? -ENOSPC : -EINVAL;
+        return (request->type == NBD_CMD_WRITE ||
+                request->type == NBD_CMD_WRITE_ZEROES) ? -ENOSPC : -EINVAL;
     }
     valid_flags = NBD_CMD_FLAG_FUA;
     if (request->type == NBD_CMD_READ && client->structured_reply) {
@@ -1465,12 +1492,6 @@ static coroutine_fn void nbd_trip(void *opaque)
 
         break;
     case NBD_CMD_WRITE:
-        if (exp->nbdflags & NBD_FLAG_READ_ONLY) {
-            error_setg(&local_err, "Export is read-only");
-            ret = -EROFS;
-            break;
-        }
-
         flags = 0;
         if (request.flags & NBD_CMD_FLAG_FUA) {
             flags |= BDRV_REQ_FUA;
@@ -1483,12 +1504,6 @@ static coroutine_fn void nbd_trip(void *opaque)
 
         break;
     case NBD_CMD_WRITE_ZEROES:
-        if (exp->nbdflags & NBD_FLAG_READ_ONLY) {
-            error_setg(&local_err, "Export is read-only");
-            ret = -EROFS;
-            break;
-        }
-
         flags = 0;
         if (request.flags & NBD_CMD_FLAG_FUA) {
             flags |= BDRV_REQ_FUA;
@@ -1543,10 +1558,13 @@ reply:
         if (ret < 0) {
             ret = nbd_co_send_structured_error(req->client, request.handle,
                                                -ret, msg, &local_err);
-        } else {
+        } else if (reply_data_len) {
             ret = nbd_co_send_structured_read(req->client, request.handle,
                                               request.from, req->data,
                                               reply_data_len, &local_err);
+        } else {
+            ret = nbd_co_send_structured_done(req->client, request.handle,
+                                              &local_err);
         }
     } else {
         ret = nbd_co_send_simple_reply(req->client, request.handle,

@@ -57,9 +57,9 @@ int main(int argc, char **argv)
 #include "hw/boards.h"
 #include "sysemu/accel.h"
 #include "hw/usb.h"
-#include "hw/i386/pc.h"
 #include "hw/isa/isa.h"
 #include "hw/scsi/scsi.h"
+#include "hw/display/vga.h"
 #include "hw/bt.h"
 #include "sysemu/watchdog.h"
 #include "hw/smbios/smbios.h"
@@ -94,7 +94,6 @@ int main(int argc, char **argv)
 #include "migration/colo.h"
 #include "sysemu/kvm.h"
 #include "sysemu/hax.h"
-#include "qapi/qobject-input-visitor.h"
 #include "qapi/qobject-input-visitor.h"
 #include "qapi-visit.h"
 #include "qapi/qmp/qjson.h"
@@ -160,8 +159,8 @@ Chardev *virtcon_hds[MAX_VIRTIO_CONSOLES];
 Chardev *sclp_hds[MAX_SCLP_CONSOLES];
 int win2k_install_hack = 0;
 int singlestep = 0;
-int smp_cpus = 1;
-unsigned int max_cpus = 1;
+int smp_cpus;
+unsigned int max_cpus;
 int smp_cores = 1;
 int smp_threads = 1;
 int acpi_enabled = 1;
@@ -1482,28 +1481,6 @@ done:
     return 0;
 }
 
-static int usb_device_del(const char *devname)
-{
-    int bus_num, addr;
-    const char *p;
-
-    if (strstart(devname, "host:", &p)) {
-        return -1;
-    }
-
-    if (!machine_usb(current_machine)) {
-        return -1;
-    }
-
-    p = strchr(devname, '.');
-    if (!p)
-        return -1;
-    bus_num = strtoul(devname, NULL, 0);
-    addr = strtoul(p + 1, NULL, 0);
-
-    return usb_device_delete_addr(bus_num, addr);
-}
-
 static int usb_parse(const char *cmdline)
 {
     int r;
@@ -1512,28 +1489,6 @@ static int usb_parse(const char *cmdline)
         error_report("could not add USB device '%s'", cmdline);
     }
     return r;
-}
-
-void hmp_usb_add(Monitor *mon, const QDict *qdict)
-{
-    const char *devname = qdict_get_str(qdict, "devname");
-
-    error_report("usb_add is deprecated, please use device_add instead");
-
-    if (usb_device_add(devname) < 0) {
-        error_report("could not add USB device '%s'", devname);
-    }
-}
-
-void hmp_usb_del(Monitor *mon, const QDict *qdict)
-{
-    const char *devname = qdict_get_str(qdict, "devname");
-
-    error_report("usb_del is deprecated, please use device_del instead");
-
-    if (usb_device_del(devname) < 0) {
-        error_report("could not delete USB device '%s'", devname);
-    }
 }
 
 /***********************************************************/
@@ -3887,10 +3842,6 @@ int main(int argc, char **argv, char **envp)
                 olist = qemu_find_opts("machine");
                 qemu_opts_parse_noisily(olist, "accel=tcg", false);
                 break;
-            case QEMU_OPTION_no_kvm_pit: {
-                warn_report("ignoring deprecated option");
-                break;
-            }
             case QEMU_OPTION_no_kvm_pit_reinjection: {
                 static GlobalProperty kvm_pit_lost_tick_policy = {
                     .driver   = "kvm-pit",
@@ -4354,9 +4305,24 @@ int main(int argc, char **argv, char **envp)
         exit(0);
     }
 
+    /* machine_class: default to UP */
+    machine_class->max_cpus = machine_class->max_cpus ?: 1;
+    machine_class->min_cpus = machine_class->min_cpus ?: 1;
+    machine_class->default_cpus = machine_class->default_cpus ?: 1;
+
+    /* default to machine_class->default_cpus */
+    smp_cpus = machine_class->default_cpus;
+    max_cpus = machine_class->default_cpus;
+
     smp_parse(qemu_opts_find(qemu_find_opts("smp-opts"), NULL));
 
-    machine_class->max_cpus = machine_class->max_cpus ?: 1; /* Default to UP */
+    /* sanity-check smp_cpus and max_cpus against machine_class */
+    if (smp_cpus < machine_class->min_cpus) {
+        error_report("Invalid SMP CPUs %d. The min CPUs "
+                     "supported by machine '%s' is %d", smp_cpus,
+                     machine_class->name, machine_class->min_cpus);
+        exit(1);
+    }
     if (max_cpus > machine_class->max_cpus) {
         error_report("Invalid SMP CPUs %d. The max CPUs "
                      "supported by machine '%s' is %d", max_cpus,
@@ -4704,8 +4670,6 @@ int main(int argc, char **argv, char **envp)
     default_drive(default_floppy, snapshot, IF_FLOPPY, 0, FD_OPTS);
     default_drive(default_sdcard, snapshot, IF_SD, 0, SD_OPTS);
 
-    parse_numa_opts(current_machine);
-
     if (qemu_opts_foreach(qemu_find_opts("mon"),
                           mon_init_func, NULL, NULL)) {
         exit(1);
@@ -4755,6 +4719,7 @@ int main(int argc, char **argv, char **envp)
     current_machine->boot_order = boot_order;
     current_machine->cpu_model = cpu_model;
 
+    parse_numa_opts(current_machine);
 
     /* parse features once if machine provides default cpu_type */
     if (machine_class->default_cpu_type) {

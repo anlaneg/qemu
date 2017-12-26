@@ -26,7 +26,6 @@
 #include "qapi/error.h"
 #include "qemu/sockets.h"
 #include "qemu/main-loop.h"
-#include "qapi/clone-visitor.h"
 #include "qapi/qobject-input-visitor.h"
 #include "qapi/qobject-output-visitor.h"
 #include "qapi-visit.h"
@@ -199,7 +198,6 @@ static int try_bind(int socket, InetSocketAddress *saddr, struct addrinfo *e)
 
 static int inet_listen_saddr(InetSocketAddress *saddr,
                              int port_offset,
-                             bool update_addr,
                              Error **errp)
 {
     struct addrinfo ai,*res,*e;
@@ -207,7 +205,7 @@ static int inet_listen_saddr(InetSocketAddress *saddr,
     char uaddr[INET6_ADDRSTRLEN+1];
     char uport[33];
     int rc, port_min, port_max, p;
-    int slisten = 0;
+    int slisten = -1;
     int saved_errno = 0;
     bool socket_created = false;
     Error *err = NULL;
@@ -267,31 +265,42 @@ static int inet_listen_saddr(InetSocketAddress *saddr,
 		        uaddr,INET6_ADDRSTRLEN,uport,32,
 		        NI_NUMERICHOST | NI_NUMERICSERV);
 
-        slisten = create_fast_reuse_socket(e);
-        if (slisten < 0) {
-            continue;
-        }
-
-        socket_created = true;
         port_min = inet_getport(e);
         port_max = saddr->has_to ? saddr->to + port_offset : port_min;
         for (p = port_min; p <= port_max; p++) {
             inet_setport(e, p);
-            rc = try_bind(slisten, saddr, e);
-            if (rc) {
-                if (errno == EADDRINUSE) {
+
+            slisten = create_fast_reuse_socket(e);
+            if (slisten < 0) {
+                /* First time we expect we might fail to create the socket
+                 * eg if 'e' has AF_INET6 but ipv6 kmod is not loaded.
+                 * Later iterations should always succeed if first iteration
+                 * worked though, so treat that as fatal.
+                 */
+                if (p == port_min) {
                     continue;
                 } else {
-                    error_setg_errno(errp, errno, "Failed to bind socket");
+                    error_setg_errno(errp, errno,
+                                     "Failed to recreate failed listening socket");
                     goto listen_failed;
                 }
             }
-            if (!listen(slisten, 1)) {
-                goto listen_ok;
-            }
-            if (errno != EADDRINUSE) {
-                error_setg_errno(errp, errno, "Failed to listen on socket");
-                goto listen_failed;
+            socket_created = true;
+
+            rc = try_bind(slisten, saddr, e);
+            if (rc < 0) {
+                if (errno != EADDRINUSE) {
+                    error_setg_errno(errp, errno, "Failed to bind socket");
+                    goto listen_failed;
+                }
+            } else {
+                if (!listen(slisten, 1)) {
+                    goto listen_ok;
+                }
+                if (errno != EADDRINUSE) {
+                    error_setg_errno(errp, errno, "Failed to listen on socket");
+                    goto listen_failed;
+                }
             }
             /* Someone else managed to bind to the same port and beat us
              * to listen on it! Socket semantics does not allow us to
@@ -299,12 +308,7 @@ static int inet_listen_saddr(InetSocketAddress *saddr,
              * socket to allow bind attempts for subsequent ports:
              */
             closesocket(slisten);
-            slisten = create_fast_reuse_socket(e);
-            if (slisten < 0) {
-                error_setg_errno(errp, errno,
-                                 "Failed to recreate failed listening socket");
-                goto listen_failed;
-            }
+            slisten = -1;
         }
     }
     error_setg_errno(errp, errno,
@@ -321,15 +325,6 @@ listen_failed:
     return -1;
 
 listen_ok:
-    if (update_addr) {
-        g_free(saddr->host);
-        saddr->host = g_strdup(uaddr);
-        g_free(saddr->port);
-        saddr->port = g_strdup_printf("%d",
-                                      inet_getport(e) - port_offset);
-        saddr->has_ipv6 = saddr->ipv6 = e->ai_family == PF_INET6;
-        saddr->has_ipv4 = saddr->ipv4 = e->ai_family != PF_INET6;
-    }
     freeaddrinfo(res);
     return slisten;
 }
@@ -785,7 +780,6 @@ static int vsock_parse(VsockSocketAddress *addr, const char *str,
 #ifndef _WIN32
 
 static int unix_listen_saddr(UnixSocketAddress *saddr,
-                             bool update_addr,
                              Error **errp)
 {
     struct sockaddr_un un;
@@ -850,12 +844,7 @@ static int unix_listen_saddr(UnixSocketAddress *saddr,
         goto err;
     }
 
-    if (update_addr && pathbuf) {
-        g_free(saddr->path);
-        saddr->path = pathbuf;
-    } else {
-        g_free(pathbuf);
-    }
+    g_free(pathbuf);
     return sock;
 
 err:
@@ -919,7 +908,6 @@ static int unix_connect_saddr(UnixSocketAddress *saddr, Error **errp)
 #else
 
 static int unix_listen_saddr(UnixSocketAddress *saddr,
-                             bool update_addr,
                              Error **errp)
 {
     error_setg(errp, "unix sockets are not available on windows");
@@ -936,7 +924,7 @@ static int unix_connect_saddr(UnixSocketAddress *saddr, Error **errp)
 #endif
 
 /* compatibility wrapper */
-int unix_listen(const char *str, char *ostr, int olen, Error **errp)
+int unix_listen(const char *str, Error **errp)
 {
     char *path, *optstr;
     int sock, len;
@@ -956,11 +944,7 @@ int unix_listen(const char *str, char *ostr, int olen, Error **errp)
         saddr->path = g_strdup(str);
     }
 
-    sock = unix_listen_saddr(saddr, true, errp);
-
-    if (sock != -1 && ostr) {
-        snprintf(ostr, olen, "%s%s", saddr->path, optstr ? optstr : "");
-    }
+    sock = unix_listen_saddr(saddr, errp);
 
     qapi_free_UnixSocketAddress(saddr);
     return sock;
@@ -1052,11 +1036,11 @@ int socket_listen(SocketAddress *addr, Error **errp)
 
     switch (addr->type) {
     case SOCKET_ADDRESS_TYPE_INET:
-        fd = inet_listen_saddr(&addr->u.inet, 0, false, errp);
+        fd = inet_listen_saddr(&addr->u.inet, 0, errp);
         break;
 
     case SOCKET_ADDRESS_TYPE_UNIX:
-        fd = unix_listen_saddr(&addr->u.q_unix, false, errp);
+        fd = unix_listen_saddr(&addr->u.q_unix, errp);
         break;
 
     case SOCKET_ADDRESS_TYPE_FD:
@@ -1078,6 +1062,9 @@ void socket_listen_cleanup(int fd, Error **errp)
     SocketAddress *addr;
 
     addr = socket_local_address(fd, errp);
+    if (!addr) {
+        return;
+    }
 
     if (addr->type == SOCKET_ADDRESS_TYPE_UNIX
         && addr->u.q_unix.path) {
