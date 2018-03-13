@@ -21,14 +21,17 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 #include "qemu/osdep.h"
 #include "chardev/char.h"
 #include "io/channel-socket.h"
 #include "io/channel-tls.h"
 #include "io/net-listener.h"
 #include "qemu/error-report.h"
+#include "qemu/option.h"
 #include "qapi/error.h"
 #include "qapi/clone-visitor.h"
+#include "qapi/qapi-visit-sockets.h"
 
 #include "chardev/char-io.h"
 
@@ -42,6 +45,7 @@ typedef struct {
     QIOChannel *ioc; /* Client I/O channel */
     QIOChannelSocket *sioc; /* Client master channel */
     QIONetListener *listener;
+    GSource *hup_source;
     QCryptoTLSCreds *tls_creds;
     int connected;
     int max_size;
@@ -57,7 +61,7 @@ typedef struct {
     bool is_telnet;
     bool is_tn3270;
 
-    guint reconnect_timer;
+    GSource *reconnect_timer;
     int64_t reconnect_time;
     bool connect_err_reported;
 } SocketChardev;
@@ -67,16 +71,27 @@ typedef struct {
 
 static gboolean socket_reconnect_timeout(gpointer opaque);
 
+static void tcp_chr_reconn_timer_cancel(SocketChardev *s)
+{
+    if (s->reconnect_timer) {
+        g_source_destroy(s->reconnect_timer);
+        g_source_unref(s->reconnect_timer);
+        s->reconnect_timer = NULL;
+    }
+}
+
 static void qemu_chr_socket_restart_timer(Chardev *chr)
 {
     SocketChardev *s = SOCKET_CHARDEV(chr);
     char *name;
 
     assert(s->connected == 0);
-    s->reconnect_timer = g_timeout_add_seconds(s->reconnect_time,
-                                               socket_reconnect_timeout, chr);
     name = g_strdup_printf("chardev-socket-reconnect-%s", chr->label);
-    g_source_set_name_by_id(s->reconnect_timer, name);
+    s->reconnect_timer = qemu_chr_timeout_add_ms(chr,
+                                                 s->reconnect_time * 1000,
+                                                 socket_reconnect_timeout,
+                                                 chr);
+    g_source_set_name(s->reconnect_timer, name);
     g_free(name);
 }
 
@@ -341,6 +356,12 @@ static void tcp_chr_free_connection(Chardev *chr)
         s->read_msgfds_num = 0;
     }
 
+    if (s->hup_source != NULL) {
+        g_source_destroy(s->hup_source);
+        g_source_unref(s->hup_source);
+        s->hup_source = NULL;
+    }
+
     tcp_set_msgfds(chr, NULL, 0);
     remove_fd_in_watch(chr);
     object_unref(OBJECT(s->sioc));
@@ -444,6 +465,15 @@ static gboolean tcp_chr_read(QIOChannel *chan, GIOCondition cond, void *opaque)
     return TRUE;
 }
 
+static gboolean tcp_chr_hup(QIOChannel *channel,
+                               GIOCondition cond,
+                               void *opaque)
+{
+    Chardev *chr = CHARDEV(opaque);
+    tcp_chr_disconnect(chr);
+    return G_SOURCE_REMOVE;
+}
+
 static int tcp_chr_sync_read(Chardev *chr, const uint8_t *buf, int len)
 {
     SocketChardev *s = SOCKET_CHARDEV(chr);
@@ -517,6 +547,12 @@ static void tcp_chr_connect(void *opaque)
                                            tcp_chr_read,
                                            chr, chr->gcontext);
     }
+
+    s->hup_source = qio_channel_create_watch(s->ioc, G_IO_HUP);
+    g_source_set_callback(s->hup_source, (GSourceFunc)tcp_chr_hup,
+                          chr, NULL);
+    g_source_attach(s->hup_source, chr->gcontext);
+
     qemu_chr_be_event(chr, CHR_EVENT_OPENED);
 }
 
@@ -556,19 +592,23 @@ static gboolean tcp_chr_telnet_init_io(QIOChannel *ioc,
             ret = 0;
         } else {
             tcp_chr_disconnect(init->chr);
-            return FALSE;
+            goto end;
         }
     }
     init->buflen -= ret;
 
     if (init->buflen == 0) {
         tcp_chr_connect(init->chr);
-        return FALSE;
+        goto end;
     }
 
     memmove(init->buf, init->buf + ret, init->buflen);
 
-    return TRUE;
+    return G_SOURCE_CONTINUE;
+
+end:
+    g_free(init);
+    return G_SOURCE_REMOVE;
 }
 
 static void tcp_chr_telnet_init(Chardev *chr)
@@ -667,6 +707,7 @@ static void tcp_chr_tls_init(Chardev *chr)
     qio_channel_tls_handshake(tioc,
                               tcp_chr_tls_handshake,
                               chr,
+                              NULL,
                               NULL);
 }
 
@@ -783,11 +824,7 @@ static void char_socket_finalize(Object *obj)
     SocketChardev *s = SOCKET_CHARDEV(obj);
 
     tcp_chr_free_connection(chr);
-
-    if (s->reconnect_timer) {
-        g_source_remove(s->reconnect_timer);
-        s->reconnect_timer = 0;
-    }
+    tcp_chr_reconn_timer_cancel(s);
     qapi_free_SocketAddress(s->addr);
     if (s->listener) {
         qio_net_listener_set_client_func(s->listener, NULL, NULL, NULL);
@@ -826,7 +863,8 @@ static gboolean socket_reconnect_timeout(gpointer opaque)
     SocketChardev *s = SOCKET_CHARDEV(opaque);
     QIOChannelSocket *sioc;
 
-    s->reconnect_timer = 0;
+    g_source_unref(s->reconnect_timer);
+    s->reconnect_timer = NULL;
 
     if (chr->be_open) {
         return false;
@@ -836,7 +874,7 @@ static gboolean socket_reconnect_timeout(gpointer opaque)
     tcp_chr_set_client_ioc_name(chr, sioc);
     qio_channel_socket_connect_async(sioc, s->addr,
                                      qemu_chr_socket_connected,
-                                     chr, NULL);
+                                     chr, NULL, NULL);
 
     return false;
 }
@@ -923,7 +961,7 @@ static void qmp_chardev_open_socket(Chardev *chr,
         tcp_chr_set_client_ioc_name(chr, sioc);
         qio_channel_socket_connect_async(sioc, s->addr,
                                          qemu_chr_socket_connected,
-                                         chr, NULL);
+                                         chr, NULL, NULL);
     } else {
         if (s->is_listen) {
             char *name;

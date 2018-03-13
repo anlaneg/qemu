@@ -50,7 +50,7 @@
 /* is_jmp field values */
 #define DISAS_UPDATE  DISAS_TARGET_0 /* cpu state was modified dynamically */
 
-typedef struct DisasContext {
+struct DisasContext {
     const XtensaConfig *config;
     TranslationBlock *tb;
     uint32_t pc;
@@ -78,7 +78,7 @@ typedef struct DisasContext {
     uint32_t *raw_arg;
     xtensa_insnbuf insnbuf;
     xtensa_insnbuf slotbuf;
-} DisasContext;
+};
 
 static TCGv_i32 cpu_pc;
 static TCGv_i32 cpu_R[16];
@@ -942,7 +942,7 @@ static void disas_xtensa_insn(CPUXtensaState *env, DisasContext *dc)
     unsigned char b[MAX_INSN_LENGTH] = {cpu_ldub_code(env, dc->pc)};
     unsigned len = xtensa_op0_insn_len(dc, b[0]);
     xtensa_format fmt;
-    unsigned slot, slots;
+    int slot, slots;
     unsigned i;
 
     if (len == XTENSA_UNDEFINED) {
@@ -969,7 +969,7 @@ static void disas_xtensa_insn(CPUXtensaState *env, DisasContext *dc)
     slots = xtensa_format_num_slots(isa, fmt);
     for (slot = 0; slot < slots; ++slot) {
         xtensa_opcode opc;
-        unsigned opnd, vopnd, opnds;
+        int opnd, vopnd, opnds;
         uint32_t raw_arg[MAX_OPCODE_ARGS];
         uint32_t arg[MAX_OPCODE_ARGS];
         XtensaOpcodeOps *ops;

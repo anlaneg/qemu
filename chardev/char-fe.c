@@ -24,7 +24,7 @@
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
-#include "qapi-visit.h"
+#include "qapi/qmp/qerror.h"
 #include "sysemu/replay.h"
 
 #include "chardev/char-fe.h"
@@ -356,7 +356,7 @@ guint qemu_chr_fe_add_watch(CharBackend *be, GIOCondition cond,
     }
 
     g_source_set_callback(src, (GSourceFunc)func, user_data, NULL);
-    tag = g_source_attach(src, NULL);
+    tag = g_source_attach(src, s->gcontext);
     g_source_unref(src);
 
     return tag;

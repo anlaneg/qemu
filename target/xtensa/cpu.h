@@ -36,7 +36,6 @@
 #include "qemu-common.h"
 #include "cpu-qom.h"
 #include "exec/cpu-defs.h"
-#include "fpu/softfloat.h"
 #include "xtensa-isa.h"
 
 #define NB_MMU_MODES 4
@@ -503,10 +502,15 @@ void xtensa_cpu_do_unaligned_access(CPUState *cpu, vaddr addr,
 
 #ifdef TARGET_WORDS_BIGENDIAN
 #define XTENSA_DEFAULT_CPU_MODEL "fsf"
+#define XTENSA_DEFAULT_CPU_NOMMU_MODEL "fsf"
 #else
 #define XTENSA_DEFAULT_CPU_MODEL "dc232b"
+#define XTENSA_DEFAULT_CPU_NOMMU_MODEL "de212"
 #endif
-#define XTENSA_DEFAULT_CPU_TYPE XTENSA_CPU_TYPE_NAME(XTENSA_DEFAULT_CPU_MODEL)
+#define XTENSA_DEFAULT_CPU_TYPE \
+    XTENSA_CPU_TYPE_NAME(XTENSA_DEFAULT_CPU_MODEL)
+#define XTENSA_DEFAULT_CPU_NOMMU_TYPE \
+    XTENSA_CPU_TYPE_NAME(XTENSA_DEFAULT_CPU_NOMMU_MODEL)
 
 #define cpu_init(cpu_model) cpu_generic_init(TYPE_XTENSA_CPU, cpu_model)
 

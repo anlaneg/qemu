@@ -27,7 +27,6 @@
 #define CPUArchState struct CPUNios2State
 
 #include "exec/cpu-defs.h"
-#include "fpu/softfloat.h"
 #include "qom/cpu.h"
 struct CPUNios2State;
 typedef struct CPUNios2State CPUNios2State;
@@ -252,7 +251,7 @@ static inline int cpu_mmu_index(CPUNios2State *env, bool ifetch)
                                                   MMU_SUPERVISOR_IDX;
 }
 
-int nios2_cpu_handle_mmu_fault(CPUState *env, vaddr address,
+int nios2_cpu_handle_mmu_fault(CPUState *env, vaddr address, int size,
                                int rw, int mmu_idx);
 
 static inline int cpu_interrupts_enabled(CPUNios2State *env)

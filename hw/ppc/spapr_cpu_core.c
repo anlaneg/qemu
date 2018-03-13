@@ -44,6 +44,13 @@ static void spapr_cpu_reset(void *opaque)
     if (cs != first_cpu) {
         env->spr[SPR_LPCR] &= ~pcc->lpcr_pm;
     }
+
+    /* Set compatibility mode to match the boot CPU, which was either set
+     * by the machine reset code or by CAS. This should never fail.
+     */
+    if (cs != first_cpu) {
+        ppc_set_compat(cpu, POWERPC_CPU(first_cpu)->compat_pvr, &error_abort);
+    }
 }
 
 static void spapr_cpu_destroy(PowerPCCPU *cpu)
@@ -165,13 +172,8 @@ static void spapr_cpu_core_realize(DeviceState *dev, Error **errp)
         cs = CPU(obj);
         cpu = sc->threads[i] = POWERPC_CPU(obj);
         cs->cpu_index = cc->core_id + i;
-        cpu->vcpu_id = (cc->core_id * spapr->vsmt / smp_threads) + i;
-        if (kvm_enabled() && !kvm_vcpu_id_is_valid(cpu->vcpu_id)) {
-            error_setg(&local_err, "Can't create CPU with id %d in KVM",
-                       cpu->vcpu_id);
-            error_append_hint(&local_err, "Adjust the number of cpus to %d "
-                              "or try to raise the number of threads per core\n",
-                              cpu->vcpu_id * smp_threads / spapr->vsmt);
+        spapr_set_vcpu_id(cpu, cs->cpu_index, &local_err);
+        if (local_err) {
             goto err;
         }
 

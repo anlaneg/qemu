@@ -1,9 +1,12 @@
 #include "qemu/osdep.h"
+#include "qapi/error.h"
+#include "qapi/qapi-commands-misc.h"
+#include "qapi/qmp/qdict.h"
+#include "qapi/qmp/qlist.h"
 #include "qemu-common.h"
 #include "qemu/error-report.h"
 #include "qemu/option.h"
 #include "qemu/config-file.h"
-#include "qmp-commands.h"
 
 //存放qemu选项
 //这些选项是按加入顺序放置的，按name区分（称为group-name）
@@ -114,7 +117,8 @@ static void cleanup_infolist(CommandLineParameterInfoList *head)
             if (!strcmp(pre_entry->value->name, cur->next->value->name)) {
                 del_entry = cur->next;
                 cur->next = cur->next->next;
-                g_free(del_entry);
+                del_entry->next = NULL;
+                qapi_free_CommandLineParameterInfoList(del_entry);
                 break;
             }
             pre_entry = pre_entry->next;

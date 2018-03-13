@@ -265,6 +265,7 @@ our @typeList = (
 	qr{${Ident}_handler_fn},
 	qr{target_(?:u)?long},
 	qr{hwaddr},
+	qr{xml${Ident}},
 );
 
 # This can be modified by sub possible.  Since it can be empty, be careful
@@ -1622,6 +1623,11 @@ sub process {
 			}
 		}
 
+# 'do ... while (0/false)' only makes sense in macros, without trailing ';'
+		if ($line =~ /while\s*\((0|false)\);/) {
+			ERROR("suspicious ; after while (0)\n" . $herecurr);
+		}
+
 # Check relative indent for conditionals and blocks.
 		if ($line =~ /\b(?:(?:if|while|for)\s*\(|do\b)/ && $line !~ /^.\s*#/ && $line !~ /\}\s*while\s*/) {
 			my ($s, $c) = ($stat, $cond);
@@ -2346,8 +2352,9 @@ sub process {
 			}
 		}
 
-# check for missing bracing round if etc
-		if ($line =~ /(^.*)\bif\b/ && $line !~ /\#\s*if/) {
+# check for missing bracing around if etc
+		if ($line =~ /(^.*)\b(?:if|while|for)\b/ &&
+			$line !~ /\#\s*if/) {
 			my ($level, $endln, @chunks) =
 				ctx_statement_full($linenr, $realcnt, 1);
                         if ($dbg_adv_apw) {
@@ -2576,6 +2583,11 @@ sub process {
 # check for gcc specific __FUNCTION__
 		if ($line =~ /__FUNCTION__/) {
 			ERROR("__func__ should be used instead of gcc specific __FUNCTION__\n"  . $herecurr);
+		}
+
+# recommend g_path_get_* over g_strdup(basename/dirname(...))
+		if ($line =~ /\bg_strdup\s*\(\s*(basename|dirname)\s*\(/) {
+			WARN("consider using g_path_get_$1() in preference to g_strdup($1())\n" . $herecurr);
 		}
 
 # recommend qemu_strto* over strto* for numeric conversions
