@@ -229,8 +229,10 @@ typedef struct ChardevClass {
     ObjectClass parent_class;
 
     bool internal; /* TODO: eventually use TYPE_USER_CREATABLE */
+    //解析命令行，填充backend
     void (*parse)(QemuOpts *opts, ChardevBackend *backend, Error **errp);
 
+    //parse后，根据backend来打开自符设备
     void (*open)(Chardev *chr, ChardevBackend *backend,
                  bool *be_opened, Error **errp);
 
@@ -247,6 +249,7 @@ typedef struct ChardevClass {
     void (*chr_accept_input)(Chardev *chr);
     void (*chr_set_echo)(Chardev *chr, bool echo);
     void (*chr_set_fe_open)(Chardev *chr, int fe_open);
+    //chr事件处理回调
     void (*chr_be_event)(Chardev *s, int event);
 } ChardevClass;
 

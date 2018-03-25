@@ -47,7 +47,7 @@ typedef struct QemuOptDesc {
     const char *name;
     enum QemuOptType type;//选项值数据类型
     const char *help;
-    const char *def_value_str;
+    const char *def_value_str;//选项的默认字符串
 } QemuOptDesc;
 
 struct QemuOptsList {

@@ -359,7 +359,7 @@ typedef struct ObjectProperty
     ObjectPropertyAccessor *get;
     ObjectPropertyAccessor *set;
     ObjectPropertyResolve *resolve;
-    ObjectPropertyRelease *release;
+    ObjectPropertyRelease *release;//属性值释放函数
     void *opaque;
 } ObjectProperty;
 
@@ -391,8 +391,8 @@ typedef void (ObjectFree)(void *obj);
 struct ObjectClass
 {
     /*< private >*/
-    Type type;//类型
-    GSList *interfaces;
+    Type type;//类的类型
+    GSList *interfaces;//按顺序存入各接口的type class
 
     const char *object_cast_cache[OBJECT_CLASS_CAST_CACHE];
     const char *class_cast_cache[OBJECT_CLASS_CAST_CACHE];
@@ -418,7 +418,7 @@ struct Object
 {
     /*< private >*/
     ObjectClass *class;//对象所属的class
-    ObjectFree *free;
+    ObjectFree *free;//对象内存释放函数
     GHashTable *properties;//对象的属性表
     uint32_t ref;//对象的引用计数
     Object *parent;
@@ -426,48 +426,55 @@ struct Object
 
 /**
  * TypeInfo:
- * @name: The name of the type.
- * @parent: The name of the parent type.
+ * @name: The name of the type. 类型名称
+ * @parent: The name of the parent type. 父类型名称
  * @instance_size: The size of the object (derivative of #Object).  If
  *   @instance_size is 0, then the size of the object will be the size of the
- *   parent object.
+ *   parent object. 对象大小，如果@instance_size为0，那么此对象的大小将等于父对象的大小
  * @instance_init: This function is called to initialize an object.  The parent
  *   class will have already been initialized so the type is only responsible
- *   for initializing its own members.
+ *   for initializing its own members. 对象初始化时会调用本函数，调用本函数时，父对象
+ *   将已经被初始化，故本类型仅仅初始化自有成员即可
  * @instance_post_init: This function is called to finish initialization of
- *   an object, after all @instance_init functions were called.
+ *   an object, after all @instance_init functions were called. 对象初始化完成后
+ *   此函数将被调用，在所有@instance_init调用之后
  * @instance_finalize: This function is called during object destruction.  This
  *   is called before the parent @instance_finalize function has been called.
  *   An object should only free the members that are unique to its type in this
- *   function.
+ *   function. 此函数在对象销毁期间被调用。在所有父类@instance_finalized调用之前调用，一个
+ *   对象仅仅需要稍毁此类型中的成员
  * @abstract: If this field is true, then the class is considered abstract and
- *   cannot be directly instantiated.
+ *   cannot be directly instantiated. 如果此字段为True,则此class不能被实附化。
  * @class_size: The size of the class object (derivative of #ObjectClass)
  *   for this object.  If @class_size is 0, then the size of the class will be
  *   assumed to be the size of the parent class.  This allows a type to avoid
  *   implementing an explicit class type if they are not adding additional
- *   virtual functions.
+ *   virtual functions. 对象类元数据大小，如果@class_size为0，那么这个类元数据大小将等于
+ *   其父类元数据大小，这将使得某此类型可以不增加新的虚函数，而仅仅做明确的实现
  * @class_init: This function is called after all parent class initialization
  *   has occurred to allow a class to set its default virtual method pointers.
  *   This is also the function to use to override virtual methods from a parent
- *   class.
+ *   class. 类初始化函数发生成所有父类初始化之后，以便容许设置默认的虚函数指针，当然也容许子类override
+ *   父类的虚方法。
  * @class_base_init: This function is called for all base classes after all
  *   parent class initialization has occurred, but before the class itself
  *   is initialized.  This is the function to use to undo the effects of
- *   memcpy from the parent class to the descendants.
+ *   memcpy from the parent class to the descendants. 为了消除通过memcpy将父class copy到
+ *   子类的影响，而引入本函数。本函数在所有父类初始化完成后，本类初始化完成前，由当前类针对所有基类调用。
  * @class_finalize: This function is called during class destruction and is
- *   meant to release and dynamic parameters allocated by @class_init.
+ *   meant to release and dynamic parameters allocated by @class_init. 类销毁函数，
+ *   用于释放@class_init申请的资源
  * @class_data: Data to pass to the @class_init, @class_base_init and
  *   @class_finalize functions.  This can be useful when building dynamic
- *   classes.
+ *   classes. 函数@class_init,@class_init,@class_finalize在调用时传入的参数
  * @interfaces: The list of interfaces associated with this type.  This
  *   should point to a static array that's terminated with a zero filled
- *   element.
+ *   element. 本类型的一组接口，此指定应指向一个以0结尾的静态数组
  */
 struct TypeInfo
 {
     const char *name;//类型名称
-    const char *parent;//父类型
+    const char *parent;//父类型名称
 
     size_t instance_size;//类型大小
     void (*instance_init)(Object *obj);
@@ -477,11 +484,15 @@ struct TypeInfo
     bool abstract;//是否抽象类型
     size_t class_size;//类元数据大小
 
+    //构造函数
     void (*class_init)(ObjectClass *klass, void *data);
     void (*class_base_init)(ObjectClass *klass, void *data);
+    //析构函数
     void (*class_finalize)(ObjectClass *klass, void *data);
+    //class_init,class_base_init,class_finalize的函数参数
     void *class_data;
 
+    //类型的接口信息
     InterfaceInfo *interfaces;
 };
 

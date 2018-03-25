@@ -14,6 +14,8 @@
 #include "qom/object.h"
 #include "qemu/module.h"
 
+//定义container类型
+//继承链:container->object
 static const TypeInfo container_info = {
     .name          = "container",
     .instance_size = sizeof(Object),

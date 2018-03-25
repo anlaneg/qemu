@@ -57,6 +57,7 @@ static void chr_be_event(Chardev *s, int event)
     be->chr_event(be->opaque, event);
 }
 
+//处理chr的事件
 void qemu_chr_be_event(Chardev *s, int event)
 {
     /* Keep track if the char device is open */
@@ -229,6 +230,7 @@ static void qemu_char_open(Chardev *chr, ChardevBackend *backend,
         }
     }
 
+    //打开字符设备
     if (cc->open) {
         cc->open(chr, backend, be_opened, errp);
     }
@@ -509,6 +511,7 @@ static const ChardevClass *char_get_class(const char *driver, Error **errp)
     //查找名称为chardev-%s的chardev类driver
     char *typename = g_strdup_printf("chardev-%s", driver);
 
+    //获取typename的类元数据
     oc = object_class_by_name(typename);
     g_free(typename);
 
@@ -585,9 +588,11 @@ help_string_append(const char *name, void *opaque)
     g_string_append_printf(str, "\n%s", name);
 }
 
+//别名检查
 static const char *chardev_alias_translate(const char *name)
 {
     int i;
+    //如果与别名表中元素匹配，则返回别名表中的类型
     for (i = 0; i < (int)ARRAY_SIZE(chardev_alias_table); i++) {
         if (g_strcmp0(chardev_alias_table[i].alias, name) == 0) {
             return chardev_alias_table[i].typename;
@@ -611,6 +616,7 @@ ChardevBackend *qemu_chr_parse_opts(QemuOpts *opts, Error **errp)
         return NULL;
     }
 
+    //获取backend对应的元数据
     cc = char_get_class(name, errp);
     if (cc == NULL) {
         return NULL;
@@ -619,6 +625,8 @@ ChardevBackend *qemu_chr_parse_opts(QemuOpts *opts, Error **errp)
     backend = g_new0(ChardevBackend, 1);
     backend->type = CHARDEV_BACKEND_KIND_NULL;
 
+    //如果backend的元数据有parse，则调用parse解析命令行
+    //并填充backend
     if (cc->parse) {
         cc->parse(opts, backend, &local_err);
         if (local_err) {
@@ -627,6 +635,7 @@ ChardevBackend *qemu_chr_parse_opts(QemuOpts *opts, Error **errp)
             return NULL;
         }
     } else {
+    		//如果无parse，则解析公共参数
         ChardevCommon *ccom = g_new0(ChardevCommon, 1);
         qemu_chr_parse_common(opts, ccom);
         backend->u.null.data = ccom; /* Any ChardevCommon member would work */
@@ -640,10 +649,13 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts, Error **errp)
     const ChardevClass *cc;
     Chardev *chr = NULL;
     ChardevBackend *backend = NULL;
+
+    //取backend配置类型
     const char *name = chardev_alias_translate(qemu_opt_get(opts, "backend"));
     const char *id = qemu_opts_id(opts);
     char *bid = NULL;
 
+    //收到帮助请求，显示帮助信息
     if (name && is_help_option(name)) {
         GString *str = g_string_new("");
 
@@ -660,13 +672,14 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts, Error **errp)
         return NULL;
     }
 
-    //检查name取值是否在chardev的别名表中
+    //解析选项,利用选项，生成backend
     backend = qemu_chr_parse_opts(opts, errp);
     if (backend == NULL) {
         return NULL;
     }
 
-    //加载对应驱动(例如char_socket_class_init函数返回的cc)
+    //加载对应驱动(例如当name为socket时，请求的typename则为TYPE_CHARDEV_SOCKET，
+    //即char_socket_type_info结构，本函数将返回其对应的类元数据）
     cc = char_get_class(name, errp);
     if (cc == NULL) {
         goto out;
@@ -924,7 +937,7 @@ Chardev *qemu_chardev_new(const char *id, const char *typename,
 
     assert(g_str_has_prefix(typename, "chardev-"));
 
-    //生成这种类型的对象
+    //生成对象（例如TYPE_CHARDEV_SOCKET）
     obj = object_new(typename);
     chr = CHARDEV(obj);
     chr->label = g_strdup(id);

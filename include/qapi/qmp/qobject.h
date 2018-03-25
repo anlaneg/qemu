@@ -35,8 +35,8 @@
 #include "qapi/qapi-builtin-types.h"
 
 struct QObject {
-    QType type;
-    size_t refcnt;
+    QType type;//类型
+    size_t refcnt;//引用计数
 };
 
 /* Get the 'base' part of an object */

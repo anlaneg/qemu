@@ -96,6 +96,7 @@ const char *get_opt_value(char *buf, int buf_size, const char *p)
     return p;//返回下一个开始
 }
 
+//将选项name的值，解析成bool类型，ret为解析后的类型。
 static void parse_option_bool(const char *name, const char *value, bool *ret,
                               Error **errp)
 {
@@ -263,6 +264,7 @@ static void qemu_opt_del(QemuOpt *opt)
 /* qemu_opt_set allows many settings for the same option.
  * This function deletes all settings for an option.
  */
+//自opts中删除名称为name的所有选项
 static void qemu_opt_del_all(QemuOpts *opts, const char *name)
 {
     QemuOpt *opt, *next_opt;
@@ -285,7 +287,7 @@ const char *qemu_opt_get(QemuOpts *opts, const char *name)
 
     opt = qemu_opt_find(opts, name);
     if (!opt) {
-    	//如果此选项没有指定，则使用默认值
+    		//如果此选项没有指定，则使用默认值
         const QemuOptDesc *desc = find_desc_by_name(opts->list->desc, name);
         if (desc && desc->def_value_str) {
             return desc->def_value_str;
@@ -353,6 +355,8 @@ bool qemu_opt_has_help_opt(QemuOpts *opts)
     return false;
 }
 
+//自选项中提取name的给值，如果没有给选项值，使用选项默认值，如果选项默认值不存在，使用defval
+//del控制着是否删除所有名称为name的选项
 static bool qemu_opt_get_bool_helper(QemuOpts *opts, const char *name,
                                      bool defval, bool del)
 {
@@ -365,6 +369,7 @@ static bool qemu_opt_get_bool_helper(QemuOpts *opts, const char *name,
 
     opt = qemu_opt_find(opts, name);
     if (opt == NULL) {
+    		//没有找到名称为name的opt,即选项没有给出，尝试选项默认值
         const QemuOptDesc *desc = find_desc_by_name(opts->list->desc, name);
         if (desc && desc->def_value_str) {
             parse_option_bool(name, desc->def_value_str, &ret, &error_abort);
@@ -374,11 +379,13 @@ static bool qemu_opt_get_bool_helper(QemuOpts *opts, const char *name,
     assert(opt->desc && opt->desc->type == QEMU_OPT_BOOL);
     ret = opt->value.boolean;
     if (del) {
+    		//如果需要删除此选项给值，则自opts中删除名称为name的选项
         qemu_opt_del_all(opts, name);
     }
     return ret;
 }
 
+//将选项name的给值按bool确定，默认值为defval
 bool qemu_opt_get_bool(QemuOpts *opts, const char *name, bool defval)
 {
     return qemu_opt_get_bool_helper(opts, name, defval, false);
@@ -389,6 +396,7 @@ bool qemu_opt_get_bool_del(QemuOpts *opts, const char *name, bool defval)
     return qemu_opt_get_bool_helper(opts, name, defval, true);
 }
 
+//自选项中提取number（与其它qemu_opt_get_*_helper系列意义相同）
 static uint64_t qemu_opt_get_number_helper(QemuOpts *opts, const char *name,
                                            uint64_t defval, bool del)
 {

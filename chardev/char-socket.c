@@ -1057,7 +1057,7 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
 
     addr = g_new0(SocketAddressLegacy, 1);
     if (path) {
-    	//给定path的情况
+    		//给定path的情况
         UnixSocketAddress *q_unix;
         addr->type = SOCKET_ADDRESS_LEGACY_KIND_UNIX;
         q_unix = addr->u.q_unix.data = g_new0(UnixSocketAddress, 1);
@@ -1121,6 +1121,7 @@ static void char_socket_class_init(ObjectClass *oc, void *data)
                                    NULL, &error_abort);
 }
 
+//继承列表：TYPE_CHARDEV_SOCKET->TYPE_CHARDEV->TYPE_OBJECT(Object)
 static const TypeInfo char_socket_type_info = {
     .name = TYPE_CHARDEV_SOCKET,
     .parent = TYPE_CHARDEV,
