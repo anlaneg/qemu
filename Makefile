@@ -438,21 +438,23 @@ all: $(DOCS) $(TOOLS) $(HELPERS-y) recurse-all modules
 qemu-version.h: FORCE
 	$(call quiet-command, \
 		(cd $(SRC_PATH); \
-		printf '#define QEMU_PKGVERSION '; \
 		if test -n "$(PKGVERSION)"; then \
-			printf '"$(PKGVERSION)"\n'; \
+			pkgvers="$(PKGVERSION)"; \
 		else \
 			if test -d .git; then \
-				printf '" ('; \
-				git describe --match 'v*' 2>/dev/null | tr -d '\n'; \
+				pkgvers=$$(git describe --match 'v*' 2>/dev/null | tr -d '\n');\
 				if ! git diff-index --quiet HEAD &>/dev/null; then \
-					printf -- '-dirty'; \
+					pkgvers="$${pkgvers}-dirty"; \
 				fi; \
-				printf ')"\n'; \
-			else \
-				printf '""\n'; \
 			fi; \
-		fi) > $@.tmp)
+		fi; \
+		printf "#define QEMU_PKGVERSION \"$${pkgvers}\"\n"; \
+		if test -n "$${pkgvers}"; then \
+			printf '#define QEMU_FULL_VERSION QEMU_VERSION " (" QEMU_PKGVERSION ")"\n'; \
+		else \
+			printf '#define QEMU_FULL_VERSION QEMU_VERSION\n'; \
+		fi; \
+		) > $@.tmp)
 	$(call quiet-command, if ! cmp -s $@ $@.tmp; then \
 	  mv $@.tmp $@; \
 	 else \
@@ -780,7 +782,6 @@ bepo    cz
 ifdef INSTALL_BLOBS
 BLOBS=bios.bin bios-256k.bin sgabios.bin vgabios.bin vgabios-cirrus.bin \
 vgabios-stdvga.bin vgabios-vmware.bin vgabios-qxl.bin vgabios-virtio.bin \
-acpi-dsdt.aml \
 ppc_rom.bin openbios-sparc32 openbios-sparc64 openbios-ppc QEMU,tcx.bin QEMU,cgthree.bin \
 pxe-e1000.rom pxe-eepro100.rom pxe-ne2k_pci.rom \
 pxe-pcnet.rom pxe-rtl8139.rom pxe-virtio.rom \
@@ -1051,10 +1052,16 @@ endif
 include $(SRC_PATH)/tests/docker/Makefile.include
 include $(SRC_PATH)/tests/vm/Makefile.include
 
+printgen:
+	@echo $(GENERATED_FILES)
+
 .PHONY: help
 help:
 	@echo  'Generic targets:'
 	@echo  '  all             - Build all'
+ifdef CONFIG_MODULES
+	@echo  '  modules         - Build all modules'
+endif
 	@echo  '  dir/file.o      - Build specified target only'
 	@echo  '  install         - Install QEMU, documentation and tools'
 	@echo  '  ctags/TAGS      - Generate tags file for editors'
