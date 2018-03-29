@@ -70,7 +70,7 @@ typedef struct {
     TCPChardevTelnetInit *telnet_init;
 
     GSource *reconnect_timer;
-    int64_t reconnect_time;
+    int64_t reconnect_time;//重连时间（单位秒）
     bool connect_err_reported;
 } SocketChardev;
 
@@ -89,6 +89,7 @@ static void tcp_chr_reconn_timer_cancel(SocketChardev *s)
     }
 }
 
+//启动重连定时器
 static void qemu_chr_socket_restart_timer(Chardev *chr)
 {
     SocketChardev *s = SOCKET_CHARDEV(chr);
@@ -96,10 +97,12 @@ static void qemu_chr_socket_restart_timer(Chardev *chr)
 
     assert(s->connected == 0);
     name = g_strdup_printf("chardev-socket-reconnect-%s", chr->label);
+    //创建一个重连定时器
     s->reconnect_timer = qemu_chr_timeout_add_ms(chr,
                                                  s->reconnect_time * 1000,
-                                                 socket_reconnect_timeout,
+                                                 socket_reconnect_timeout,//定时器到期后进行重连回调
                                                  chr);
+    //设置定时器名称
     g_source_set_name(s->reconnect_timer, name);
     g_free(name);
 }
@@ -437,9 +440,11 @@ static void tcp_chr_disconnect(Chardev *chr)
     }
     update_disconnected_filename(s);
     if (emit_close) {
+    	//触发连接断开事件
         qemu_chr_be_event(chr, CHR_EVENT_CLOSED);
     }
     if (s->reconnect_time) {
+    	//需要重连，则重启timer
         qemu_chr_socket_restart_timer(chr);
     }
 }
@@ -760,6 +765,7 @@ static void tcp_chr_tls_init(Chardev *chr)
 }
 
 
+//设置ioc名称
 static void tcp_chr_set_client_ioc_name(Chardev *chr,
                                         QIOChannelSocket *sioc)
 {
@@ -926,9 +932,11 @@ static gboolean socket_reconnect_timeout(gpointer opaque)
     Chardev *chr = CHARDEV(opaque);
     SocketChardev *s = SOCKET_CHARDEV(opaque);
 
+    //销毁定时器
     g_source_unref(s->reconnect_timer);
     s->reconnect_timer = NULL;
 
+    //如果已经打开，则不必再重连
     if (chr->be_open) {
         return false;
     }
@@ -1202,10 +1210,12 @@ static void char_socket_class_init(ObjectClass *oc, void *data)
     cc->chr_update_read_handler = tcp_chr_update_read_handler;
     cc->chr_machine_done = tcp_chr_machine_done_hook;
 
+    //添加addr属性
     object_class_property_add(oc, "addr", "SocketAddress",
                               char_socket_get_addr, NULL,
                               NULL, NULL, &error_abort);
 
+    //添加connected属性
     object_class_property_add_bool(oc, "connected", char_socket_get_connected,
                                    NULL, &error_abort);
 }

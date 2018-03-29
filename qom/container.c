@@ -22,25 +22,31 @@ static const TypeInfo container_info = {
     .parent        = TYPE_OBJECT,
 };
 
+//注册container类型
 static void container_register_types(void)
 {
     type_register_static(&container_info);
 }
 
+//按path查找object(每个path的文件名对应一个obj)，如果对象不存在，则创建container类型的对象
 Object *container_get(Object *root, const char *path)
 {
     Object *obj, *child;
     gchar **parts;
     int i;
 
+    //按‘/'拆分,parts[0]==''
     parts = g_strsplit(path, "/", 0);
     assert(parts != NULL && parts[0] != NULL && !parts[0][0]);
     obj = root;
 
+    //跳过“0“号
     for (i = 1; parts[i] != NULL; i++, obj = child) {
+    	//按路径名称查找子OBJ
         child = object_resolve_path_component(obj, parts[i]);
         if (!child) {
-            child = object_new("container");
+        	//添加新的child('container')，并添加parts[i]属性
+        	child = object_new("container");
             object_property_add_child(obj, parts[i], child, NULL);
             object_unref(child);
         }

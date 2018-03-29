@@ -1082,6 +1082,7 @@ object_property_add(Object *obj, const char *name, const char *type,
     return prop;
 }
 
+//属性添加
 ObjectProperty *
 object_class_property_add(ObjectClass *klass,
                           const char *name,
@@ -1575,6 +1576,7 @@ void object_property_add_child(Object *obj, const char *name,
 
     type = g_strdup_printf("child<%s>", object_get_typename(OBJECT(child)));
 
+    //向obj中添加属性name
     op = object_property_add(obj, name, type, object_get_child_property, NULL,
                              object_finalize_child_property, child, &local_err);
     if (local_err) {
@@ -1814,6 +1816,7 @@ gchar *object_get_canonical_path(Object *obj)
     return newpath;
 }
 
+//通过part查找属性，如果属性有resolve回调，则调用回调完成OBJ返回
 Object *object_resolve_path_component(Object *parent, const gchar *part)
 {
     ObjectProperty *prop = object_property_find(parent, part, NULL);

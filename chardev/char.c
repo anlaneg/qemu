@@ -41,6 +41,8 @@
 /***********************************************************/
 /* character device */
 
+//获取chardevs对象，如果不存在，则创建空的chardevs
+//在此下，我们存储所有chardevs设备
 static Object *get_chardevs_root(void)
 {
     return container_get(object_get_root(), "/chardevs");
@@ -75,6 +77,7 @@ void qemu_chr_be_event(Chardev *s, int event)
 
 /* Not reporting errors from writing to logfile, as logs are
  * defined to be "best effort" only */
+//字符设备写向日志文件中写内容
 static void qemu_chr_write_log(Chardev *s, const uint8_t *buf, size_t len)
 {
     size_t done = 0;
@@ -88,6 +91,7 @@ static void qemu_chr_write_log(Chardev *s, const uint8_t *buf, size_t len)
     retry:
         ret = write(s->logfd, buf + done, len - done);
         if (ret == -1 && errno == EAGAIN) {
+        	//需要重试的，sleep 100us后重试
             g_usleep(100);
             goto retry;
         }
@@ -99,6 +103,7 @@ static void qemu_chr_write_log(Chardev *s, const uint8_t *buf, size_t len)
     }
 }
 
+//调用chr_write写入buf中的内容
 static int qemu_chr_write_buffer(Chardev *s,
                                  const uint8_t *buf, int len,
                                  int *offset, bool write_all)
@@ -113,26 +118,28 @@ static int qemu_chr_write_buffer(Chardev *s,
         res = cc->chr_write(s, buf + *offset, len - *offset);
         if (res < 0 && errno == EAGAIN && write_all) {
             g_usleep(100);
-            goto retry;
+            goto retry;//稍候重试
         }
 
         if (res <= 0) {
-            break;
+            break;//写失败跳出
         }
 
         *offset += res;
         if (!write_all) {
-            break;
+            break;//不要求全写，直接跳出
         }
     }
     if (*offset > 0) {
+    	//记录通过chr_write成功写入的内容
         qemu_chr_write_log(s, buf, *offset);
     }
     qemu_mutex_unlock(&s->chr_write_lock);
 
-    return res;
+    return res;//返回写了多少字节
 }
 
+//向字符设备中写入len长度的buf,write_all为True时要求全部写入，False时不要求
 int qemu_chr_write(Chardev *s, const uint8_t *buf, int len, bool write_all)
 {
     int offset = 0;
@@ -213,6 +220,7 @@ static void qemu_char_open(Chardev *chr, ChardevBackend *backend,
     /* Any ChardevCommon member would work */
     ChardevCommon *common = backend ? backend->u.null.data : NULL;
 
+    //打开log文件
     if (common && common->has_logfile) {
         int flags = O_WRONLY | O_CREAT;
         if (common->has_logappend &&
@@ -310,8 +318,6 @@ static void chardev_machine_done_hook(Notifier *notifier, void *unused)
 static Notifier chardev_machine_done_notify = {
     .notify = chardev_machine_done_hook,
 };
-
-}
 
 static bool qemu_chr_is_busy(Chardev *s)
 {
@@ -801,8 +807,10 @@ ChardevBackendInfoList *qmp_query_chardev_backends(Error **errp)
     return backend_list;
 }
 
+//查找是否存在名称为name的字符设备
 Chardev *qemu_chr_find(const char *name)
 {
+	//在字符设备中查找名称为name的设备
     Object *obj = object_resolve_path_component(get_chardevs_root(), name);
 
     return obj ? CHARDEV(obj) : NULL;
@@ -933,22 +941,26 @@ Chardev *qemu_chardev_new(const char *id, const char *typename,
 
     //生成对象（例如TYPE_CHARDEV_SOCKET）
     obj = object_new(typename);
-    chr = CHARDEV(obj);
-    chr->label = g_strdup(id);
+    chr = CHARDEV(obj);//强转为字符设备
+    chr->label = g_strdup(id);//设置字符名称
 
+    //打开char设备
     qemu_char_open(chr, backend, &be_opened, &local_err);
     if (local_err) {
         goto end;
     }
 
     if (!chr->filename) {
+    	//跳过'chardev-'
         chr->filename = g_strdup(typename + 8);
     }
     if (be_opened) {
+    	//触发字符设备被打开事件
         qemu_chr_be_event(chr, CHR_EVENT_OPENED);
     }
 
     if (id) {
+    	//在chardevs中添加此chardev设备
         object_property_add_child(get_chardevs_root(), id, obj, &local_err);
         if (local_err) {
             goto end;
@@ -1008,11 +1020,13 @@ ChardevReturn *qmp_chardev_change(const char *id, ChardevBackend *backend,
         return NULL;
     }
 
+    //不支持mux
     if (CHARDEV_IS_MUX(chr)) {
         error_setg(errp, "Mux device hotswap not supported yet");
         return NULL;
     }
 
+    //不能为replay模式
     if (qemu_chr_replay(chr)) {
         error_setg(errp,
             "Chardev '%s' cannot be changed in record/replay mode", id);

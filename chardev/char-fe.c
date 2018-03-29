@@ -31,6 +31,7 @@
 #include "chardev/char-io.h"
 #include "chardev/char-mux.h"
 
+//向be中写入buf中的数据（不要求全部写入）
 int qemu_chr_fe_write(CharBackend *be, const uint8_t *buf, int len)
 {
     Chardev *s = be->chr;
@@ -42,6 +43,7 @@ int qemu_chr_fe_write(CharBackend *be, const uint8_t *buf, int len)
     return qemu_chr_write(s, buf, len, false);
 }
 
+//向be中写入buf中的全部数据
 int qemu_chr_fe_write_all(CharBackend *be, const uint8_t *buf, int len)
 {
     Chardev *s = be->chr;
@@ -59,6 +61,7 @@ int qemu_chr_fe_read_all(CharBackend *be, uint8_t *buf, int len)
     int offset = 0, counter = 10;
     int res;
 
+    //不支持同步读，返回0
     if (!s || !CHARDEV_GET_CLASS(s)->chr_sync_read) {
         return 0;
     }
@@ -205,11 +208,14 @@ bool qemu_chr_fe_init(CharBackend *b, Chardev *s, Error **errp)
             goto unavailable;
         }
 
+        //设置backend
         d->backends[d->mux_cnt] = b;
         tag = d->mux_cnt++;
     } else if (s->be) {
+    	//除mux之外，be仅可设置一次
         goto unavailable;
     } else {
+    	//设置字符设备的后端
         s->be = b;
     }
 

@@ -421,7 +421,7 @@ struct Object
     ObjectFree *free;//对象内存释放函数
     GHashTable *properties;//对象的属性表
     uint32_t ref;//对象的引用计数
-    Object *parent;
+    Object *parent;//如果此值不为NULL,则此对象已被接管
 };
 
 /**

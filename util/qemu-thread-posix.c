@@ -498,14 +498,17 @@ static void *qemu_thread_start(void *args)
     /* Attempt to set the threads name; note that this is for debug, so
      * we're not going to fail if we can't set it.
      */
+    //设置线程名称
     pthread_setname_np(pthread_self(), qemu_thread_args->name);
     g_free(qemu_thread_args->name);
     g_free(qemu_thread_args);
+    //运行线程函数
     return start_routine(arg);
 }
 #endif
 
 
+//qemu创建线程并运行
 void qemu_thread_create(QemuThread *thread, const char *name,
                        void *(*start_routine)(void*),
                        void *arg, int mode)
@@ -519,22 +522,25 @@ void qemu_thread_create(QemuThread *thread, const char *name,
         error_exit(err, __func__);
     }
 
+    //自动detached
     if (mode == QEMU_THREAD_DETACHED) {
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     }
 
     /* Leave signal handling to the iothread.  */
     sigfillset(&set);
-    pthread_sigmask(SIG_SETMASK, &set, &oldset);
+    pthread_sigmask(SIG_SETMASK, &set, &oldset);//还原信号处理函数
 
 #ifdef CONFIG_PTHREAD_SETNAME_NP
     if (name_threads) {
+    	//如果要做有名线程，则再添加一层封装，使其在qemu_thread_start完成线程名称设置后，再做真正的工作
         QemuThreadArgs *qemu_thread_args;
         qemu_thread_args = g_new0(QemuThreadArgs, 1);
         qemu_thread_args->name = g_strdup(name);
         qemu_thread_args->start_routine = start_routine;
         qemu_thread_args->arg = arg;
 
+        //线程创建
         err = pthread_create(&thread->thread, &attr,
                              qemu_thread_start, qemu_thread_args);
     } else
@@ -547,6 +553,7 @@ void qemu_thread_create(QemuThread *thread, const char *name,
     if (err)
         error_exit(err, __func__);
 
+    //还原旧的信号处理
     pthread_sigmask(SIG_SETMASK, &oldset, NULL);
 
     pthread_attr_destroy(&attr);
