@@ -108,6 +108,7 @@ static gpointer qio_task_thread_worker(gpointer opaque)
     GSource *idle;
 
     trace_qio_task_thread_run(data->task);
+    //调用worker回调
     data->worker(data->task, data->opaque);
 
     /* We're running in the background thread, and must only
@@ -145,6 +146,7 @@ void qio_task_run_in_thread(QIOTask *task,
     data->context = context;
 
     trace_qio_task_thread_start(task, worker, opaque);
+    //线程会调用data->worker
     qemu_thread_create(&thread,
                        "io-task-worker",
                        qio_task_thread_worker,

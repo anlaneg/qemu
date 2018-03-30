@@ -554,6 +554,7 @@ static void opt_set(QemuOpts *opts, const char *name, const char *value,
     }
 }
 
+//qemu选项设置,name为选项名，value为选项值
 void qemu_opt_set(QemuOpts *opts, const char *name, const char *value,
                   Error **errp)
 {

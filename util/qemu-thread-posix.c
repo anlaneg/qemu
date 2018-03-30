@@ -36,6 +36,7 @@ static void error_exit(int err, const char *msg)
     abort();
 }
 
+//初始化互斥锁
 void qemu_mutex_init(QemuMutex *mutex)
 {
     int err;
@@ -46,6 +47,7 @@ void qemu_mutex_init(QemuMutex *mutex)
     mutex->initialized = true;
 }
 
+//互斥锁销毁
 void qemu_mutex_destroy(QemuMutex *mutex)
 {
     int err;
@@ -57,6 +59,7 @@ void qemu_mutex_destroy(QemuMutex *mutex)
         error_exit(err, __func__);
 }
 
+//互斥锁加锁
 void qemu_mutex_lock_impl(QemuMutex *mutex, const char *file, const int line)
 {
     int err;
@@ -71,6 +74,7 @@ void qemu_mutex_lock_impl(QemuMutex *mutex, const char *file, const int line)
     trace_qemu_mutex_locked(mutex, file, line);
 }
 
+//互斥锁尝试加锁
 int qemu_mutex_trylock_impl(QemuMutex *mutex, const char *file, const int line)
 {
     int err;
@@ -87,6 +91,7 @@ int qemu_mutex_trylock_impl(QemuMutex *mutex, const char *file, const int line)
     return -EBUSY;
 }
 
+//互斥锁尝试解锁
 void qemu_mutex_unlock_impl(QemuMutex *mutex, const char *file, const int line)
 {
     int err;
@@ -114,6 +119,7 @@ void qemu_rec_mutex_init(QemuRecMutex *mutex)
     mutex->initialized = true;
 }
 
+//初始化条件变量
 void qemu_cond_init(QemuCond *cond)
 {
     int err;
@@ -135,6 +141,7 @@ void qemu_cond_destroy(QemuCond *cond)
         error_exit(err, __func__);
 }
 
+//条件变量通知（单个）
 void qemu_cond_signal(QemuCond *cond)
 {
     int err;
@@ -145,6 +152,7 @@ void qemu_cond_signal(QemuCond *cond)
         error_exit(err, __func__);
 }
 
+//条件变量通知（多个）
 void qemu_cond_broadcast(QemuCond *cond)
 {
     int err;
@@ -155,6 +163,7 @@ void qemu_cond_broadcast(QemuCond *cond)
         error_exit(err, __func__);
 }
 
+//条件变量等待通知
 void qemu_cond_wait_impl(QemuCond *cond, QemuMutex *mutex, const char *file, const int line)
 {
     int err;
@@ -167,6 +176,7 @@ void qemu_cond_wait_impl(QemuCond *cond, QemuMutex *mutex, const char *file, con
         error_exit(err, __func__);
 }
 
+//信号量初始化
 void qemu_sem_init(QemuSemaphore *sem, int init)
 {
     int rc;
@@ -185,6 +195,7 @@ void qemu_sem_init(QemuSemaphore *sem, int init)
     }
     sem->count = init;
 #else
+    //system v5的信号量初始化
     rc = sem_init(&sem->sem, 0, init);
     if (rc < 0) {
         error_exit(errno, __func__);
@@ -559,21 +570,25 @@ void qemu_thread_create(QemuThread *thread, const char *name,
     pthread_attr_destroy(&attr);
 }
 
+//取当前线程id
 void qemu_thread_get_self(QemuThread *thread)
 {
     thread->thread = pthread_self();
 }
 
+//检是当前函数所在线程是否为thread
 bool qemu_thread_is_self(QemuThread *thread)
 {
    return pthread_equal(pthread_self(), thread->thread);
 }
 
+//线程退出
 void qemu_thread_exit(void *retval)
 {
     pthread_exit(retval);
 }
 
+//线程join
 void *qemu_thread_join(QemuThread *thread)
 {
     int err;

@@ -68,11 +68,13 @@ typedef struct VncJobQueue VncJobQueue;
  */
 static VncJobQueue *queue;
 
+//vnc job队列加锁
 static void vnc_lock_queue(VncJobQueue *queue)
 {
     qemu_mutex_lock(&queue->mutex);
 }
 
+//vnc job队列解锁
 static void vnc_unlock_queue(VncJobQueue *queue)
 {
     qemu_mutex_unlock(&queue->mutex);
@@ -104,12 +106,14 @@ int vnc_job_add_rect(VncJob *job, int x, int y, int w, int h)
     return 1;
 }
 
+//job入队
 void vnc_job_push(VncJob *job)
 {
     vnc_lock_queue(queue);
     if (queue->exit || QLIST_EMPTY(&job->rectangles)) {
         g_free(job);
     } else {
+    		//将job加入到队列
         QTAILQ_INSERT_TAIL(&queue->jobs, job, next);
         qemu_cond_broadcast(&queue->cond);
     }
@@ -208,15 +212,18 @@ static int vnc_worker_thread_loop(VncJobQueue *queue)
     int saved_offset;
 
     vnc_lock_queue(queue);
+    //等待队列中存入job
     while (QTAILQ_EMPTY(&queue->jobs) && !queue->exit) {
         qemu_cond_wait(&queue->cond, &queue->mutex);
     }
+
     /* Here job can only be NULL if queue->exit is true */
+    //取出队列中的job
     job = QTAILQ_FIRST(&queue->jobs);
     vnc_unlock_queue(queue);
 
     if (queue->exit) {
-        return -1;
+        return -1;//线程需要退出
     }
 
     vnc_lock_output(job->vs);
@@ -310,22 +317,26 @@ static void vnc_queue_clear(VncJobQueue *q)
     queue = NULL; /* Unset global queue */
 }
 
+//vnc线程的实际干活函数
 static void *vnc_worker_thread(void *arg)
 {
     VncJobQueue *queue = arg;
 
     qemu_thread_get_self(&queue->thread);
 
+    //死循环处理vnc事件
     while (!vnc_worker_thread_loop(queue)) ;
     vnc_queue_clear(queue);
     return NULL;
 }
 
+//检查vnc线程是否已运行
 static bool vnc_worker_thread_running(void)
 {
     return queue; /* Check global queue */
 }
 
+//启动vnc线程，负责vnc事件处理
 void vnc_start_worker_thread(void)
 {
     VncJobQueue *q;
@@ -334,6 +345,7 @@ void vnc_start_worker_thread(void)
         return ;
 
     q = vnc_queue_init();
+    //创建vnc线程
     qemu_thread_create(&q->thread, "vnc_worker", vnc_worker_thread, q,
                        QEMU_THREAD_DETACHED);
     queue = q; /* Set global queue */

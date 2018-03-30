@@ -10,9 +10,10 @@ typedef QemuMutex QemuRecMutex;
 #define qemu_rec_mutex_trylock qemu_mutex_trylock
 #define qemu_rec_mutex_unlock qemu_mutex_unlock
 
+//互斥锁
 struct QemuMutex {
     pthread_mutex_t lock;
-    bool initialized;
+    bool initialized;//是否已初始化
 };
 
 struct QemuCond {
@@ -41,7 +42,7 @@ struct QemuEvent {
 };
 
 struct QemuThread {
-    pthread_t thread;
+    pthread_t thread;//线程id
 };
 
 #endif

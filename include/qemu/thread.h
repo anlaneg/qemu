@@ -25,6 +25,7 @@ int qemu_mutex_trylock_impl(QemuMutex *mutex, const char *file, const int line);
 void qemu_mutex_lock_impl(QemuMutex *mutex, const char *file, const int line);
 void qemu_mutex_unlock_impl(QemuMutex *mutex, const char *file, const int line);
 
+//qemu互斥锁加锁
 #define qemu_mutex_lock(mutex) \
         qemu_mutex_lock_impl(mutex, __FILE__, __LINE__)
 #define qemu_mutex_trylock(mutex) \
