@@ -52,6 +52,7 @@ qio_channel_socket_new(void)
     QIOChannelSocket *sioc;
     QIOChannel *ioc;
 
+    //构造sioc对象
     sioc = QIO_CHANNEL_SOCKET(object_new(TYPE_QIO_CHANNEL_SOCKET));
     sioc->fd = -1;
 
@@ -141,8 +142,9 @@ int qio_channel_socket_connect_sync(QIOChannelSocket *ioc,
     int fd;
 
     trace_qio_channel_socket_connect_sync(ioc, addr);
-    fd = socket_connect(addr, errp);//与对端建立连接
+    fd = socket_connect(addr, errp);//与对端addr建立连接
     if (fd < 0) {
+    	//连接失败
         trace_qio_channel_socket_connect_fail(ioc);
         return -1;
     }
@@ -177,6 +179,7 @@ void qio_channel_socket_connect_async(QIOChannelSocket *ioc,
                                       GDestroyNotify destroy,
                                       GMainContext *context)
 {
+	//构造task（task的callback是在此任务完成后执行的callback)
     QIOTask *task = qio_task_new(
         OBJECT(ioc), callback, opaque, destroy);
     SocketAddress *addrCopy;
@@ -186,6 +189,7 @@ void qio_channel_socket_connect_async(QIOChannelSocket *ioc,
     /* socket_connect() does a non-blocking connect(), but it
      * still blocks in DNS lookups, so we must use a thread */
     trace_qio_channel_socket_connect_async(ioc, addr);
+    //构造线程完成此task
     qio_task_run_in_thread(task,
                            qio_channel_socket_connect_worker,
                            addrCopy,
@@ -765,6 +769,7 @@ static void qio_channel_socket_class_init(ObjectClass *klass,
     ioc_klass->io_set_aio_fd_handler = qio_channel_socket_set_aio_fd_handler;
 }
 
+//定义类型TYPE_QIO_CHANNEL_SOCKET
 static const TypeInfo qio_channel_socket_info = {
     .parent = TYPE_QIO_CHANNEL,
     .name = TYPE_QIO_CHANNEL_SOCKET,

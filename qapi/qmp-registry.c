@@ -20,10 +20,12 @@ void qmp_register_command(QmpCommandList *cmds, const char *name,
 {
     QmpCommand *cmd = g_malloc0(sizeof(*cmd));
 
+    //构造command
     cmd->name = name;
     cmd->fn = fn;
     cmd->enabled = true;
     cmd->options = options;
+    //将其加入到cmds中
     QTAILQ_INSERT_TAIL(cmds, cmd, node);
 }
 

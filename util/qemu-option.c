@@ -876,6 +876,7 @@ void qemu_opts_do_parse(QemuOpts *opts, const char *params,
     opts_do_parse(opts, params, firstname, false, errp);
 }
 
+//由于list为一组opts,而params为一组配置，将params转换单个的QemuOpts
 static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
                             bool permit_abbrev, bool defaults, Error **errp)
 {

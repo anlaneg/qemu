@@ -4710,6 +4710,7 @@ out:
     return ret;
 }
 
+//举例create命令对应的是img_create
 static const img_cmd_t img_cmds[] = {
 #define DEF(option, callback, arg_string)        \
     { option, callback },
@@ -4770,6 +4771,7 @@ int main(int argc, char **argv)
             help();
             return 0;
         case 'V':
+        	//显示帮助信息后退出
             printf(QEMU_IMG_VERSION);
             return 0;
         case 'T':
@@ -4799,7 +4801,7 @@ int main(int argc, char **argv)
     /* find the command */
     for (cmd = img_cmds; cmd->name != NULL; cmd++) {
         if (!strcmp(cmdname, cmd->name)) {
-        	    //找出命令，执行回调，处理命令
+        	//找出命令，执行回调，处理命令
             return cmd->handler(argc, argv);
         }
     }

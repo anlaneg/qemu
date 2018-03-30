@@ -27,14 +27,18 @@
 #include "ui/console.h"
 #include "ui/input.h"
 
+//0x3f = 00111111
+//取低６位
 #define MSMOUSE_LO6(n) ((n) & 0x3f)
+//0xc  = 11000000
+//取高２位
 #define MSMOUSE_HI2(n) (((n) & 0xc0) >> 6)
 
 typedef struct {
     Chardev parent;
 
     QemuInputHandlerState *hs;
-    int axis[INPUT_AXIS__MAX];
+    int axis[INPUT_AXIS__MAX];//各轴坐标（x=0,y=1)
     bool btns[INPUT_BUTTON__MAX];
     bool btnc[INPUT_BUTTON__MAX];
     uint8_t outbuf[32];
@@ -70,6 +74,7 @@ static void msmouse_queue_event(MouseChardev *mouse)
     unsigned char bytes[4] = { 0x40, 0x00, 0x00, 0x00 };
     int dx, dy, count = 3;
 
+    //取x,y轴坐标。并还原为０
     dx = mouse->axis[INPUT_AXIS_X];
     mouse->axis[INPUT_AXIS_X] = 0;
 
@@ -77,11 +82,13 @@ static void msmouse_queue_event(MouseChardev *mouse)
     mouse->axis[INPUT_AXIS_Y] = 0;
 
     /* Movement deltas */
+    //第一个字节为y轴高两位（左移２）或上x轴高两位　（共占用４bit)
     bytes[0] |= (MSMOUSE_HI2(dy) << 2) | MSMOUSE_HI2(dx);
-    bytes[1] |= MSMOUSE_LO6(dx);
-    bytes[2] |= MSMOUSE_LO6(dy);
+    bytes[1] |= MSMOUSE_LO6(dx);//x轴的低６位
+    bytes[2] |= MSMOUSE_LO6(dy);//y轴的低６位
 
     /* Buttons */
+    //左键右键占用2bit (4,5比特位）
     bytes[0] |= (mouse->btns[INPUT_BUTTON_LEFT]   ? 0x20 : 0x00);
     bytes[0] |= (mouse->btns[INPUT_BUTTON_RIGHT]  ? 0x10 : 0x00);
     if (mouse->btns[INPUT_BUTTON_MIDDLE] ||

@@ -9,21 +9,24 @@
 #include "qemu/config-file.h"
 
 //存放qemu选项
-//这些选项是按加入顺序放置的，按name区分（称为group-name）
+//这些选项是按加入顺序放置的，按name区分（称为group-name）例如"chardev","netdev"等
 //QemuOptsList链上挂接着多个QemuOpts结构,此结构按id区分，不同id的用next
 //挂接（QemuOpts结构），同一id的用head挂接（QemuOpt结构）
 //QemuOpt结构是具体一个选项一个值
 static QemuOptsList *vm_config_groups[48];
+
 //qemu drive选项
 static QemuOptsList *drive_config_groups[5];
 
-//在给出的lists数组中查找名称为group的lists,找不到返回NULL
+
+//在给出的lists数组中查找名称为group的lists,找不到返回NULL，并返回错误信息
 static QemuOptsList *find_list(QemuOptsList **lists, const char *group,
                                Error **errp)
 {
     int i;
 
     for (i = 0; lists[i] != NULL; i++) {
+    	//遍历并比对lists名称
         if (strcmp(lists[i]->name, group) == 0)
             break;
     }
@@ -33,7 +36,7 @@ static QemuOptsList *find_list(QemuOptsList **lists, const char *group,
     return lists[i];
 }
 
-//查找指定group的opt
+//查找指定group的opt（找不到时返回NULL)
 QemuOptsList *qemu_find_opts(const char *group)
 {
     QemuOptsList *ret;
@@ -47,6 +50,7 @@ QemuOptsList *qemu_find_opts(const char *group)
     return ret;
 }
 
+//如果名称为group的QemuOptsList中不存在含有id的opts，则返回它，否则创建一个并返回
 QemuOpts *qemu_find_opts_singleton(const char *group)
 {
     QemuOptsList *list;
@@ -54,14 +58,16 @@ QemuOpts *qemu_find_opts_singleton(const char *group)
 
     list = qemu_find_opts(group);
     assert(list);
-    //查找此group中无id的opts，如果不存在，则创建它
+    //查找此group中是否有无id的opts，如果无，则创建一个无id的opts
     opts = qemu_opts_find(list, NULL);
     if (!opts) {
+    	//不存在，创建一个
         opts = qemu_opts_create(list, NULL, 0, &error_abort);
     }
     return opts;
 }
 
+//通过desc转换成parameterinfolist
 static CommandLineParameterInfoList *query_option_descs(const QemuOptDesc *desc)
 {
     CommandLineParameterInfoList *param_list = NULL, *entry;
@@ -70,8 +76,10 @@ static CommandLineParameterInfoList *query_option_descs(const QemuOptDesc *desc)
 
     for (i = 0; desc[i].name != NULL; i++) {
         info = g_malloc0(sizeof(*info));
+        //填充名称
         info->name = g_strdup(desc[i].name);
 
+        //填充类型
         switch (desc[i].type) {
         case QEMU_OPT_STRING:
             info->type = COMMAND_LINE_PARAMETER_TYPE_STRING;
@@ -87,6 +95,7 @@ static CommandLineParameterInfoList *query_option_descs(const QemuOptDesc *desc)
             break;
         }
 
+        //指出有help信息
         if (desc[i].help) {
             info->has_help = true;
             info->help = g_strdup(desc[i].help);
@@ -96,6 +105,7 @@ static CommandLineParameterInfoList *query_option_descs(const QemuOptDesc *desc)
             info->q_default = g_strdup(desc[i].def_value_str);
         }
 
+        //申请entry,并将entry放置在param_list的前面
         entry = g_malloc0(sizeof(*entry));
         entry->value = info;
         entry->next = param_list;
@@ -148,8 +158,10 @@ static CommandLineParameterInfoList *get_drive_infolist(void)
 
     for (i = 0; drive_config_groups[i] != NULL; i++) {
         if (!head) {
+        	//首个时
             head = query_option_descs(drive_config_groups[i]->desc);
         } else {
+        	//非首个时，引入cur局部变量，将其指向的链表与head指向的链表合并
             cur = query_option_descs(drive_config_groups[i]->desc);
             connect_infolist(head, cur);
         }
@@ -264,6 +276,7 @@ CommandLineOptionInfoList *qmp_query_command_line_options(bool has_option,
             info = g_malloc0(sizeof(*info));
             info->option = g_strdup(vm_config_groups[i]->name);
             if (!strcmp("drive", vm_config_groups[i]->name)) {
+            	//为driver时，取其所有参数
                 info->parameters = get_drive_infolist();
             } else if (!strcmp("machine", vm_config_groups[i]->name)) {
                 info->parameters = query_option_descs(machine_opts.desc);
@@ -290,7 +303,7 @@ QemuOptsList *qemu_find_opts_err(const char *group, Error **errp)
     return find_list(vm_config_groups, group, errp);
 }
 
-//qemu driver 选项添加
+//qemu 驱动选项添加
 void qemu_add_drive_opts(QemuOptsList *list)
 {
     int entries, i;
@@ -298,6 +311,7 @@ void qemu_add_drive_opts(QemuOptsList *list)
     entries = ARRAY_SIZE(drive_config_groups);
     entries--; /* keep list NULL terminated */
     for (i = 0; i < entries; i++) {
+    	//在entries中找出一个空闲的节点，将其放入
         if (drive_config_groups[i] == NULL) {
             drive_config_groups[i] = list;
             return;
@@ -364,6 +378,7 @@ struct ConfigWriteData {
     FILE *fp;
 };
 
+//输出每个子选项名称及取值
 static int config_write_opt(void *opaque, const char *name, const char *value,
                             Error **errp)
 {
@@ -376,27 +391,34 @@ static int config_write_opt(void *opaque, const char *name, const char *value,
 static int config_write_opts(void *opaque, QemuOpts *opts, Error **errp)
 {
     struct ConfigWriteData *data = opaque;
+    //取id选项
     const char *id = qemu_opts_id(opts);
 
     if (id) {
+    	//如果有id选项，向文件中写入(id)
         fprintf(data->fp, "[%s \"%s\"]\n", data->list->name, id);
     } else {
+    	//无id情况
         fprintf(data->fp, "[%s]\n", data->list->name);
     }
+    //遍历所有选项并输出
     qemu_opt_foreach(opts, config_write_opt, data, NULL);
     fprintf(data->fp, "\n");
     return 0;
 }
 
+//向文件中写入选项
 void qemu_config_write(FILE *fp)
 {
     struct ConfigWriteData data = { .fp = fp };
     QemuOptsList **lists = vm_config_groups;
     int i;
 
+    //加入注释行
     fprintf(fp, "# qemu config file\n\n");
     for (i = 0; lists[i] != NULL; i++) {
         data.list = lists[i];
+        //遍历每个配置选项组中的选项，针对其调用config_write_opts
         qemu_opts_foreach(data.list, config_write_opts, &data, NULL);
     }
 }
@@ -415,25 +437,33 @@ int qemu_config_parse(FILE *fp, QemuOptsList **lists, const char *fname)
     loc_push_none(&loc);
     while (fgets(line, sizeof(line), fp) != NULL) {
         loc_set_file(fname, ++lno);
+        //跳过空行
         if (line[0] == '\n') {
             /* skip empty lines */
             continue;
         }
+        //跳过注释行
         if (line[0] == '#') {
             /* comment */
             continue;
         }
+
+        //提取group名称及id号
         if (sscanf(line, "[%63s \"%63[^\"]\"]", group, id) == 2) {
             /* group with id */
             list = find_list(lists, group, &local_err);
             if (local_err) {
+            	//查找grouplist,如果找不到报错
                 error_report_err(local_err);
                 goto out;
             }
+            //注册id选项并赋值
             opts = qemu_opts_create(list, id, 1, NULL);
             count++;
             continue;
         }
+
+        //提取其它group名称（无id的group情况）
         if (sscanf(line, "[%63[^]]]", group) == 1) {
             /* group without id */
             list = find_list(lists, group, &local_err);
@@ -445,6 +475,8 @@ int qemu_config_parse(FILE *fp, QemuOptsList **lists, const char *fname)
             count++;
             continue;
         }
+
+        //提取配置的key及value
         value[0] = '\0';
         if (sscanf(line, " %63s = \"%1023[^\"]\"", arg, value) == 2 ||
             sscanf(line, " %63s = \"\"", arg) == 1) {
@@ -453,6 +485,8 @@ int qemu_config_parse(FILE *fp, QemuOptsList **lists, const char *fname)
                 error_report("no group defined");
                 goto out;
             }
+
+            //设置选项值
             qemu_opt_set(opts, arg, value, &local_err);
             if (local_err) {
                 error_report_err(local_err);
@@ -473,6 +507,7 @@ out:
     return res;
 }
 
+//自文件中读取选项
 int qemu_read_config_file(const char *filename)
 {
     FILE *f = fopen(filename, "r");

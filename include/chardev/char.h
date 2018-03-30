@@ -50,7 +50,7 @@ struct Chardev {
     QemuMutex chr_write_lock;
     CharBackend *be;//字符设备后端
     char *label;//字符设备名称
-    char *filename;
+    char *filename;//对应的后端文件
     int logfd;//日志文件fd
     int be_open;//标记字符设备是否被打开
     GSource *gsource;

@@ -3096,9 +3096,9 @@ int main(int argc, char **argv, char **envp)
     qemu_add_drive_opts(&bdrv_runtime_opts);
     qemu_add_opts(&qemu_chardev_opts);//加入chardev的opts
     qemu_add_opts(&qemu_device_opts);
-    qemu_add_opts(&qemu_netdev_opts);
+    qemu_add_opts(&qemu_netdev_opts);//注册netdev类型的opts
     qemu_add_opts(&qemu_nic_opts);
-    qemu_add_opts(&qemu_net_opts);
+    qemu_add_opts(&qemu_net_opts);//注册net类型的opts
     qemu_add_opts(&qemu_rtc_opts);
     qemu_add_opts(&qemu_global_opts);
     qemu_add_opts(&qemu_mon_opts);
@@ -3317,7 +3317,7 @@ int main(int argc, char **argv, char **envp)
             case QEMU_OPTION_no_fd_bootchk:
                 fd_bootchk = 0;
                 break;
-            case QEMU_OPTION_netdev://-netdev
+            case QEMU_OPTION_netdev://-netdev参数处理
                 default_net = 0;
                 if (net_client_parse(qemu_find_opts("netdev"), optarg) == -1) {
                     exit(1);

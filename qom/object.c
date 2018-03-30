@@ -699,7 +699,7 @@ int object_set_propv(Object *obj,
     return 0;
 }
 
-
+//如果obj可转换为typename类型，则返回obj,否则返回NULL
 Object *object_dynamic_cast(Object *obj, const char *typename)
 {
     if (obj && object_class_dynamic_cast(object_get_class(obj), typename)) {
@@ -728,6 +728,7 @@ Object *object_dynamic_cast_assert(Object *obj, const char *typename,
     inst = object_dynamic_cast(obj, typename);
 
     if (!inst && obj) {
+    	//不可强转，报错，挂掉
         fprintf(stderr, "%s:%d:%s: Object %p is not an instance of type %s\n",
                 file, line, func, obj, typename);
         abort();

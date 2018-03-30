@@ -81,7 +81,7 @@ typedef gboolean (*QIOChannelFunc)(QIOChannel *ioc,
 struct QIOChannel {
     Object parent;
     unsigned int features; /* bitmask of QIOChannelFeatures */
-    char *name;
+    char *name;//名称
     AioContext *ctx;
     Coroutine *read_coroutine;
     Coroutine *write_coroutine;

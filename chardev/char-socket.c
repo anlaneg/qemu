@@ -53,7 +53,7 @@ typedef struct {
     QIONetListener *listener;
     GSource *hup_source;
     QCryptoTLSCreds *tls_creds;
-    int connected;
+    int connected;//是否已连接
     int max_size;
     int do_telnetopt;
     int do_nodelay;
@@ -82,6 +82,7 @@ static void tcp_chr_telnet_init(Chardev *chr);
 
 static void tcp_chr_reconn_timer_cancel(SocketChardev *s)
 {
+	//取消掉重连定时器
     if (s->reconnect_timer) {
         g_source_destroy(s->reconnect_timer);
         g_source_unref(s->reconnect_timer);
@@ -97,7 +98,7 @@ static void qemu_chr_socket_restart_timer(Chardev *chr)
 
     assert(s->connected == 0);
     name = g_strdup_printf("chardev-socket-reconnect-%s", chr->label);
-    //创建一个重连定时器
+    //创建一个重连定时器(s->reconnect_time*1000 ms后触发）
     s->reconnect_timer = qemu_chr_timeout_add_ms(chr,
                                                  s->reconnect_time * 1000,
                                                  socket_reconnect_timeout,//定时器到期后进行重连回调
@@ -508,6 +509,7 @@ static int tcp_chr_sync_read(Chardev *chr, const uint8_t *buf, int len)
     return size;
 }
 
+//生成字符串
 static char *sockaddr_to_str(struct sockaddr_storage *ss, socklen_t ss_len,
                              struct sockaddr_storage *ps, socklen_t ps_len,
                              bool is_listen, bool is_telnet)
@@ -519,6 +521,7 @@ static char *sockaddr_to_str(struct sockaddr_storage *ss, socklen_t ss_len,
     switch (ss->ss_family) {
 #ifndef _WIN32
     case AF_UNIX:
+    	//针对unix生成unix:$sun_path%server?
         return g_strdup_printf("unix:%s%s",
                                ((struct sockaddr_un *)(ss))->sun_path,
                                is_listen ? ",server" : "");
@@ -554,6 +557,7 @@ static void tcp_chr_connect(void *opaque)
         &s->sioc->remoteAddr, s->sioc->remoteAddrLen,
         s->is_listen, s->is_telnet);
 
+    //标记设备已打开
     s->connected = 1;
     if (s->ioc) {
         chr->gsource = io_add_watch_poll(chr, s->ioc,
@@ -567,6 +571,7 @@ static void tcp_chr_connect(void *opaque)
                           chr, NULL);
     g_source_attach(s->hup_source, chr->gcontext);
 
+    //知会设备被打开
     qemu_chr_be_event(chr, CHR_EVENT_OPENED);
 }
 
@@ -895,6 +900,7 @@ static void char_socket_finalize(Object *obj)
     qemu_chr_be_event(chr, CHR_EVENT_CLOSED);
 }
 
+//当连接执行后，此函数将被触发
 static void qemu_chr_socket_connected(QIOTask *task, void *opaque)
 {
     QIOChannelSocket *sioc = QIO_CHANNEL_SOCKET(qio_task_get_source(task));
@@ -903,11 +909,13 @@ static void qemu_chr_socket_connected(QIOTask *task, void *opaque)
     Error *err = NULL;
 
     if (qio_task_propagate_error(task, &err)) {
+    	//如果有错，执行cleanup
         check_report_connect_error(chr, err);
         error_free(err);
         goto cleanup;
     }
 
+    //连接完成
     s->connect_err_reported = false;
     tcp_chr_new_client(chr, sioc);
 
@@ -927,6 +935,7 @@ static void tcp_chr_connect_async(Chardev *chr)
                                      chr, NULL, chr->gcontext);
 }
 
+//重连定时器到期处理函数
 static gboolean socket_reconnect_timeout(gpointer opaque)
 {
     Chardev *chr = CHARDEV(opaque);
@@ -1076,7 +1085,7 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
     bool is_tn3270      = qemu_opt_get_bool(opts, "tn3270", false);
     bool do_nodelay     = !qemu_opt_get_bool(opts, "delay", true);
     int64_t reconnect   = qemu_opt_get_number(opts, "reconnect", 0);
-    const char *path = qemu_opt_get(opts, "path");
+    const char *path = qemu_opt_get(opts, "path");//例如path=/var/run/openvswitch/vhost-user<n>
     const char *host = qemu_opt_get(opts, "host");
     const char *port = qemu_opt_get(opts, "port");
     const char *fd = qemu_opt_get(opts, "fd");
@@ -1132,12 +1141,13 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
 
     addr = g_new0(SocketAddressLegacy, 1);
     if (path) {
-    		//给定path的情况
+    	//给定path的情况，使用unix socket
         UnixSocketAddress *q_unix;
         addr->type = SOCKET_ADDRESS_LEGACY_KIND_UNIX;
         q_unix = addr->u.q_unix.data = g_new0(UnixSocketAddress, 1);
         q_unix->path = g_strdup(path);
     } else if (host) {
+    	//给定host的情况，使用inet　socket
         addr->type = SOCKET_ADDRESS_LEGACY_KIND_INET;
         addr->u.inet.data = g_new(InetSocketAddress, 1);
         *addr->u.inet.data = (InetSocketAddress) {

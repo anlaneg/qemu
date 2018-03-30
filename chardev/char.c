@@ -1132,9 +1132,11 @@ void qmp_chardev_send_break(const char *id, Error **errp)
 GSource *qemu_chr_timeout_add_ms(Chardev *chr, guint ms,
                                  GSourceFunc func, void *private)
 {
+	//创建一个timeout类型的定时器（事件源）
     GSource *source = g_timeout_source_new(ms);
 
     assert(func);
+    //设置定时器回调及其回调参数
     g_source_set_callback(source, func, private, NULL);
     g_source_attach(source, chr->gcontext);
 

@@ -1617,6 +1617,7 @@ uint32_t net_crc32_le(const uint8_t *p, int len)
     return crc;
 }
 
+//netdev类型opt（注册）
 QemuOptsList qemu_netdev_opts = {
     .name = "netdev",
     .implied_opt_name = "type",

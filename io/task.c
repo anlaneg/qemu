@@ -26,8 +26,8 @@
 
 struct QIOTask {
     Object *source;
-    QIOTaskFunc func;
-    gpointer opaque;
+    QIOTaskFunc func;//在此任务完成后，此事件回调将褯触发
+    gpointer opaque;//回调的第二参数
     GDestroyNotify destroy;
     Error *err;
     gpointer result;
@@ -35,6 +35,7 @@ struct QIOTask {
 };
 
 
+//构造个qio task
 QIOTask *qio_task_new(Object *source,
                       QIOTaskFunc func,
                       gpointer opaque,
@@ -46,8 +47,8 @@ QIOTask *qio_task_new(Object *source,
 
     task->source = source;
     object_ref(source);
-    task->func = func;
-    task->opaque = opaque;
+    task->func = func;//注册回调函数
+    task->opaque = opaque;//注册回调函数第二参数
     task->destroy = destroy;
 
     trace_qio_task_new(task, source, func, opaque);
@@ -118,6 +119,7 @@ static gpointer qio_task_thread_worker(gpointer opaque)
      */
     trace_qio_task_thread_exit(data->task);
 
+    //创建idle事件源，并指明运行函数qio_task_thread_result
     idle = g_idle_source_new();
     g_source_set_callback(idle, qio_task_thread_result, data, NULL);
     g_source_attach(idle, data->context);
@@ -139,9 +141,10 @@ void qio_task_run_in_thread(QIOTask *task,
         g_main_context_ref(context);
     }
 
+    //构造参数所需数据
     data->task = task;
-    data->worker = worker;
-    data->opaque = opaque;
+    data->worker = worker;//回调
+    data->opaque = opaque;//回调第二参数
     data->destroy = destroy;
     data->context = context;
 
@@ -149,12 +152,13 @@ void qio_task_run_in_thread(QIOTask *task,
     //线程会调用data->worker
     qemu_thread_create(&thread,
                        "io-task-worker",
-                       qio_task_thread_worker,
+                       qio_task_thread_worker,//线程处理
                        data,
                        QEMU_THREAD_DETACHED);
 }
 
 
+//调用task的func回调
 void qio_task_complete(QIOTask *task)
 {
     task->func(task, task->opaque);
