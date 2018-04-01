@@ -20,13 +20,14 @@ typedef struct Notifier Notifier;
 
 struct Notifier
 {
+	//通知回调
     void (*notify)(Notifier *notifier, void *data);
-    QLIST_ENTRY(Notifier) node;
+    QLIST_ENTRY(Notifier) node;//用于串连各通知回调
 };
 
 typedef struct NotifierList
 {
-    QLIST_HEAD(, Notifier) notifiers;
+    QLIST_HEAD(, Notifier) notifiers;//连接各通知回调
 } NotifierList;
 
 #define NOTIFIER_LIST_INITIALIZER(head) \
@@ -52,6 +53,7 @@ struct NotifierWithReturn {
     QLIST_ENTRY(NotifierWithReturn) node;
 };
 
+//含返回值的通知链
 typedef struct NotifierWithReturnList {
     QLIST_HEAD(, NotifierWithReturn) notifiers;
 } NotifierWithReturnList;

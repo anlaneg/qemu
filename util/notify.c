@@ -17,16 +17,19 @@
 #include "qemu-common.h"
 #include "qemu/notify.h"
 
+//notifier list初始化
 void notifier_list_init(NotifierList *list)
 {
     QLIST_INIT(&list->notifiers);
 }
 
+//向list中添加新的notifier
 void notifier_list_add(NotifierList *list, Notifier *notifier)
 {
     QLIST_INSERT_HEAD(&list->notifiers, notifier, node);
 }
 
+//notifiy list中移除指定通知回调
 void notifier_remove(Notifier *notifier)
 {
     QLIST_REMOVE(notifier, node);
@@ -36,11 +39,13 @@ void notifier_list_notify(NotifierList *list, void *data)
 {
     Notifier *notifier, *next;
 
+    //遍历list上的通知回调，逐个回调
     QLIST_FOREACH_SAFE(notifier, &list->notifiers, node, next) {
         notifier->notify(notifier, data);
     }
 }
 
+//含返回值的通知链初始化，添加，移除
 void notifier_with_return_list_init(NotifierWithReturnList *list)
 {
     QLIST_INIT(&list->notifiers);
@@ -57,6 +62,7 @@ void notifier_with_return_remove(NotifierWithReturn *notifier)
     QLIST_REMOVE(notifier, node);
 }
 
+//含返回值的通知回调
 int notifier_with_return_list_notify(NotifierWithReturnList *list, void *data)
 {
     NotifierWithReturn *notifier, *next;
@@ -65,7 +71,7 @@ int notifier_with_return_list_notify(NotifierWithReturnList *list, void *data)
     QLIST_FOREACH_SAFE(notifier, &list->notifiers, node, next) {
         ret = notifier->notify(notifier, data);
         if (ret != 0) {
-            break;
+            break;//如果任意一个返回非0,则停止并返回
         }
     }
     return ret;

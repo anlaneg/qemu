@@ -486,13 +486,13 @@ static void qemu_opt_parse(QemuOpt *opt, Error **errp)
     case QEMU_OPT_STRING://字符串类型什么也不需要做
         /* nothing */
         return;
-    case QEMU_OPT_BOOL:
+    case QEMU_OPT_BOOL://转为boolean类型
         parse_option_bool(opt->name, opt->str, &opt->value.boolean, errp);
         break;
-    case QEMU_OPT_NUMBER:
+    case QEMU_OPT_NUMBER://转为number类型
         parse_option_number(opt->name, opt->str, &opt->value.uint, errp);
         break;
-    case QEMU_OPT_SIZE:
+    case QEMU_OPT_SIZE://解析为size方式，例如（K,M,G,T...)
         parse_option_size(opt->name, opt->str, &opt->value.uint, errp);
         break;
     default:
@@ -500,7 +500,7 @@ static void qemu_opt_parse(QemuOpt *opt, Error **errp)
     }
 }
 
-//选项是否接受任意值
+//选项是否接受任意值（如果QemuOptsList的desc的首个name为NULL，则选项值接受任意值）
 static bool opts_accepts_any(const QemuOpts *opts)
 {
     return opts->list->desc[0].name == NULL;
@@ -531,6 +531,7 @@ static void opt_set(QemuOpts *opts, const char *name, const char *value,
     //查找名称为name的选项
     desc = find_desc_by_name(opts->list->desc, name);
     if (!desc && !opts_accepts_any(opts)) {
+    		//不支持此参数名，报错
         error_setg(errp, QERR_INVALID_PARAMETER, name);
         return;
     }
@@ -644,14 +645,14 @@ QemuOpts *qemu_opts_find(QemuOptsList *list, const char *id)
     return NULL;
 }
 
-//创建一个选项
+//创建一个选项队列头
 QemuOpts *qemu_opts_create(QemuOptsList *list, const char *id,
                            int fail_if_exists, Error **errp)
 {
     QemuOpts *opts = NULL;
 
     if (id) {
-    	//id格式有误时报错
+    		//id格式有误时报错
         if (!id_wellformed(id)) {
             error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "id",
                        "an identifier");
@@ -663,17 +664,17 @@ QemuOpts *qemu_opts_create(QemuOptsList *list, const char *id,
         //检查是否已存在
         opts = qemu_opts_find(list, id);
         if (opts != NULL) {
-        	//检查是否有必要报错，有则报错
+        		//检查是否有必要报错，有则报错
             if (fail_if_exists && !list->merge_lists) {
                 error_setg(errp, "Duplicate ID '%s' for %s", id, list->name);
                 return NULL;
             } else {
-            	//使用已有的
+            		//使用已有的
                 return opts;
             }
         }
     } else if (list->merge_lists) {
-    	//用NULL查一遍
+    		//用NULL查一遍
         opts = qemu_opts_find(list, NULL);
         if (opts) {
             return opts;
@@ -817,16 +818,17 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
         pe = strchr(p, '=');//检查选项中是否有'='号
         pc = strchr(p, ',');//检查选项中是否有','号
         if (!pe || (pc && pc < pe)) {
-        	//没有等号，或者下一个选项有‘＝’号
+        		//没有等号，或者下一个选项有‘＝’号
+        		//例如p指向"socket,id=char1,path=/usr/local/var/run/openvswitch/vhost-user-1"
             /* found "foo,more" */
             if (p == params && firstname) {
-            	//如果支持firstname这种设置，则将key设置为firstname,将值置为P
+            		//如果支持firstname这种设置，则将key设置为firstname,将值置为P
                 /* implicitly named first option */
-                pstrcpy(option, sizeof(option), firstname);//将firstname做为option
+                pstrcpy(option, sizeof(option), firstname);//将firstname做为option(隐含选项名）
                 p = get_opt_value(value, sizeof(value), p);//将p做为value
             } else {
                 /* option without value, probably a flag */
-            	//仅有选项的情况，提取此选项
+            		//仅有选项的情况,理解成bool类型，以no开头的，去掉no为key,value为off,无no开头的,value为on
                 p = get_opt_name(option, sizeof(option), p, ',');
 
                 //检查选项是否以no开头，如果是，则将选项值设为on,否则选项值设置为off
@@ -838,7 +840,7 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
                 }
             }
         } else {
-        	//选项有‘＝’号，提取option及其对应的value
+        		//选项有‘＝’号，提取option的key及其对应的value
             /* found "foo=bar,more" */
             p = get_opt_name(option, sizeof(option), p, '=');
             if (*p != '=') {
@@ -848,7 +850,7 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
             p = get_opt_value(value, sizeof(value), p);
         }
 
-        //如果option不是id,则加入此选项（id选项不被加入）
+        //如果option不是id,则加入此选项（id选项不被加入,前面已使用，创建了opts变量）
         if (strcmp(option, "id") != 0) {
             /* store and parse */
             opt_set(opts, option, value, prepend, &local_err);
@@ -857,6 +859,8 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
                 return;
             }
         }
+
+        //检查是否还有其它选项
         if (*p != ',') {
             break;
         }
@@ -877,6 +881,7 @@ void qemu_opts_do_parse(QemuOpts *opts, const char *params,
 }
 
 //由于list为一组opts,而params为一组配置，将params转换单个的QemuOpts
+//例如“-chardev socket,id=char1,path=/usr/local/var/run/openvswitch/vhost-user-1”
 static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
                             bool permit_abbrev, bool defaults, Error **errp)
 {
@@ -886,7 +891,8 @@ static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
     QemuOpts *opts;
     Error *local_err = NULL;
 
-    //如果支持缩写，则使用implied_opt_name值为默认缩写名称
+    //如果支持隐含名称，则使用implied_opt_name值为隐含名称
+    //例如-char的隐含名称为'backend',在此行将记为firstname
     assert(!permit_abbrev || list->implied_opt_name);
     firstname = permit_abbrev ? list->implied_opt_name : NULL;
 
@@ -907,12 +913,14 @@ static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
      * (if unlikely) future misuse:
      */
     assert(!defaults || list->merge_lists);
+    //利用id值，创建opts
     opts = qemu_opts_create(list, id, !defaults, &local_err);//生成opts
     if (opts == NULL) {
         error_propagate(errp, local_err);
         return NULL;
     }
 
+    //解析此id下的其它参数
     opts_do_parse(opts, params, firstname, defaults, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);

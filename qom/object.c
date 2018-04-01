@@ -899,10 +899,10 @@ ObjectClass *object_class_get_parent(ObjectClass *class)
 
 typedef struct OCFData
 {
-    void (*fn)(ObjectClass *klass, void *opaque);
-    const char *implements_type;
-    bool include_abstract;
-    void *opaque;
+    void (*fn)(ObjectClass *klass, void *opaque);//遍历函数
+    const char *implements_type;//限制的实现基类（遍历时，如果类型不为其的子类，则不遍历）
+    bool include_abstract;//是否遍历抽象结构
+    void *opaque;//用户为回调注册的参数
 } OCFData;
 
 //对key,value的遍历
@@ -916,15 +916,18 @@ static void object_class_foreach_tramp(gpointer key, gpointer value,
     type_initialize(type);
     k = type->class;
 
+    //指明不遍历抽象类型，但本type为抽象类，故直接返回
     if (!data->include_abstract && type->abstract) {
         return;
     }
 
+    //指明了基类，但类型不能强转为基类，则直接返回
     if (data->implements_type && 
         !object_class_dynamic_cast(k, data->implements_type)) {
         return;
     }
 
+    //遍历
     data->fn(k, data->opaque);
 }
 

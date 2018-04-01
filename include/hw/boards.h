@@ -163,8 +163,8 @@ struct MachineClass {
     /*< public >*/
 
     const char *family; /* NULL iff @name identifies a standalone machtype */
-    char *name;
-    const char *alias;
+    char *name;//名称
+    const char *alias;//别名
     const char *desc;
 
     void (*init)(MachineState *state);

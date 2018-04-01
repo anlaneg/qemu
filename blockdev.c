@@ -4286,7 +4286,7 @@ QemuOptsList qemu_common_drive_opts = {
     .name = "drive",
     .head = QTAILQ_HEAD_INITIALIZER(qemu_common_drive_opts.head),
     .desc = {
-        {
+        {//定义此选项的参数
             .name = "snapshot",
             .type = QEMU_OPT_BOOL,
             .help = "enable/disable snapshot mode",
@@ -4348,7 +4348,7 @@ QemuOptsList qemu_common_drive_opts = {
 QemuOptsList qemu_drive_opts = {
     .name = "drive",
     .head = QTAILQ_HEAD_INITIALIZER(qemu_drive_opts.head),
-    .desc = {
+    .desc = {//这种无成员的，容许接受任意参数
         /*
          * no elements => accept any params
          * validation will happen later

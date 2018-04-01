@@ -33,14 +33,14 @@ struct QemuOpt {
     char *name;//选项名称
     char *str;//选项的值（字符串形式）
 
-    const QemuOptDesc *desc;//选项描述信息
+    const QemuOptDesc *desc;//为此选项定义的描述信息
     union {
         bool boolean;
         uint64_t uint;
     } value;//选项取值
 
     QemuOpts     *opts;//从属于哪个opts
-    QTAILQ_ENTRY(QemuOpt) next;
+    QTAILQ_ENTRY(QemuOpt) next;//用于串连opt
 };
 
 struct QemuOpts {

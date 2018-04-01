@@ -51,11 +51,16 @@ typedef struct QemuOptDesc {
 } QemuOptDesc;
 
 struct QemuOptsList {
+	//选项名，例如'chardev'
     const char *name;
+    //隐含名称，支持不包key的选项值，例如：
+    //-chardev socket,id=char1,path=/usr/local/var/run/openvswitch/vhost-user-1
+    //中的socket
     const char *implied_opt_name;
+
     //是否可合并
     bool merge_lists;  /* Merge multiple uses of option into a single list? */
-    QTAILQ_HEAD(, QemuOpts) head;
+    QTAILQ_HEAD(, QemuOpts) head;//存放解析到的配置
     QemuOptDesc desc[];//以‘NULL’结尾的数组
 };
 

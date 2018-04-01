@@ -9,13 +9,10 @@
 #include "qemu/config-file.h"
 
 //存放qemu选项
-//这些选项是按加入顺序放置的，按name区分（称为group-name）例如"chardev","netdev"等
-//QemuOptsList链上挂接着多个QemuOpts结构,此结构按id区分，不同id的用next
-//挂接（QemuOpts结构），同一id的用head挂接（QemuOpt结构）
-//QemuOpt结构是具体一个选项一个值
+//选项采用name区分（称为group-name）例如"chardev","netdev"等
 static QemuOptsList *vm_config_groups[48];
 
-//qemu drive选项
+//存放qemu drive选项
 static QemuOptsList *drive_config_groups[5];
 
 
@@ -336,7 +333,7 @@ void qemu_add_opts(QemuOptsList *list)
         }
     }
     fprintf(stderr, "ran out of space in vm_config_groups");
-    abort();
+    abort();//如果没有空闲的，则挂掉
 }
 
 int qemu_set_option(const char *str)
@@ -453,7 +450,7 @@ int qemu_config_parse(FILE *fp, QemuOptsList **lists, const char *fname)
             /* group with id */
             list = find_list(lists, group, &local_err);
             if (local_err) {
-            	//查找grouplist,如果找不到报错
+            		//查找grouplist,如果找不到报错
                 error_report_err(local_err);
                 goto out;
             }
@@ -517,6 +514,7 @@ int qemu_read_config_file(const char *filename)
         return -errno;
     }
 
+    //解析文件
     ret = qemu_config_parse(f, vm_config_groups, filename);
     fclose(f);
     return ret;

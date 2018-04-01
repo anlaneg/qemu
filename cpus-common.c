@@ -33,6 +33,7 @@ static QemuCond qemu_work_cond;
  */
 static int pending_cpus;
 
+//防止fork后的锁及条件变量未被初始化提供本函数
 void qemu_init_cpu_list(void)
 {
     /* This is needed because qemu_init_cpu_list is also called by the

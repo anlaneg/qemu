@@ -194,6 +194,7 @@ int icount_align_option;
 QemuUUID qemu_uuid;
 bool qemu_uuid_set;
 
+//qemu退出时的通知回调
 static NotifierList exit_notifiers =
     NOTIFIER_LIST_INITIALIZER(exit_notifiers);
 
@@ -560,6 +561,7 @@ static QemuOptsList qemu_fw_cfg_opts = {
  *
  * Returns: machine options (never null).
  */
+//取machine的opts
 QemuOpts *qemu_get_machine_opts(void)
 {
     return qemu_find_opts_singleton("machine");
@@ -595,6 +597,7 @@ static int default_driver_check(void *opaque, QemuOpts *opts, Error **errp)
 /***********************************************************/
 /* QEMU state */
 
+//当前状态
 static RunState current_run_state = RUN_STATE_PRELAUNCH;
 
 /* We use RUN_STATE__MAX but any invalid value will do */
@@ -695,8 +698,10 @@ static const RunStateTransition runstate_transitions_def[] = {
     { RUN_STATE__MAX, RUN_STATE__MAX },
 };
 
+//标记自from可以到达b状态（如果为False，则不能转换）
 static bool runstate_valid_transitions[RUN_STATE__MAX][RUN_STATE__MAX];
 
+//检查state状态是否为当前状态
 bool runstate_check(RunState state)
 {
     return current_run_state == state;
@@ -714,6 +719,7 @@ bool runstate_store(char *str, size_t size)
     return true;
 }
 
+//标记自from到to的状态是有效的，其它状态转变是无效的
 static void runstate_init(void)
 {
     const RunStateTransition *p;
@@ -731,10 +737,12 @@ void runstate_set(RunState new_state)
 {
     assert(new_state < RUN_STATE__MAX);
 
+    //如果当前状态已为new_state,则不必更新
     if (current_run_state == new_state) {
         return;
     }
 
+    //检查此转换是否为有效的转换，如果不是有效的，则挂掉
     if (!runstate_valid_transitions[current_run_state][new_state]) {
         error_report("invalid runstate transition: '%s' -> '%s'",
                      RunState_str(current_run_state),
@@ -742,9 +750,10 @@ void runstate_set(RunState new_state)
         abort();
     }
     trace_runstate_set(new_state);
-    current_run_state = new_state;
+    current_run_state = new_state;//更新当前状态
 }
 
+//检查是否为running状态
 int runstate_is_running(void)
 {
     return runstate_check(RUN_STATE_RUNNING);
@@ -752,17 +761,19 @@ int runstate_is_running(void)
 
 bool runstate_needs_reset(void)
 {
+	//返回是否为internal_error或shutdown
     return runstate_check(RUN_STATE_INTERNAL_ERROR) ||
         runstate_check(RUN_STATE_SHUTDOWN);
 }
 
+//查询当前状态
 StatusInfo *qmp_query_status(Error **errp)
 {
     StatusInfo *info = g_malloc0(sizeof(*info));
 
-    info->running = runstate_is_running();
+    info->running = runstate_is_running();//是否运行状态
     info->singlestep = singlestep;
-    info->status = current_run_state;
+    info->status = current_run_state;//设置当前状态
 
     return info;
 }
@@ -1487,6 +1498,7 @@ static MachineClass *find_machine(const char *name)
     GSList *el, *machines = object_class_get_list(TYPE_MACHINE, false);
     MachineClass *mc = NULL;
 
+    //遍历machines，查找一个名称或者别名为name的MachineClass
     for (el = machines; el; el = el->next) {
         MachineClass *temp = el->data;
 
@@ -1987,7 +1999,7 @@ static void help(int exitcode)
 typedef struct QEMUOption {
     const char *name;//选项名称
     int flags;//选项的flag(目前仅有是否含参）
-    int index;//可以理解为小选项
+    int index;//可以理解为短选项名，如--help,-h一样
     uint32_t arch_mask;//那个体系结构有此参数
 } QEMUOption;
 
@@ -2690,16 +2702,19 @@ static gint machine_class_cmp(gconstpointer a, gconstpointer b)
     exit(!name || !is_help_option(name));
 }
 
+//注册qemu退出时的通知回调
 void qemu_add_exit_notifier(Notifier *notify)
 {
     notifier_list_add(&exit_notifiers, notify);
 }
 
+//移除qemu退出时的通知回调
 void qemu_remove_exit_notifier(Notifier *notify)
 {
     notifier_remove(notify);
 }
 
+//qemu通出时调用exit_notifiers链上的所有通知回调
 static void qemu_run_exit_notifiers(void)
 {
     notifier_list_notify(&exit_notifiers, NULL);
@@ -2728,6 +2743,10 @@ static void qemu_run_machine_init_done_notifiers(void)
 
 //解析一个选项及其参数取值。从poptind位置开始分析argv,确认参数使用的是那个选项（返回值）,确定
 //选项参数(poptarg参数）
+//常见qemu参数：
+//-chardev socket,id=char1,path=/usr/local/var/run/openvswitch/vhost-user-1
+//-netdev type=vhost-user,id=mynet1,chardev=char1,vhostforce
+//-device virtio-net-pci,mac=00:00:00:00:00:01,netdev=mynet1
 static const QEMUOption *lookup_opt(int argc, char **argv,
                                     const char **poptarg, int *poptind)
 {
@@ -2744,7 +2763,7 @@ static const QEMUOption *lookup_opt(int argc, char **argv,
         r++;
     popt = qemu_options;//qemu选项
     for(;;) {
-    	//错误的选项（或者没有找到与参数相匹配的选项）
+    		//最后一项为NULL,错误的选项（或者没有找到与参数相匹配的选项）
         if (!popt->name) {
             error_report("invalid option");
             exit(1);
@@ -2762,13 +2781,14 @@ static const QEMUOption *lookup_opt(int argc, char **argv,
             error_report("requires an argument");
             exit(1);
         }
-        optarg = argv[optind++];
+        optarg = argv[optind++];//取参数
         //改变位置
         loc_set_cmdline(argv, optind - 2, 2);
     } else {
         optarg = NULL;
     }
 
+    //记录参数，记录访问索引
     *poptarg = optarg;
     *poptind = optind;
 
@@ -2787,6 +2807,7 @@ static MachineClass *select_machine(void)
     opts = qemu_get_machine_opts();
     qemu_opts_loc_restore(opts);
 
+    //取opts中的type取值
     optarg = qemu_opt_get(opts, "type");
     if (optarg) {
         machine_class = machine_parse(optarg);
@@ -3001,6 +3022,7 @@ static int global_init_func(void *opaque, QemuOpts *opts, Error **errp)
     return 0;
 }
 
+//默认读取qemu.conf文件
 static int qemu_read_default_config_file(void)
 {
     int ret;
@@ -3083,12 +3105,14 @@ int main(int argc, char **argv, char **envp)
 
     qemu_mutex_lock_iothread();
 
+    //注册qemu退出时，触发退出通知回调
     atexit(qemu_run_exit_notifiers);
     error_set_progname(argv[0]);
     qemu_init_exec_dir(argv[0]);
 
     module_call_init(MODULE_INIT_QOM);
 
+    //qemu选项注册
     qemu_add_opts(&qemu_drive_opts);
     qemu_add_drive_opts(&qemu_legacy_drive_opts);
     qemu_add_drive_opts(&qemu_common_drive_opts);
@@ -3123,7 +3147,7 @@ int main(int argc, char **argv, char **envp)
     module_call_init(MODULE_INIT_OPTS);
 
     runstate_init();
-    postcopy_infrastructure_init();
+    postcopy_infrastructure_init();//初始化通知链（作用？）
 
     if (qcrypto_init(&err) < 0) {
         error_reportf_err(err, "cannot initialize crypto: ");
@@ -3139,22 +3163,27 @@ int main(int argc, char **argv, char **envp)
 
     nb_nics = 0;
 
+    //实际上调用在
+    //module_call_init(MODULE_INIT_BLOCK)
     bdrv_init_with_whitelist();
 
     autostart = 1;
 
     /* first pass of option parsing */
+    //首次处理参数，主要目的，分辨出用户是否配置了userconfig=false
     optind = 1;
     while (optind < argc) {
-    	//跳过非选项
+    		//跳过非选项
         if (argv[optind][0] != '-') {
             /* disk image */
             optind++;
         } else {
             const QEMUOption *popt;
 
+            //argv[optind][0] 肯定等于'-'
             popt = lookup_opt(argc, argv, &optarg, &optind);
             switch (popt->index) {
+            //检查短选项
             case QEMU_OPTION_nodefconfig:
             case QEMU_OPTION_nouserconfig:
                 userconfig = false;
@@ -3164,12 +3193,14 @@ int main(int argc, char **argv, char **envp)
     }
 
     if (userconfig) {
+    		//读取默认配置文件
         if (qemu_read_default_config_file() < 0) {
             exit(1);
         }
     }
 
     /* second pass of option parsing */
+    //第二遍解析参数，解析命令行参数，将其保存在相应optgroup的head指针下
     optind = 1;
     for(;;) {
         if (optind >= argc)
@@ -3180,7 +3211,7 @@ int main(int argc, char **argv, char **envp)
         } else {
             const QEMUOption *popt;
 
-            //找到与argv[optind]指明的选项
+            //找到与argv[optind]指明的选项相同的QEMUOption
             popt = lookup_opt(argc, argv, &optarg, &optind);
             if (!(popt->arch_mask & arch_type)) {
             	//此选项不能用于本arch_type
@@ -3508,6 +3539,7 @@ int main(int argc, char **argv, char **envp)
                 default_monitor = 0;
                 break;
             case QEMU_OPTION_chardev://-chardev
+            		//解析-chardev的配置参数，并将其配置后保存在opts中
                 opts = qemu_opts_parse_noisily(qemu_find_opts("chardev"),
                                                optarg, true);
                 if (!opts) {
@@ -4089,7 +4121,7 @@ int main(int argc, char **argv, char **envp)
      * Clear error location left behind by the loop.
      * Best done right after the loop.  Do not insert code here!
      */
-    loc_set_none();
+    loc_set_none();//清空当前位置信息
 
     replay_configure(icount_opts);
 

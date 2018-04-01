@@ -35,6 +35,7 @@ int qcrypto_random_init(Error **errp)
 #ifndef _WIN32
     /* TBD perhaps also add support for BSD getentropy / Linux
      * getrandom syscalls directly */
+	//打开random文件
     fd = open("/dev/urandom", O_RDONLY);
     if (fd == -1 && errno == ENOENT) {
         fd = open("/dev/random", O_RDONLY);

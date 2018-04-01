@@ -818,9 +818,9 @@ Chardev *qemu_chr_find(const char *name)
 
 QemuOptsList qemu_chardev_opts = {
     .name = "chardev",
-    .implied_opt_name = "backend",
+    .implied_opt_name = "backend",//首个参数，隐含为backend
     .head = QTAILQ_HEAD_INITIALIZER(qemu_chardev_opts.head),
-    .desc = {
+    .desc = {//定义接受哪些参数
         {
             .name = "backend",
             .type = QEMU_OPT_STRING,
