@@ -32,6 +32,7 @@ static void __attribute__((constructor)) do_qemu_init_ ## function(void)    \
 }
 #else
 /* This should not be used directly.  Use block_init etc. instead.  */
+//注册指定模块type的初始化函数
 #define module_init(function, type)                                         \
 static void __attribute__((constructor)) do_qemu_init_ ## function(void)    \
 {                                                                           \
@@ -39,16 +40,19 @@ static void __attribute__((constructor)) do_qemu_init_ ## function(void)    \
 }
 #endif
 
+//各模块初始化顺序
 typedef enum {
-    MODULE_INIT_BLOCK,
-    MODULE_INIT_OPTS,
-    MODULE_INIT_QOM,
+    MODULE_INIT_BLOCK,//块设备注册
+    MODULE_INIT_OPTS,//选项注册（添加）
+    MODULE_INIT_QOM,//类型注册
     MODULE_INIT_TRACE,
     MODULE_INIT_MAX
 } module_init_type;
 
 #define block_init(function) module_init(function, MODULE_INIT_BLOCK)
+//选项注册
 #define opts_init(function) module_init(function, MODULE_INIT_OPTS)
+//类型注册
 #define type_init(function) module_init(function, MODULE_INIT_QOM)
 #define trace_init(function) module_init(function, MODULE_INIT_TRACE)
 

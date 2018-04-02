@@ -278,6 +278,7 @@ static void net_vhost_user_event(void *opaque, int event)
     }
 }
 
+
 static int net_vhost_user_init(NetClientState *peer, const char *device,
                                const char *name, Chardev *chr,
                                int queues)

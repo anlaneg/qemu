@@ -213,6 +213,7 @@ int qemu_chr_add_client(Chardev *s, int fd)
         CHARDEV_GET_CLASS(s)->chr_add_client(s, fd) : -1;
 }
 
+//字符设备打开
 static void qemu_char_open(Chardev *chr, ChardevBackend *backend,
                            bool *be_opened, Error **errp)
 {
@@ -598,6 +599,7 @@ static const char *chardev_alias_translate(const char *name)
     return name;
 }
 
+//通过解析参数，完成chardev backend初始化
 ChardevBackend *qemu_chr_parse_opts(QemuOpts *opts, Error **errp)
 {
     Error *local_err = NULL;
@@ -632,7 +634,7 @@ ChardevBackend *qemu_chr_parse_opts(QemuOpts *opts, Error **errp)
             return NULL;
         }
     } else {
-    		//如果无parse，则解析公共参数
+    	//如果无parse，则解析公共参数
         ChardevCommon *ccom = g_new0(ChardevCommon, 1);
         qemu_chr_parse_common(opts, ccom);
         backend->u.null.data = ccom; /* Any ChardevCommon member would work */
@@ -641,6 +643,7 @@ ChardevBackend *qemu_chr_parse_opts(QemuOpts *opts, Error **errp)
     return backend;
 }
 
+//按opts创建chardev
 Chardev *qemu_chr_new_from_opts(QemuOpts *opts, Error **errp)
 {
     const ChardevClass *cc;
@@ -686,6 +689,7 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts, Error **errp)
         bid = g_strdup_printf("%s-base", id);
     }
 
+    //新创建char设备
     chr = qemu_chardev_new(bid ? bid : id,
                            object_class_get_name(OBJECT_CLASS(cc)),
                            backend, errp);
@@ -916,18 +920,21 @@ QemuOptsList qemu_chardev_opts = {
     },
 };
 
+//检查字符设备是否存在指定功能
 bool qemu_chr_has_feature(Chardev *chr,
                           ChardevFeature feature)
 {
     return test_bit(feature, chr->features);
 }
 
+//设置字符设备支持指定功能
 void qemu_chr_set_feature(Chardev *chr,
                            ChardevFeature feature)
 {
     return set_bit(feature, chr->features);
 }
 
+//创建指定类型的chardev并打开
 Chardev *qemu_chardev_new(const char *id, const char *typename,
                           ChardevBackend *backend,
                           Error **errp)

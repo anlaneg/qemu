@@ -2384,6 +2384,7 @@ static int chardev_init_func(void *opaque, QemuOpts *opts, Error **errp)
 {
     Error *local_err = NULL;
 
+    //创建opts中指定的char设备
     if (!qemu_chr_new_from_opts(opts, &local_err)) {
         if (local_err) {
             error_report_err(local_err);
@@ -3110,7 +3111,7 @@ int main(int argc, char **argv, char **envp)
     error_set_progname(argv[0]);
     qemu_init_exec_dir(argv[0]);
 
-    module_call_init(MODULE_INIT_QOM);
+    module_call_init(MODULE_INIT_QOM);//系统类型注册
 
     //qemu选项注册
     qemu_add_opts(&qemu_drive_opts);
@@ -3144,7 +3145,7 @@ int main(int argc, char **argv, char **envp)
     qemu_add_opts(&qemu_icount_opts);
     qemu_add_opts(&qemu_semihosting_config_opts);
     qemu_add_opts(&qemu_fw_cfg_opts);
-    module_call_init(MODULE_INIT_OPTS);
+    module_call_init(MODULE_INIT_OPTS);//加载其它模块引入的opts注册
 
     runstate_init();
     postcopy_infrastructure_init();//初始化通知链（作用？）
@@ -4415,7 +4416,7 @@ int main(int argc, char **argv, char **envp)
         exit(1);
     }
 
-    //针对每一个chardev选项，执行init
+    //针对每一个chardev选项，执行init,创建对应的chardev
     if (qemu_opts_foreach(qemu_find_opts("chardev"),
                           chardev_init_func, NULL, NULL)) {
         exit(1);

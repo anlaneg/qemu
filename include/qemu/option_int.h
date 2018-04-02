@@ -44,7 +44,7 @@ struct QemuOpt {
 };
 
 struct QemuOpts {
-    char *id;//选项id
+    char *id;//选项id（外部可引用的名称，例如-netdev type=vhost-user,id=mynet1,chardev=char1,vhostforce中的id)
     QemuOptsList *list;//选项从属于哪个QemuOptsList（或者说挂在哪个链上）
     Location loc;
     QTAILQ_HEAD(QemuOptHead, QemuOpt) head;//同一id的挂在这（QemuOptHead类型）

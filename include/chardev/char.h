@@ -55,6 +55,7 @@ struct Chardev {
     int be_open;//标记字符设备是否被打开
     GSource *gsource;
     GMainContext *gcontext;
+    //功能点
     DECLARE_BITMAP(features, QEMU_CHAR_FEATURE_LAST);
 };
 
