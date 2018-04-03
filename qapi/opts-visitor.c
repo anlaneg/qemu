@@ -357,6 +357,7 @@ opts_type_str(Visitor *v, const char *name, char **obj, Error **errp)
 
 
 /* mimics qemu-option.c::parse_option_bool() */
+//将opt的值转换为boolean类型
 static void
 opts_type_bool(Visitor *v, const char *name, bool *obj, Error **errp)
 {
@@ -372,11 +373,11 @@ opts_type_bool(Visitor *v, const char *name, bool *obj, Error **errp)
         if (strcmp(opt->str, "on") == 0 ||
             strcmp(opt->str, "yes") == 0 ||
             strcmp(opt->str, "y") == 0) {
-            *obj = true;
+            *obj = true;//true处理
         } else if (strcmp(opt->str, "off") == 0 ||
             strcmp(opt->str, "no") == 0 ||
             strcmp(opt->str, "n") == 0) {
-            *obj = false;
+            *obj = false;//false处理
         } else {
             error_setg(errp, QERR_INVALID_PARAMETER_VALUE, opt->name,
                        "on|yes|y|off|no|n");
@@ -390,6 +391,7 @@ opts_type_bool(Visitor *v, const char *name, bool *obj, Error **errp)
 }
 
 
+//将选项name的配置值转换为整数
 static void
 opts_type_int64(Visitor *v, const char *name, int64_t *obj, Error **errp)
 {
@@ -408,11 +410,13 @@ opts_type_int64(Visitor *v, const char *name, int64_t *obj, Error **errp)
     if (!opt) {
         return;
     }
+    //取opt的值
     str = opt->str ? opt->str : "";
 
     /* we've gotten past lookup_scalar() */
     assert(ov->list_mode == LM_NONE || ov->list_mode == LM_IN_PROGRESS);
 
+    //将其转换成整数
     errno = 0;
     val = strtoll(str, &endptr, 0);
     if (errno == 0 && endptr > str && INT64_MIN <= val && val <= INT64_MAX) {
