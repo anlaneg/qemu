@@ -47,6 +47,8 @@
 #define VMDK4_FLAG_MARKER (1 << 17)
 #define VMDK4_GD_AT_END 0xffffffffffffffffULL
 
+#define VMDK_EXTENT_MAX_SECTORS (1ULL << 32)
+
 #define VMDK_GTE_ZEROED 0x1
 
 /* VMDK internal error codes */
@@ -330,6 +332,12 @@ static int vmdk_is_cid_valid(BlockDriverState *bs)
 
     if (!s->cid_checked && bs->backing) {
         BlockDriverState *p_bs = bs->backing->bs;
+
+        if (strcmp(p_bs->drv->format_name, "vmdk")) {
+            /* Backing file is not in vmdk format, so it does not have
+             * a CID, which makes the overlay's parent CID invalid */
+            return 0;
+        }
 
         if (vmdk_read_cid(p_bs, 0, &cur_pcid) != 0) {
             /* read failure: report as not valid */
@@ -1248,6 +1256,10 @@ static int get_cluster_offset(BlockDriverState *bs,
     if (!cluster_sector || zeroed) {
         if (!allocate) {
             return zeroed ? VMDK_ZEROED : VMDK_UNALLOC;
+        }
+
+        if (extent->next_cluster_sector >= VMDK_EXTENT_MAX_SECTORS) {
+            return VMDK_ERROR;
         }
 
         cluster_sector = extent->next_cluster_sector;

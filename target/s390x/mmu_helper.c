@@ -325,7 +325,7 @@ static int mmu_translate_asce(CPUS390XState *env, target_ulong vaddr,
 
     r = mmu_translate_region(env, vaddr, asc, asce, level, raddr, flags, rw,
                              exc);
-    if (rw == MMU_DATA_STORE && !(*flags & PAGE_WRITE)) {
+    if (!r && rw == MMU_DATA_STORE && !(*flags & PAGE_WRITE)) {
         trigger_prot_fault(env, vaddr, asc, rw, exc);
         return -1;
     }
@@ -461,7 +461,8 @@ static int translate_pages(S390CPU *cpu, vaddr addr, int nr_pages,
             return ret;
         }
         if (!address_space_access_valid(&address_space_memory, pages[i],
-                                        TARGET_PAGE_SIZE, is_write)) {
+                                        TARGET_PAGE_SIZE, is_write,
+                                        MEMTXATTRS_UNSPECIFIED)) {
             trigger_access_exception(env, PGM_ADDRESSING, ILEN_AUTO, 0);
             return -EFAULT;
         }

@@ -27,7 +27,6 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "exec/exec-all.h"
 #include "exec/gdbstub.h"
 #include "qemu-common.h"
 #include "qemu/host-utils.h"
@@ -36,7 +35,7 @@
 #include "overlay_tool.h"
 
 #define xtensa_modules xtensa_modules_dc233c
-#include "core-dc233c/xtensa-modules.c"
+#include "core-dc233c/xtensa-modules.inc.c"
 
 static XtensaConfig dc233c __attribute__((unused)) = {
     .name = "dc233c",
@@ -44,7 +43,7 @@ static XtensaConfig dc233c __attribute__((unused)) = {
         .num_regs = 121,
         .num_core_regs = 52,
         .reg = {
-#include "core-dc233c/gdb-config.c"
+#include "core-dc233c/gdb-config.inc.c"
         }
     },
     .isa_internal = &xtensa_modules,

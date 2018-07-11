@@ -23,7 +23,6 @@
 #include "internal.h"
 #include "exec/gdbstub.h"
 #include "qemu/timer.h"
-#include "exec/exec-all.h"
 #include "hw/s390x/ioinst.h"
 #include "sysemu/hw_accel.h"
 #ifndef CONFIG_USER_ONLY
@@ -103,16 +102,18 @@ void load_psw(CPUS390XState *env, uint64_t mask, uint64_t addr)
 
     env->psw.addr = addr;
     env->psw.mask = mask;
-    if (tcg_enabled()) {
-        env->cc_op = (mask >> 44) & 3;
+
+    /* KVM will handle all WAITs and trigger a WAIT exit on disabled_wait */
+    if (!tcg_enabled()) {
+        return;
     }
+    env->cc_op = (mask >> 44) & 3;
 
     if ((old_mask ^ mask) & PSW_MASK_PER) {
         s390_cpu_recompute_watchpoints(CPU(s390_env_get_cpu(env)));
     }
 
-    /* KVM will handle all WAITs and trigger a WAIT exit on disabled_wait */
-    if (tcg_enabled() && (mask & PSW_MASK_WAIT)) {
+    if (mask & PSW_MASK_WAIT) {
         s390_handle_wait(s390_env_get_cpu(env));
     }
 }
@@ -325,19 +326,20 @@ void s390_cpu_dump_state(CPUState *cs, FILE *f, fprintf_function cpu_fprintf,
         }
     }
 
-    for (i = 0; i < 16; i++) {
-        cpu_fprintf(f, "F%02d=%016" PRIx64, i, get_freg(env, i)->ll);
-        if ((i % 4) == 3) {
-            cpu_fprintf(f, "\n");
+    if (flags & CPU_DUMP_FPU) {
+        if (s390_has_feat(S390_FEAT_VECTOR)) {
+            for (i = 0; i < 32; i++) {
+                cpu_fprintf(f, "V%02d=%016" PRIx64 "%016" PRIx64 "%c",
+                            i, env->vregs[i][0].ll, env->vregs[i][1].ll,
+                            i % 2 ? '\n' : ' ');
+            }
         } else {
-            cpu_fprintf(f, " ");
+            for (i = 0; i < 16; i++) {
+                cpu_fprintf(f, "F%02d=%016" PRIx64 "%c",
+                            i, get_freg(env, i)->ll,
+                            (i % 4) == 3 ? '\n' : ' ');
+            }
         }
-    }
-
-    for (i = 0; i < 32; i++) {
-        cpu_fprintf(f, "V%02d=%016" PRIx64 "%016" PRIx64, i,
-                    env->vregs[i][0].ll, env->vregs[i][1].ll);
-        cpu_fprintf(f, (i % 2) ? "\n" : " ");
     }
 
 #ifndef CONFIG_USER_ONLY

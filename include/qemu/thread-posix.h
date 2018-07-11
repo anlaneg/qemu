@@ -13,6 +13,10 @@ typedef QemuMutex QemuRecMutex;
 //互斥锁
 struct QemuMutex {
     pthread_mutex_t lock;
+#ifdef CONFIG_DEBUG_MUTEX
+    const char *file;
+    int line;
+#endif
     bool initialized;//是否已初始化
 };
 

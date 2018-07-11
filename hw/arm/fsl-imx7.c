@@ -35,13 +35,8 @@ static void fsl_imx7_init(Object *obj)
     char name[NAME_SIZE];
     int i;
 
-    if (smp_cpus > FSL_IMX7_NUM_CPUS) {
-        error_report("%s: Only %d CPUs are supported (%d requested)",
-                     TYPE_FSL_IMX7, FSL_IMX7_NUM_CPUS, smp_cpus);
-        exit(1);
-    }
 
-    for (i = 0; i < smp_cpus; i++) {
+    for (i = 0; i < MIN(smp_cpus, FSL_IMX7_NUM_CPUS); i++) {
         object_initialize(&s->cpu[i], sizeof(s->cpu[i]),
                           ARM_CPU_TYPE_NAME("cortex-a7"));
         snprintf(name, NAME_SIZE, "cpu%d", i);
@@ -197,6 +192,12 @@ static void fsl_imx7_realize(DeviceState *dev, Error **errp)
     qemu_irq irq;
     char name[NAME_SIZE];
 
+    if (smp_cpus > FSL_IMX7_NUM_CPUS) {
+        error_setg(errp, "%s: Only %d CPUs are supported (%d requested)",
+                   TYPE_FSL_IMX7, FSL_IMX7_NUM_CPUS, smp_cpus);
+        return;
+    }
+
     for (i = 0; i < smp_cpus; i++) {
         o = OBJECT(&s->cpu[i]);
 
@@ -323,7 +324,7 @@ static void fsl_imx7_realize(DeviceState *dev, Error **errp)
             FSL_IMX7_ECSPI4_ADDR,
         };
 
-        static const hwaddr FSL_IMX7_SPIn_IRQ[FSL_IMX7_NUM_ECSPIS] = {
+        static const int FSL_IMX7_SPIn_IRQ[FSL_IMX7_NUM_ECSPIS] = {
             FSL_IMX7_ECSPI1_IRQ,
             FSL_IMX7_ECSPI2_IRQ,
             FSL_IMX7_ECSPI3_IRQ,
@@ -348,7 +349,7 @@ static void fsl_imx7_realize(DeviceState *dev, Error **errp)
             FSL_IMX7_I2C4_ADDR,
         };
 
-        static const hwaddr FSL_IMX7_I2Cn_IRQ[FSL_IMX7_NUM_I2CS] = {
+        static const int FSL_IMX7_I2Cn_IRQ[FSL_IMX7_NUM_I2CS] = {
             FSL_IMX7_I2C1_IRQ,
             FSL_IMX7_I2C2_IRQ,
             FSL_IMX7_I2C3_IRQ,
@@ -389,9 +390,7 @@ static void fsl_imx7_realize(DeviceState *dev, Error **errp)
         };
 
 
-        if (i < MAX_SERIAL_PORTS) {
-            qdev_prop_set_chr(DEVICE(&s->uart[i]), "chardev", serial_hds[i]);
-        }
+        qdev_prop_set_chr(DEVICE(&s->uart[i]), "chardev", serial_hd(i));
 
         object_property_set_bool(OBJECT(&s->uart[i]), true, "realized",
                                  &error_abort);
@@ -460,7 +459,7 @@ static void fsl_imx7_realize(DeviceState *dev, Error **errp)
     /*
      * SRC
      */
-    create_unimplemented_device("sdma", FSL_IMX7_SRC_ADDR, FSL_IMX7_SRC_SIZE);
+    create_unimplemented_device("src", FSL_IMX7_SRC_ADDR, FSL_IMX7_SRC_SIZE);
 
     /*
      * Watchdog
@@ -516,7 +515,7 @@ static void fsl_imx7_realize(DeviceState *dev, Error **errp)
             FSL_IMX7_USB3_ADDR,
         };
 
-        static const hwaddr FSL_IMX7_USBn_IRQ[FSL_IMX7_NUM_USBS] = {
+        static const int FSL_IMX7_USBn_IRQ[FSL_IMX7_NUM_USBS] = {
             FSL_IMX7_USB1_IRQ,
             FSL_IMX7_USB2_IRQ,
             FSL_IMX7_USB3_IRQ,

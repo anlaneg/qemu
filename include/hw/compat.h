@@ -1,6 +1,33 @@
 #ifndef HW_COMPAT_H
 #define HW_COMPAT_H
 
+#define HW_COMPAT_2_12 \
+    {\
+        .driver   = "migration",\
+        .property = "decompress-error-check",\
+        .value    = "off",\
+    },{\
+        .driver   = "hda-audio",\
+        .property = "use-timer",\
+        .value    = "false",\
+    },{\
+        .driver   = "cirrus-vga",\
+        .property = "global-vmstate",\
+        .value    = "true",\
+    },{\
+        .driver   = "VGA",\
+        .property = "global-vmstate",\
+        .value    = "true",\
+    },{\
+        .driver   = "vmware-svga",\
+        .property = "global-vmstate",\
+        .value    = "true",\
+    },{\
+        .driver   = "qxl-vga",\
+        .property = "global-vmstate",\
+        .value    = "true",\
+    },
+
 #define HW_COMPAT_2_11 \
     {\
         .driver   = "hpet",\
@@ -14,6 +41,10 @@
         .driver   = "vhost-user-blk-pci",\
         .property = "vectors",\
         .value    = "2",\
+    },{\
+        .driver   = "e1000",\
+        .property = "migrate_tso_props",\
+        .value    = "off",\
     },
 
 #define HW_COMPAT_2_10 \

@@ -18,12 +18,13 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "block/block_int.h"
+#include "block/qdict.h"
 #include "sysemu/block-backend.h"
 #include "qemu/module.h"
 #include "qemu/option.h"
 #include "qemu/crc32c.h"
 #include "qemu/bswap.h"
-#include "block/vhdx.h"
+#include "vhdx.h"
 #include "migration/blocker.h"
 #include "qemu/uuid.h"
 #include "qapi/qmp/qdict.h"
@@ -1126,9 +1127,9 @@ static coroutine_fn int vhdx_co_readv(BlockDriverState *bs, int64_t sector_num,
                 break;
             case PAYLOAD_BLOCK_FULLY_PRESENT:
                 qemu_co_mutex_unlock(&s->lock);
-                ret = bdrv_co_readv(bs->file,
-                                    sinfo.file_offset >> BDRV_SECTOR_BITS,
-                                    sinfo.sectors_avail, &hd_qiov);
+                ret = bdrv_co_preadv(bs->file, sinfo.file_offset,
+                                     sinfo.sectors_avail * BDRV_SECTOR_SIZE,
+                                     &hd_qiov, 0);
                 qemu_co_mutex_lock(&s->lock);
                 if (ret < 0) {
                     goto exit;
@@ -1226,7 +1227,8 @@ int vhdx_user_visible_write(BlockDriverState *bs, BDRVVHDXState *s)
 }
 
 static coroutine_fn int vhdx_co_writev(BlockDriverState *bs, int64_t sector_num,
-                                      int nb_sectors, QEMUIOVector *qiov)
+                                       int nb_sectors, QEMUIOVector *qiov,
+                                       int flags)
 {
     int ret = -ENOTSUP;
     BDRVVHDXState *s = bs->opaque;
@@ -1242,6 +1244,7 @@ static coroutine_fn int vhdx_co_writev(BlockDriverState *bs, int64_t sector_num,
     uint64_t bat_prior_offset = 0;
     bool bat_update = false;
 
+    assert(!flags);
     qemu_iovec_init(&hd_qiov, qiov->niov);
 
     qemu_co_mutex_lock(&s->lock);
@@ -1346,9 +1349,9 @@ static coroutine_fn int vhdx_co_writev(BlockDriverState *bs, int64_t sector_num,
                 }
                 /* block exists, so we can just overwrite it */
                 qemu_co_mutex_unlock(&s->lock);
-                ret = bdrv_co_writev(bs->file,
-                                    sinfo.file_offset >> BDRV_SECTOR_BITS,
-                                    sectors_to_write, &hd_qiov);
+                ret = bdrv_co_pwritev(bs->file, sinfo.file_offset,
+                                      sectors_to_write * BDRV_SECTOR_SIZE,
+                                      &hd_qiov, 0);
                 qemu_co_mutex_lock(&s->lock);
                 if (ret < 0) {
                     goto error_bat_restore;
@@ -1822,17 +1825,21 @@ static int coroutine_fn vhdx_co_create(BlockdevCreateOptions *opts,
     /* Validate options and set default values */
     image_size = vhdx_opts->size;
     if (image_size > VHDX_MAX_IMAGE_SIZE) {
-        error_setg_errno(errp, EINVAL, "Image size too large; max of 64TB");
+        error_setg(errp, "Image size too large; max of 64TB");
         return -EINVAL;
     }
 
     if (!vhdx_opts->has_log_size) {
         log_size = DEFAULT_LOG_SIZE;
     } else {
+        if (vhdx_opts->log_size > UINT32_MAX) {
+            error_setg(errp, "Log size must be smaller than 4 GB");
+            return -EINVAL;
+        }
         log_size = vhdx_opts->log_size;
     }
     if (log_size < MiB || (log_size % MiB) != 0) {
-        error_setg_errno(errp, EINVAL, "Log size must be a multiple of 1 MB");
+        error_setg(errp, "Log size must be a multiple of 1 MB");
         return -EINVAL;
     }
 
@@ -1874,12 +1881,15 @@ static int coroutine_fn vhdx_co_create(BlockdevCreateOptions *opts,
     }
 
     if (block_size < MiB || (block_size % MiB) != 0) {
-        error_setg_errno(errp, EINVAL, "Block size must be a multiple of 1 MB");
+        error_setg(errp, "Block size must be a multiple of 1 MB");
+        return -EINVAL;
+    }
+    if (!is_power_of_2(block_size)) {
+        error_setg(errp, "Block size must be a power of two");
         return -EINVAL;
     }
     if (block_size > VHDX_BLOCK_SIZE_MAX) {
-        error_setg_errno(errp, EINVAL, "Block size must not exceed %d",
-                         VHDX_BLOCK_SIZE_MAX);
+        error_setg(errp, "Block size must not exceed %d", VHDX_BLOCK_SIZE_MAX);
         return -EINVAL;
     }
 
@@ -1942,7 +1952,7 @@ static int coroutine_fn vhdx_co_create(BlockdevCreateOptions *opts,
         goto delete_and_exit;
     }
 
-
+    ret = 0;
 delete_and_exit:
     blk_unref(blk);
     bdrv_unref(bs);
@@ -1955,8 +1965,7 @@ static int coroutine_fn vhdx_co_create_opts(const char *filename,
                                             Error **errp)
 {
     BlockdevCreateOptions *create_options = NULL;
-    QDict *qdict = NULL;
-    QObject *qobj;
+    QDict *qdict;
     Visitor *v;
     BlockDriverState *bs = NULL;
     Error *local_err = NULL;
@@ -1995,15 +2004,12 @@ static int coroutine_fn vhdx_co_create_opts(const char *filename,
     qdict_put_str(qdict, "driver", "vhdx");
     qdict_put_str(qdict, "file", bs->node_name);
 
-    qobj = qdict_crumple(qdict, errp);
-    QDECREF(qdict);
-    qdict = qobject_to(QDict, qobj);
-    if (qdict == NULL) {
+    v = qobject_input_visitor_new_flat_confused(qdict, errp);
+    if (!v) {
         ret = -EINVAL;
         goto fail;
     }
 
-    v = qobject_input_visitor_new_keyval(QOBJECT(qdict));
     visit_type_BlockdevCreateOptions(v, NULL, &create_options, &local_err);
     visit_free(v);
 
@@ -2042,7 +2048,7 @@ static int coroutine_fn vhdx_co_create_opts(const char *filename,
     ret = vhdx_co_create(create_options, errp);
 
 fail:
-    QDECREF(qdict);
+    qobject_unref(qdict);
     bdrv_unref(bs);
     qapi_free_BlockdevCreateOptions(create_options);
     return ret;

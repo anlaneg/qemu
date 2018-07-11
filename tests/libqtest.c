@@ -103,8 +103,15 @@ static int socket_accept(int sock)
 static void kill_qemu(QTestState *s)
 {
     if (s->qemu_pid != -1) {
+        int wstatus = 0;
+        pid_t pid;
+
         kill(s->qemu_pid, SIGTERM);
-        waitpid(s->qemu_pid, NULL, 0);
+        pid = waitpid(s->qemu_pid, &wstatus, 0);
+
+        if (pid == s->qemu_pid && WIFSIGNALED(wstatus)) {
+            assert(!WCOREDUMP(wstatus));
+        }
     }
 }
 
@@ -166,7 +173,8 @@ static const char *qtest_qemu_binary(void)
     return qemu_bin;
 }
 
-QTestState *qtest_init_without_qmp_handshake(const char *extra_args)
+QTestState *qtest_init_without_qmp_handshake(bool use_oob,
+                                             const char *extra_args)
 {
     QTestState *s;
     int sock, qmpsock, i;
@@ -199,12 +207,13 @@ QTestState *qtest_init_without_qmp_handshake(const char *extra_args)
         command = g_strdup_printf("exec %s "
                                   "-qtest unix:%s,nowait "
                                   "-qtest-log %s "
-                                  "-qmp unix:%s,nowait "
+                                  "-chardev socket,path=%s,nowait,id=char0 "
+                                  "-mon chardev=char0,mode=control%s "
                                   "-machine accel=qtest "
                                   "-display none "
                                   "%s", qemu_binary, socket_path,
                                   getenv("QTEST_LOG") ? "/dev/fd/2" : "/dev/null",
-                                  qmp_socket_path,
+                                  qmp_socket_path, use_oob ? ",x-oob=on" : "",
                                   extra_args ?: "");
         execlp("/bin/sh", "sh", "-c", command, NULL);
         exit(1);
@@ -239,7 +248,7 @@ QTestState *qtest_init_without_qmp_handshake(const char *extra_args)
 
 QTestState *qtest_init(const char *extra_args)
 {
-    QTestState *s = qtest_init_without_qmp_handshake(extra_args);
+    QTestState *s = qtest_init_without_qmp_handshake(false, extra_args);
 
     /* Read the QMP greeting and then do the handshake */
     qtest_qmp_discard_response(s, "");
@@ -515,8 +524,8 @@ void qmp_fd_sendv(int fd, const char *fmt, va_list ap)
         /* Send QMP request */
         socket_send(fd, str, qstring_get_length(qstr));
 
-        QDECREF(qstr);
-        qobject_decref(qobj);
+        qobject_unref(qstr);
+        qobject_unref(qobj);
     }
 }
 
@@ -583,7 +592,7 @@ void qtest_async_qmp(QTestState *s, const char *fmt, ...)
 void qtest_qmpv_discard_response(QTestState *s, const char *fmt, va_list ap)
 {
     QDict *response = qtest_qmpv(s, fmt, ap);
-    QDECREF(response);
+    qobject_unref(response);
 }
 
 void qtest_qmp_discard_response(QTestState *s, const char *fmt, ...)
@@ -594,7 +603,7 @@ void qtest_qmp_discard_response(QTestState *s, const char *fmt, ...)
     va_start(ap, fmt);
     response = qtest_qmpv(s, fmt, ap);
     va_end(ap);
-    QDECREF(response);
+    qobject_unref(response);
 }
 
 QDict *qtest_qmp_eventwait_ref(QTestState *s, const char *event)
@@ -607,7 +616,7 @@ QDict *qtest_qmp_eventwait_ref(QTestState *s, const char *event)
             (strcmp(qdict_get_str(response, "event"), event) == 0)) {
             return response;
         }
-        QDECREF(response);
+        qobject_unref(response);
     }
 }
 
@@ -616,7 +625,7 @@ void qtest_qmp_eventwait(QTestState *s, const char *event)
     QDict *response;
 
     response = qtest_qmp_eventwait_ref(s, event);
-    QDECREF(response);
+    qobject_unref(response);
 }
 
 char *qtest_hmpv(QTestState *s, const char *fmt, va_list ap)
@@ -632,12 +641,12 @@ char *qtest_hmpv(QTestState *s, const char *fmt, va_list ap)
     ret = g_strdup(qdict_get_try_str(resp, "return"));
     while (ret == NULL && qdict_get_try_str(resp, "event")) {
         /* Ignore asynchronous QMP events */
-        QDECREF(resp);
+        qobject_unref(resp);
         resp = qtest_qmp_receive(s);
         ret = g_strdup(qdict_get_try_str(resp, "return"));
     }
     g_assert(ret);
-    QDECREF(resp);
+    qobject_unref(resp);
     g_free(cmd);
     return ret;
 }
@@ -1019,7 +1028,7 @@ void qtest_cb_for_every_machine(void (*cb)(const char *machine))
     }
 
     qtest_end();
-    QDECREF(response);
+    qobject_unref(response);
 }
 
 /*
@@ -1048,7 +1057,7 @@ void qtest_qmp_device_add(const char *driver, const char *id, const char *fmt,
     g_assert(response);
     g_assert(!qdict_haskey(response, "event")); /* We don't expect any events */
     g_assert(!qdict_haskey(response, "error"));
-    QDECREF(response);
+    qobject_unref(response);
 }
 
 /*
@@ -1093,6 +1102,13 @@ void qtest_qmp_device_del(const char *id)
     g_assert(event);
     g_assert_cmpstr(qdict_get_str(event, "event"), ==, "DEVICE_DELETED");
 
-    QDECREF(response1);
-    QDECREF(response2);
+    qobject_unref(response1);
+    qobject_unref(response2);
+}
+
+bool qmp_rsp_is_err(QDict *rsp)
+{
+    QDict *error = qdict_get_qdict(rsp, "error");
+    qobject_unref(rsp);
+    return !!error;
 }

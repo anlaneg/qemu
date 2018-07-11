@@ -30,7 +30,7 @@
 #include "qemu/cutils.h"
 
 #include "block/block_int.h"
-#include "block/qcow2.h"
+#include "qcow2.h"
 
 /* NOTICE: BME here means Bitmaps Extension and used as a namespace for
  * _internal_ constants. Please do not use this _internal_ abbreviation for
@@ -254,7 +254,6 @@ static int free_bitmap_clusters(BlockDriverState *bs, Qcow2BitmapTable *tb)
 
     ret = bitmap_table_load(bs, tb, &bitmap_table);
     if (ret < 0) {
-        assert(bitmap_table == NULL);
         return ret;
     }
 
@@ -776,7 +775,12 @@ static int bitmap_list_store(BlockDriverState *bs, Qcow2BitmapList *bm_list,
         }
     }
 
-    ret = qcow2_pre_write_overlap_check(bs, 0, dir_offset, dir_size);
+    /* Actually, even in in-place case ignoring QCOW2_OL_BITMAP_DIRECTORY is not
+     * necessary, because we drop QCOW2_AUTOCLEAR_BITMAPS when updating bitmap
+     * directory in-place (actually, turn-off the extension), which is checked
+     * in qcow2_check_metadata_overlap() */
+    ret = qcow2_pre_write_overlap_check(
+            bs, in_place ? QCOW2_OL_BITMAP_DIRECTORY : 0, dir_offset, dir_size);
     if (ret < 0) {
         goto fail;
     }
@@ -1004,13 +1008,18 @@ fail:
     return false;
 }
 
-int qcow2_reopen_bitmaps_rw(BlockDriverState *bs, Error **errp)
+int qcow2_reopen_bitmaps_rw_hint(BlockDriverState *bs, bool *header_updated,
+                                 Error **errp)
 {
     BDRVQcow2State *s = bs->opaque;
     Qcow2BitmapList *bm_list;
     Qcow2Bitmap *bm;
     GSList *ro_dirty_bitmaps = NULL;
     int ret = 0;
+
+    if (header_updated != NULL) {
+        *header_updated = false;
+    }
 
     if (s->nb_bitmaps == 0) {
         /* No bitmaps - nothing to do */
@@ -1055,6 +1064,9 @@ int qcow2_reopen_bitmaps_rw(BlockDriverState *bs, Error **errp)
             error_setg_errno(errp, -ret, "Can't update bitmap directory");
             goto out;
         }
+        if (header_updated != NULL) {
+            *header_updated = true;
+        }
         g_slist_foreach(ro_dirty_bitmaps, set_readonly_helper, false);
     }
 
@@ -1063,6 +1075,11 @@ out:
     bitmap_list_free(bm_list);
 
     return ret;
+}
+
+int qcow2_reopen_bitmaps_rw(BlockDriverState *bs, Error **errp)
+{
+    return qcow2_reopen_bitmaps_rw_hint(bs, NULL, errp);
 }
 
 /* store_bitmap_data()

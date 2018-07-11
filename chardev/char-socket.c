@@ -138,8 +138,11 @@ static int tcp_chr_write(Chardev *chr, const uint8_t *buf, int len)
                                         s->write_msgfds,
                                         s->write_msgfds_num);
 
-        /* free the written msgfds, no matter what */
-        if (s->write_msgfds_num) {
+        /* free the written msgfds in any cases
+         * other than ret < 0 && errno == EAGAIN
+         */
+        if (!(ret < 0 && EAGAIN == errno)
+            && s->write_msgfds_num) {
             g_free(s->write_msgfds);
             s->write_msgfds = 0;
             s->write_msgfds_num = 0;
@@ -559,12 +562,10 @@ static void tcp_chr_connect(void *opaque)
 
     //标记设备已打开
     s->connected = 1;
-    if (s->ioc) {
-        chr->gsource = io_add_watch_poll(chr, s->ioc,
-                                           tcp_chr_read_poll,
-                                           tcp_chr_read,
-                                           chr, chr->gcontext);
-    }
+    chr->gsource = io_add_watch_poll(chr, s->ioc,
+                                       tcp_chr_read_poll,
+                                       tcp_chr_read,
+                                       chr, chr->gcontext);
 
     s->hup_source = qio_channel_create_watch(s->ioc, G_IO_HUP);
     g_source_set_callback(s->hup_source, (GSourceFunc)tcp_chr_hup,

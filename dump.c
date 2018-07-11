@@ -29,6 +29,10 @@
 #include "qemu/error-report.h"
 #include "hw/misc/vmcoreinfo.h"
 
+#ifdef TARGET_X86_64
+#include "win_dump.h"
+#endif
+
 #include <zlib.h>
 #ifdef CONFIG_LZO
 #include <lzo/lzo1x.h>
@@ -814,7 +818,7 @@ static void create_header32(DumpState *s, Error **errp)
     size = sizeof(DiskDumpHeader32);
     dh = g_malloc0(size);
 
-    strncpy(dh->signature, KDUMP_SIGNATURE, strlen(KDUMP_SIGNATURE));
+    memcpy(dh->signature, KDUMP_SIGNATURE, SIG_LEN);
     dh->header_version = cpu_to_dump32(s, 6);
     block_size = s->dump_info.page_size;
     dh->block_size = cpu_to_dump32(s, block_size);
@@ -926,7 +930,7 @@ static void create_header64(DumpState *s, Error **errp)
     size = sizeof(DiskDumpHeader64);
     dh = g_malloc0(size);
 
-    strncpy(dh->signature, KDUMP_SIGNATURE, strlen(KDUMP_SIGNATURE));
+    memcpy(dh->signature, KDUMP_SIGNATURE, SIG_LEN);
     dh->header_version = cpu_to_dump32(s, 6);
     block_size = s->dump_info.page_size;
     dh->block_size = cpu_to_dump32(s, block_size);
@@ -1866,7 +1870,11 @@ static void dump_process(DumpState *s, Error **errp)
     Error *local_err = NULL;
     DumpQueryResult *result = NULL;
 
-    if (s->has_format && s->format != DUMP_GUEST_MEMORY_FORMAT_ELF) {
+    if (s->has_format && s->format == DUMP_GUEST_MEMORY_FORMAT_WIN_DMP) {
+#ifdef TARGET_X86_64
+        create_win_dump(s, &local_err);
+#endif
+    } else if (s->has_format && s->format != DUMP_GUEST_MEMORY_FORMAT_ELF) {
         create_kdump_vmcore(s, &local_err);
     } else {
         create_vmcore(s, &local_err);
@@ -1970,6 +1978,13 @@ void qmp_dump_guest_memory(bool paging, const char *file,
     }
 #endif
 
+#ifndef TARGET_X86_64
+    if (has_format && format == DUMP_GUEST_MEMORY_FORMAT_WIN_DMP) {
+        error_setg(errp, "Windows dump is only available for x86-64");
+        return;
+    }
+#endif
+
 #if !defined(WIN32)
     if (strstart(file, "fd:", &p)) {
         fd = monitor_get_fd(cur_mon, p, errp);
@@ -2042,6 +2057,13 @@ DumpGuestMemoryCapability *qmp_query_dump_guest_memory_capability(Error **errp)
     item->next = g_malloc0(sizeof(DumpGuestMemoryFormatList));
     item = item->next;
     item->value = DUMP_GUEST_MEMORY_FORMAT_KDUMP_SNAPPY;
+#endif
+
+    /* Windows dump is available only if target is x86_64 */
+#ifdef TARGET_X86_64
+    item->next = g_malloc0(sizeof(DumpGuestMemoryFormatList));
+    item = item->next;
+    item->value = DUMP_GUEST_MEMORY_FORMAT_WIN_DMP;
 #endif
 
     return cap;

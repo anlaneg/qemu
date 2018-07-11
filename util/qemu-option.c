@@ -43,27 +43,24 @@
  * first byte of the option name)
  *
  * The option name is delimited by delim (usually , or =) or the string end
- * and is copied into buf. If the option name is longer than buf_size, it is
- * truncated. buf is always zero terminated.
+ * and is copied into option. The caller is responsible for free'ing option
+ * when no longer required.
  *
  * The return value is the position of the delimiter/zero byte after the option
  * name in p.
  */
 //将buf中delim符号前的内容copy到p中，buf的最大长度为buf_size
-const char *get_opt_name(char *buf, int buf_size, const char *p, char delim)
+static const char *get_opt_name(const char *p, char **option, char delim)
 {
-    char *q;
+    char *offset = strchr(p, delim);
 
-    q = buf;
-    while (*p != '\0' && *p != delim) {
-        if (q && (q - buf) < buf_size - 1)
-            *q++ = *p;
-        p++;
+    if (offset) {
+        *option = g_strndup(p, offset - p);
+        return offset;
+    } else {
+        *option = g_strdup(p);
+        return p + strlen(p);
     }
-    if (q)
-        *q = '\0';
-
-    return p;
 }
 
 /*
@@ -74,26 +71,33 @@ const char *get_opt_name(char *buf, int buf_size, const char *p, char delim)
  * delimiter is fixed to be comma which starts a new option. To specify an
  * option value that contains commas, double each comma.
  */
-//取出buf中第一个逗号之前的内容（逗号可以转义逗号）
-const char *get_opt_value(char *buf, int buf_size, const char *p)
+const char *get_opt_value(const char *p, char **value)
 {
-    char *q;
+    size_t capacity = 0, length;
+    const char *offset;
 
-    q = buf;
-    while (*p != '\0') {//未达到字符串结尾
-        if (*p == ',') {
-            if (*(p + 1) != ',')
-                break;//如果后面不是','号，则分割（逗号来转义逗号)
-            p++;
+    *value = NULL;
+    while (1) {
+        offset = qemu_strchrnul(p, ',');
+        length = offset - p;
+        if (*offset != '\0' && *(offset + 1) == ',') {
+            length++;
         }
-        if (q && (q - buf) < buf_size - 1)
-            *q++ = *p;//存入的是非‘，’号分割字符串
-        p++;
-    }
-    if (q)
-        *q = '\0';
+        if (value) {
+            *value = g_renew(char, *value, capacity + length + 1);
+            strncpy(*value + capacity, p, length);
+            (*value)[capacity + length] = '\0';
+        }
+        capacity += length;
+        if (*offset == '\0' ||
+            *(offset + 1) != ',') {
+            break;
+        }
 
-    return p;//返回下一个开始
+        p += (offset - p) + 2;
+    }
+
+    return offset;
 }
 
 //将选项name的值，解析成bool类型，ret为解析后的类型。
@@ -172,54 +176,47 @@ void parse_option_size(const char *name, const char *value,
 //检查param中是否有help选项
 bool has_help_option(const char *param)
 {
-    size_t buflen = strlen(param) + 1;
-    char *buf = g_malloc(buflen);
     const char *p = param;
     bool result = false;
 
-    while (*p) {
-        p = get_opt_value(buf, buflen, p);
+    while (*p && !result) {
+        char *value;
+
+        p = get_opt_value(p, &value);
         if (*p) {
             p++;//跳过','号
         }
 
         //是否为help option ,如 -o ?或者-o help
-        if (is_help_option(buf)) {
-            result = true;
-            goto out;
-        }
+        result = is_help_option(value);
+        g_free(value);
     }
 
-out:
-    g_free(buf);
     return result;
 }
 
 //检查list是否是有效的
-bool is_valid_option_list(const char *param)
+bool is_valid_option_list(const char *p)
 {
-    size_t buflen = strlen(param) + 1;//参数长度
-    char *buf = g_malloc(buflen);
-    const char *p = param;
-    bool result = true;
+    char *value = NULL;
+    bool result = false;
 
     while (*p) {
-		//从p中解析中第一个，选项值，取入buf中,返回新头
-        p = get_opt_value(buf, buflen, p);
-        if (*p && !*++p) {
-            result = false;
+	//从p中解析中第一个，选项值，取入buf中,返回新头
+        p = get_opt_value(p, &value);
+        if ((*p && !*++p) ||
+            (!*value || *value == ',')) {
+            //buffer没有值，说明解析完了。
             goto out;
         }
 
-        //buffer没有值，说明解析完了。
-        if (!*buf || *buf == ',') {
-            result = false;
-            goto out;
-        }
+        g_free(value);
+        value = NULL;
     }
 
+    result = true;
 out:
-    g_free(buf);
+    g_free(value);
     return result;
 }
 
@@ -230,7 +227,6 @@ void qemu_opts_print_help(QemuOptsList *list)
 
     assert(list);
     desc = list->desc;
-    printf("Supported options:\n");
     while (desc && desc->name) {
         printf("%-16s %s\n", desc->name,
                desc->help ? desc->help : "No description available");
@@ -521,7 +517,7 @@ int qemu_opt_unset(QemuOpts *opts, const char *name)
 }
 
 //构造QemuOpt将其串在opts链上，prepend用于控制是否串在最前面
-static void opt_set(QemuOpts *opts, const char *name, const char *value,
+static void opt_set(QemuOpts *opts, const char *name, char *value,
                     bool prepend, Error **errp)
 {
     QemuOpt *opt;
@@ -531,7 +527,8 @@ static void opt_set(QemuOpts *opts, const char *name, const char *value,
     //查找名称为name的选项
     desc = find_desc_by_name(opts->list->desc, name);
     if (!desc && !opts_accepts_any(opts)) {
-    		//不支持此参数名，报错
+        g_free(value);
+    	//不支持此参数名，报错
         error_setg(errp, QERR_INVALID_PARAMETER, name);
         return;
     }
@@ -545,8 +542,7 @@ static void opt_set(QemuOpts *opts, const char *name, const char *value,
         QTAILQ_INSERT_TAIL(&opts->head, opt, next);
     }
     opt->desc = desc;
-    opt->str = g_strdup(value);
-    assert(opt->str);
+    opt->str = value;
     //解析选项取值
     qemu_opt_parse(opt, &local_err);
     if (local_err) {
@@ -559,7 +555,7 @@ static void opt_set(QemuOpts *opts, const char *name, const char *value,
 void qemu_opt_set(QemuOpts *opts, const char *name, const char *value,
                   Error **errp)
 {
-    opt_set(opts, name, value, false, errp);
+    opt_set(opts, name, g_strdup(value), false, errp);
 }
 
 void qemu_opt_set_bool(QemuOpts *opts, const char *name, bool val,
@@ -810,7 +806,8 @@ void qemu_opts_print(QemuOpts *opts, const char *separator)
 static void opts_do_parse(QemuOpts *opts, const char *params,
                           const char *firstname, bool prepend, Error **errp)
 {
-    char option[128], value[1024];
+    char *option = NULL;
+    char *value = NULL;
     const char *p,*pe,*pc;
     Error *local_err = NULL;
 
@@ -824,39 +821,37 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
             if (p == params && firstname) {
             		//如果支持firstname这种设置，则将key设置为firstname,将值置为P
                 /* implicitly named first option */
-                pstrcpy(option, sizeof(option), firstname);//将firstname做为option(隐含选项名）
-                p = get_opt_value(value, sizeof(value), p);//将p做为value
+                option = g_strdup(firstname);//将firstname做为option(隐含选项名）
+                p = get_opt_value(p, &value);//将p做为value
             } else {
                 /* option without value, probably a flag */
-            		//仅有选项的情况,理解成bool类型，以no开头的，去掉no为key,value为off,无no开头的,value为on
-                p = get_opt_name(option, sizeof(option), p, ',');
-
+            	//仅有选项的情况,理解成bool类型，以no开头的，去掉no为key,value为off,无no开头的,value为on
+                p = get_opt_name(p, &option, ',');
                 //检查选项是否以no开头，如果是，则将选项值设为on,否则选项值设置为off
                 if (strncmp(option, "no", 2) == 0) {
                     memmove(option, option+2, strlen(option+2)+1);
-                    pstrcpy(value, sizeof(value), "off");
+                    value = g_strdup("off");
                 } else {
-                    pstrcpy(value, sizeof(value), "on");
+                    value = g_strdup("on");
                 }
             }
         } else {
         		//选项有‘＝’号，提取option的key及其对应的value
             /* found "foo=bar,more" */
-            p = get_opt_name(option, sizeof(option), p, '=');
-            if (*p != '=') {
-                break;
-            }
+            p = get_opt_name(p, &option, '=');
+            assert(*p == '=');
             p++;
-            p = get_opt_value(value, sizeof(value), p);
+            p = get_opt_value(p, &value);
         }
 
         //如果option不是id,则加入此选项（id选项不被加入,前面已使用，创建了opts变量）
         if (strcmp(option, "id") != 0) {
             /* store and parse */
             opt_set(opts, option, value, prepend, &local_err);
+            value = NULL;
             if (local_err) {
                 error_propagate(errp, local_err);
-                return;
+                goto cleanup;
             }
         }
 
@@ -864,7 +859,14 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
         if (*p != ',') {
             break;
         }
+        g_free(option);
+        g_free(value);
+        option = value = NULL;
     }
+
+ cleanup:
+    g_free(option);
+    g_free(value);
 }
 
 /**
@@ -886,7 +888,7 @@ static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
                             bool permit_abbrev, bool defaults, Error **errp)
 {
     const char *firstname;
-    char value[1024], *id = NULL;
+    char *id = NULL;
     const char *p;
     QemuOpts *opts;
     Error *local_err = NULL;
@@ -898,11 +900,9 @@ static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
 
     //提取id值
     if (strncmp(params, "id=", 3) == 0) {
-        get_opt_value(value, sizeof(value), params+3);
-        id = value;//从开始位置提取id值
+        get_opt_value(params + 3, &id);//从中间位置提取id值
     } else if ((p = strstr(params, ",id=")) != NULL) {
-        get_opt_value(value, sizeof(value), p+4);
-        id = value;//从中间位置提取id值
+        get_opt_value(p + 4, &id);//从中间位置提取id值
     }
 
     /*
@@ -914,7 +914,8 @@ static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
      */
     assert(!defaults || list->merge_lists);
     //利用id值，创建opts
-    opts = qemu_opts_create(list, id, !defaults, &local_err);//生成opts
+    opts = qemu_opts_create(list, id, !defaults, &local_err);
+    g_free(id);
     if (opts == NULL) {
         error_propagate(errp, local_err);
         return NULL;

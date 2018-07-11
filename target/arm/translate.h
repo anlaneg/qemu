@@ -9,7 +9,7 @@ typedef struct DisasContext {
     DisasContextBase base;
 
     target_ulong pc;
-    target_ulong next_page_start;
+    target_ulong page_start;
     uint32_t insn;
     /* Nonzero if this instruction has been conditionally skipped.  */
     int condjmp;
@@ -120,7 +120,7 @@ static inline void disas_set_insn_syndrome(DisasContext *s, uint32_t syn)
 
     /* We check and clear insn_start_idx to catch multiple updates.  */
     assert(s->insn_start != NULL);
-    tcg_set_insn_param(s->insn_start, 2, syn);
+    tcg_set_insn_start_param(s->insn_start, 2, syn);
     s->insn_start = NULL;
 }
 
@@ -176,5 +176,17 @@ void arm_test_cc(DisasCompare *cmp, int cc);
 void arm_free_cc(DisasCompare *cmp);
 void arm_jump_cc(DisasCompare *cmp, TCGLabel *label);
 void arm_gen_test_cc(int cc, TCGLabel *label);
+
+/* Return state of Alternate Half-precision flag, caller frees result */
+static inline TCGv_i32 get_ahp_flag(void)
+{
+    TCGv_i32 ret = tcg_temp_new_i32();
+
+    tcg_gen_ld_i32(ret, cpu_env,
+                   offsetof(CPUARMState, vfp.xregs[ARM_VFP_FPSCR]));
+    tcg_gen_extract_i32(ret, ret, 26, 1);
+
+    return ret;
+}
 
 #endif /* TARGET_ARM_TRANSLATE_H */

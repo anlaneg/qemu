@@ -25,7 +25,6 @@
 
 #include "qemu/osdep.h"
 #include "hw/hw.h"
-#include "hw/pci/pci.h"
 #include "hw/isa/isa.h"
 #include "qemu/error-report.h"
 #include "qemu/timer.h"
@@ -402,7 +401,6 @@ typedef struct TrimAIOCB {
     QEMUIOVector *qiov;
     BlockAIOCB *aiocb;
     int i, j;
-    bool is_invalid;
 } TrimAIOCB;
 
 static void trim_aio_cancel(BlockAIOCB *acb)
@@ -430,11 +428,8 @@ static void ide_trim_bh_cb(void *opaque)
 {
     TrimAIOCB *iocb = opaque;
 
-    if (iocb->is_invalid) {
-        ide_dma_error(iocb->s);
-    } else {
-        iocb->common.cb(iocb->common.opaque, iocb->ret);
-    }
+    iocb->common.cb(iocb->common.opaque, iocb->ret);
+
     qemu_bh_delete(iocb->bh);
     iocb->bh = NULL;
     qemu_aio_unref(iocb);
@@ -462,7 +457,7 @@ static void ide_issue_trim_cb(void *opaque, int ret)
                 }
 
                 if (!ide_sect_range_ok(s, sector, count)) {
-                    iocb->is_invalid = true;
+                    iocb->ret = -EINVAL;
                     goto done;
                 }
 
@@ -502,7 +497,6 @@ BlockAIOCB *ide_issue_trim(
     iocb->qiov = qiov;
     iocb->i = -1;
     iocb->j = 0;
-    iocb->is_invalid = false;
     ide_issue_trim_cb(iocb, 0);
     return &iocb->common;
 }
@@ -529,18 +523,28 @@ static void ide_clear_retry(IDEState *s)
 }
 
 /* prepare data transfer and tell what to do after */
-void ide_transfer_start(IDEState *s, uint8_t *buf, int size,
-                        EndTransferFunc *end_transfer_func)
+bool ide_transfer_start_norecurse(IDEState *s, uint8_t *buf, int size,
+                                  EndTransferFunc *end_transfer_func)
 {
-    s->end_transfer_func = end_transfer_func;
     s->data_ptr = buf;
     s->data_end = buf + size;
     ide_set_retry(s);
     if (!(s->status & ERR_STAT)) {
         s->status |= DRQ_STAT;
     }
-    if (s->bus->dma->ops->start_transfer) {
-        s->bus->dma->ops->start_transfer(s->bus->dma);
+    if (!s->bus->dma->ops->pio_transfer) {
+        s->end_transfer_func = end_transfer_func;
+        return false;
+    }
+    s->bus->dma->ops->pio_transfer(s->bus->dma);
+    return true;
+}
+
+void ide_transfer_start(IDEState *s, uint8_t *buf, int size,
+                        EndTransferFunc *end_transfer_func)
+{
+    if (ide_transfer_start_norecurse(s, buf, size, end_transfer_func)) {
+        end_transfer_func(s);
     }
 }
 
@@ -551,27 +555,18 @@ static void ide_cmd_done(IDEState *s)
     }
 }
 
-static void ide_transfer_halt(IDEState *s,
-                              void(*end_transfer_func)(IDEState *),
-                              bool notify)
+static void ide_transfer_halt(IDEState *s)
 {
-    s->end_transfer_func = end_transfer_func;
+    s->end_transfer_func = ide_transfer_stop;
     s->data_ptr = s->io_buffer;
     s->data_end = s->io_buffer;
     s->status &= ~DRQ_STAT;
-    if (notify) {
-        ide_cmd_done(s);
-    }
 }
 
 void ide_transfer_stop(IDEState *s)
 {
-    ide_transfer_halt(s, ide_transfer_stop, true);
-}
-
-static void ide_transfer_cancel(IDEState *s)
-{
-    ide_transfer_halt(s, ide_transfer_cancel, false);
+    ide_transfer_halt(s);
+    ide_cmd_done(s);
 }
 
 int64_t ide_get_sector(IDEState *s)
@@ -848,6 +843,12 @@ static void ide_dma_cb(void *opaque, int ret)
     if (ret == -ECANCELED) {
         return;
     }
+
+    if (ret == -EINVAL) {
+        ide_dma_error(s);
+        return;
+    }
+
     if (ret < 0) {
         if (ide_handle_rw_error(s, -ret, ide_dma_cmd_to_retry(s->dma_cmd))) {
             s->bus->dma->aiocb = NULL;
@@ -1362,7 +1363,7 @@ static bool cmd_nop(IDEState *s, uint8_t cmd)
 static bool cmd_device_reset(IDEState *s, uint8_t cmd)
 {
     /* Halt PIO (in the DRQ phase), then DMA */
-    ide_transfer_cancel(s);
+    ide_transfer_halt(s);
     ide_cancel_dma_sync(s);
 
     /* Reset any PIO commands, reset signature, etc */
