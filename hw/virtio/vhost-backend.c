@@ -233,6 +233,7 @@ static void vhost_kernel_set_iotlb_callback(struct vhost_dev *dev,
         qemu_set_fd_handler((uintptr_t)dev->opaque, NULL, NULL, NULL);
 }
 
+//vhost-kernel挂接的操作集
 static const VhostOps kernel_ops = {
         .backend_type = VHOST_BACKEND_TYPE_KERNEL,
         .vhost_backend_init = vhost_kernel_init,
@@ -270,6 +271,7 @@ int vhost_set_backend_type(struct vhost_dev *dev, VhostBackendType backend_type)
 {
     int r = 0;
 
+    //后端现在有两种类型，一个是vhost-kernel,一个是vhost-user
     switch (backend_type) {
     case VHOST_BACKEND_TYPE_KERNEL:
         dev->vhost_ops = &kernel_ops;

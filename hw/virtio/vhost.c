@@ -1149,6 +1149,7 @@ static int vhost_virtqueue_set_busyloop_timeout(struct vhost_dev *dev,
 static int vhost_virtqueue_init(struct vhost_dev *dev,
                                 struct vhost_virtqueue *vq, int n)
 {
+	//取virtqueue的索引
     int vhost_vq_index = dev->vhost_ops->vhost_get_vq_index(dev, n);
     struct vhost_vring_file file = {
         .index = vhost_vq_index,
@@ -1199,19 +1200,21 @@ int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
         goto fail;
     }
 
+    //设置owner
     r = hdev->vhost_ops->vhost_set_owner(hdev);
     if (r < 0) {
         VHOST_OPS_DEBUG("vhost_set_owner failed");
         goto fail;
     }
 
+    //获取后端功能
     r = hdev->vhost_ops->vhost_get_features(hdev, &features);
     if (r < 0) {
         VHOST_OPS_DEBUG("vhost_get_features failed");
         goto fail;
     }
 
-    //初始化virtqueue
+    //初始化virtqueue,共初始化hdev->nvqs个
     for (i = 0; i < hdev->nvqs; ++i, ++n_initialized_vqs) {
         r = vhost_virtqueue_init(hdev, hdev->vqs + i, hdev->vq_index + i);
         if (r < 0) {

@@ -816,6 +816,7 @@ static int vhost_user_get_u64(struct vhost_dev *dev, int request, uint64_t *u64)
         .hdr.flags = VHOST_USER_VERSION,
     };
 
+    //只容许发送一次请求的reqeust检查
     if (vhost_user_one_time_request(request) && dev->vq_index != 0) {
         return 0;
     }
@@ -837,6 +838,7 @@ static int vhost_user_get_u64(struct vhost_dev *dev, int request, uint64_t *u64)
         return -1;
     }
 
+    //应答消息格式错误，丢弃
     if (msg.hdr.size != sizeof(msg.payload.u64)) {
         error_report("Received bad msg size.");
         return -1;
@@ -847,7 +849,7 @@ static int vhost_user_get_u64(struct vhost_dev *dev, int request, uint64_t *u64)
     return 0;
 }
 
-//获取dev支持的功能
+//获取vhost_user支持的功能
 static int vhost_user_get_features(struct vhost_dev *dev, uint64_t *features)
 {
     return vhost_user_get_u64(dev, VHOST_USER_GET_FEATURES, features);
@@ -860,6 +862,7 @@ static int vhost_user_set_owner(struct vhost_dev *dev)
         .hdr.flags = VHOST_USER_VERSION,
     };
 
+    //发送set owner消息给后端
     if (vhost_user_write(dev, &msg, NULL, 0) < 0) {
         return -1;
     }
@@ -1781,7 +1784,7 @@ void vhost_user_cleanup(VhostUserState *user)
     }
 }
 
-//vhost-user时挂接的操作集
+//vhost-user时挂接的操作集（整个使用框架由vhost.c代码控制）
 const VhostOps user_ops = {
         .backend_type = VHOST_BACKEND_TYPE_USER,
         .vhost_backend_init = vhost_user_backend_init,
