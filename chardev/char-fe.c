@@ -75,15 +75,18 @@ int qemu_chr_fe_read_all(CharBackend *be, uint8_t *buf, int len)
         res = CHARDEV_GET_CLASS(s)->chr_sync_read(s, buf + offset,
                                                   len - offset);
         if (res == -1 && errno == EAGAIN) {
+        	//需要重试，睡眠100us
             g_usleep(100);
             goto retry;
         }
 
         if (res == 0) {
+        	//无数据，跳出
             break;
         }
 
         if (res < 0) {
+        	//读取失败，返回errno
             if (qemu_chr_replay(s) && replay_mode == REPLAY_MODE_RECORD) {
                 replay_char_read_all_save_error(res);
             }
