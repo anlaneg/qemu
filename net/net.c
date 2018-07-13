@@ -797,7 +797,7 @@ int qemu_find_net_clients_except(const char *id, NetClientState **ncs,
     int ret = 0;
 
     QTAILQ_FOREACH(nc, &net_clients, next) {
-    	//类型相同的跳过
+    		//类型相同的跳过
         if (nc->info->type == type) {
             continue;
         }

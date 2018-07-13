@@ -144,6 +144,7 @@ static int vhost_net_get_fd(NetClientState *backend)
 struct vhost_net *vhost_net_init(VhostNetOptions *options)
 {
     int r;
+    //是否采用kernel vhost
     bool backend_kernel = options->backend_type == VHOST_BACKEND_TYPE_KERNEL;
     struct vhost_net *net = g_new0(struct vhost_net, 1);
     uint64_t features = 0;
@@ -159,6 +160,7 @@ struct vhost_net *vhost_net_init(VhostNetOptions *options)
     net->dev.vqs = net->vqs;
 
     if (backend_kernel) {
+    		//kernel vhost处理
         r = vhost_net_get_fd(options->net_backend);
         if (r < 0) {
             goto fail;
@@ -176,6 +178,7 @@ struct vhost_net *vhost_net_init(VhostNetOptions *options)
         net->dev.vq_index = net->nc->queue_index * net->dev.nvqs;
     }
 
+    //初始化vhost设备（利用options的后端）
     r = vhost_dev_init(&net->dev, options->opaque,
                        options->backend_type, options->busyloop_timeout);
     if (r < 0) {

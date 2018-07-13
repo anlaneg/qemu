@@ -351,6 +351,7 @@ QemuOpts *qemu_chr_parse_compat(const char *label, const char *filename)
     QemuOpts *opts;
     Error *local_err = NULL;
 
+    //取chardev上所有选项
     opts = qemu_opts_create(qemu_find_opts("chardev"), label, 1, &local_err);
     if (local_err) {
         error_report_err(local_err);
@@ -962,12 +963,12 @@ Chardev *qemu_chardev_new(const char *id, const char *typename,
         chr->filename = g_strdup(typename + 8);
     }
     if (be_opened) {
-    	//触发字符设备被打开事件
+    		//触发字符设备被打开事件
         qemu_chr_be_event(chr, CHR_EVENT_OPENED);
     }
 
     if (id) {
-    	//在chardevs中添加此chardev设备
+    		//在chardevs中添加此chardev设备
         object_property_add_child(get_chardevs_root(), id, obj, &local_err);
         if (local_err) {
             goto end;

@@ -825,7 +825,7 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
                 p = get_opt_value(p, &value);//将p做为value
             } else {
                 /* option without value, probably a flag */
-            	//仅有选项的情况,理解成bool类型，以no开头的，去掉no为key,value为off,无no开头的,value为on
+            	   //仅有选项的情况,理解成bool类型，以no开头的，去掉no为key,value为off,无no开头的,value为on
                 p = get_opt_name(p, &option, ',');
                 //检查选项是否以no开头，如果是，则将选项值设为on,否则选项值设置为off
                 if (strncmp(option, "no", 2) == 0) {
@@ -882,7 +882,7 @@ void qemu_opts_do_parse(QemuOpts *opts, const char *params,
     opts_do_parse(opts, params, firstname, false, errp);
 }
 
-//由于list为一组opts,而params为一组配置，将params转换单个的QemuOpts
+//由于list为一组opts,而params为一组配置，将params转换单个的QemuOpts，并串在list上
 //例如“-chardev socket,id=char1,path=/usr/local/var/run/openvswitch/vhost-user-1”
 static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
                             bool permit_abbrev, bool defaults, Error **errp)
@@ -953,7 +953,7 @@ QemuOpts *qemu_opts_parse(QemuOptsList *list, const char *params,
  * QMP context.  Do not use this function there!
  * Return the new QemuOpts on success, null pointer on error.
  */
-//构造opts,并将其串在list上
+//解析参数串，构造opts,并将其串在list上
 QemuOpts *qemu_opts_parse_noisily(QemuOptsList *list, const char *params,
                                   bool permit_abbrev)
 {
