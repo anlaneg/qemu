@@ -1368,6 +1368,7 @@ static int vhost_user_backend_init(struct vhost_dev *dev, void *opaque)
         return err;
     }
 
+    //如果支持协议功能，则要求协议功能
     if (virtio_has_feature(features, VHOST_USER_F_PROTOCOL_FEATURES)) {
         dev->backend_features |= 1ULL << VHOST_USER_F_PROTOCOL_FEATURES;
 
