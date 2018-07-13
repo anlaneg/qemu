@@ -83,7 +83,7 @@ static int vhost_user_start(int queues, NetClientState *ncs[],
         s = DO_UPCAST(NetVhostUserState, nc, ncs[i]);
 
         options.net_backend = ncs[i];
-        options.opaque      = be;
+        options.opaque      = be;//设置为后端
         options.busyloop_timeout = 0;
         net = vhost_net_init(&options);
         if (!net) {
@@ -247,6 +247,7 @@ static void net_vhost_user_event(void *opaque, int event)
                                           MAX_QUEUE_NUM);
     assert(queues < MAX_QUEUE_NUM);
 
+    //使用第0个为NetClientState
     s = DO_UPCAST(NetVhostUserState, nc, ncs[0]);
     chr = qemu_chr_fe_get_driver(&s->chr);
     trace_vhost_user_event(chr->label, event);

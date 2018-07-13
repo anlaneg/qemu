@@ -1194,7 +1194,7 @@ int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
     r = vhost_set_backend_type(hdev, backend_type);
     assert(r >= 0);
 
-    //后端初始化
+    //后端初始化（例如vhost-user.c提供的vhost_backend_init)
     r = hdev->vhost_ops->vhost_backend_init(hdev, opaque);
     if (r < 0) {
         goto fail;

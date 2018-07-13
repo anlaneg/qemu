@@ -1787,7 +1787,7 @@ void vhost_user_cleanup(VhostUserState *user)
 //vhost-user时挂接的操作集（整个使用框架由vhost.c代码控制）
 const VhostOps user_ops = {
         .backend_type = VHOST_BACKEND_TYPE_USER,
-        .vhost_backend_init = vhost_user_backend_init,
+        .vhost_backend_init = vhost_user_backend_init,//vhost_user后端初始化
         .vhost_backend_cleanup = vhost_user_backend_cleanup,
         .vhost_backend_memslots_limit = vhost_user_memslots_limit,
         .vhost_set_log_base = vhost_user_set_log_base,
