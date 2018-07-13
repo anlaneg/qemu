@@ -75,17 +75,19 @@ static int vhost_user_start(int queues, NetClientState *ncs[],
     int max_queues;
     int i;
 
+    //设置后端类型为user socket
     options.backend_type = VHOST_BACKEND_TYPE_USER;
 
     for (i = 0; i < queues; i++) {
+    		//网卡类型为均为NET_CLIENT_DRIVER_VHOST_USER
         assert(ncs[i]->info->type == NET_CLIENT_DRIVER_VHOST_USER);
 
         s = DO_UPCAST(NetVhostUserState, nc, ncs[i]);
 
         options.net_backend = ncs[i];
-        options.opaque      = be;
+        options.opaque      = be;//设置为后端
         options.busyloop_timeout = 0;
-        net = vhost_net_init(&options);
+        net = vhost_net_init(&options);//初始化vhost_net
         if (!net) {
             error_report("failed to init vhost_net for queue %d", i);
             goto err;
@@ -247,12 +249,13 @@ static void net_vhost_user_event(void *opaque, int event)
                                           MAX_QUEUE_NUM);
     assert(queues < MAX_QUEUE_NUM);
 
+    //使用第0个为NetClientState
     s = DO_UPCAST(NetVhostUserState, nc, ncs[0]);
     chr = qemu_chr_fe_get_driver(&s->chr);
     trace_vhost_user_event(chr->label, event);
     switch (event) {
     case CHR_EVENT_OPENED:
-    	//连接成功后
+    		//收到open事件
         if (vhost_user_start(queues, ncs, s->vhost_user) < 0) {
             qemu_chr_fe_disconnect(&s->chr);
             return;
@@ -328,11 +331,13 @@ static int net_vhost_user_init(NetClientState *peer, const char *device,
 
     s = DO_UPCAST(NetVhostUserState, nc, nc0);
     do {
-    	//等待与服务端或客户端建立连接
+    		//等待与服务端或客户端建立连接
         if (qemu_chr_fe_wait_connected(&s->chr, &err) < 0) {
             error_report_err(err);
             goto err;
         }
+
+        //注册char设备的事件处理函数，当char设备，例如被创建时，将触发CHR_EVENT_OPENED事件
         qemu_chr_fe_set_handlers(&s->chr, NULL, NULL,
                                  net_vhost_user_event, NULL, nc0->name, NULL,
                                  true);

@@ -267,6 +267,7 @@ static const VhostOps kernel_ops = {
         .vhost_send_device_iotlb_msg = vhost_kernel_send_device_iotlb_msg,
 };
 
+//设置后端类型
 int vhost_set_backend_type(struct vhost_dev *dev, VhostBackendType backend_type)
 {
     int r = 0;
