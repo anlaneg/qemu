@@ -93,7 +93,7 @@ int qemu_chr_fe_read_all(CharBackend *be, uint8_t *buf, int len)
             return res;
         }
 
-        offset += res;
+        offset += res;//增加读取偏移
 
         if (!counter--) {
             break;

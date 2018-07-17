@@ -802,6 +802,7 @@ static int vhost_user_set_features(struct vhost_dev *dev,
     return vhost_user_set_u64(dev, VHOST_USER_SET_FEATURES, features);
 }
 
+//告知对端要最终协商的功能
 static int vhost_user_set_protocol_features(struct vhost_dev *dev,
                                             uint64_t features)
 {
@@ -1020,6 +1021,7 @@ static void slave_read(void *opaque)
         goto err;
     }
 
+    //处理后端通过slave_fd发送过来的几类消息
     switch (hdr.request) {
     case VHOST_USER_SLAVE_IOTLB_MSG:
         ret = vhost_backend_handle_iotlb_msg(dev, &payload.iotlb);
@@ -1105,6 +1107,7 @@ static int vhost_setup_slave_channel(struct vhost_dev *dev)
         return -1;
     }
 
+    //设置对slave_fd执行slave_read回调
     u->slave_fd = sv[0];
     qemu_set_fd_handler(u->slave_fd, slave_read, NULL, dev);
 
@@ -1112,7 +1115,7 @@ static int vhost_setup_slave_channel(struct vhost_dev *dev)
         msg.hdr.flags |= VHOST_USER_NEED_REPLY_MASK;
     }
 
-    //向后端发送消息（slave_req_fd)
+    //向后端发送消息（slave_req_fd)，将sv[1]给后端
     ret = vhost_user_write(dev, &msg, &sv[1], 1);
     if (ret) {
         goto out;
@@ -1347,7 +1350,7 @@ static int vhost_user_postcopy_notifier(NotifierWithReturn *notifier,
     return 0;
 }
 
-//vhost-user初始化
+//vhost-user初始化（完成前后端功能协商及校验）
 static int vhost_user_backend_init(struct vhost_dev *dev, void *opaque)
 {
     uint64_t features, protocol_features;
@@ -1393,13 +1396,14 @@ static int vhost_user_backend_init(struct vhost_dev *dev, void *opaque)
             return -1;
         }
 
+        //告知最终协商出来的功能
         err = vhost_user_set_protocol_features(dev, dev->protocol_features);
         if (err < 0) {
             return err;
         }
 
         /* query the max queues we support if backend supports Multiple Queue */
-        //如果支持多队列，检查后端支持的最大队列数
+        //如果协商要支持多队列，检查后端支持的最大队列数
         if (dev->protocol_features & (1ULL << VHOST_USER_PROTOCOL_F_MQ)) {
             err = vhost_user_get_u64(dev, VHOST_USER_GET_QUEUE_NUM,
                                      &dev->max_queues);
