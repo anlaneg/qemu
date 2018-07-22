@@ -96,6 +96,7 @@ static void vhost_vsock_start(VirtIODevice *vdev)
     }
 
     vsock->vhost_dev.acked_features = vdev->guest_features;
+    //启动virtio设备
     ret = vhost_dev_start(&vsock->vhost_dev, vdev);
     if (ret < 0) {
         error_report("Error starting vhost: %d", -ret);
@@ -157,6 +158,7 @@ static void vhost_vsock_stop(VirtIODevice *vdev)
 static void vhost_vsock_set_status(VirtIODevice *vdev, uint8_t status)
 {
     VHostVSock *vsock = VHOST_VSOCK(vdev);
+    //设备状态已达到driver ok,需要start
     bool should_start = status & VIRTIO_CONFIG_S_DRIVER_OK;
 
     if (!vdev->vm_running) {
@@ -167,6 +169,7 @@ static void vhost_vsock_set_status(VirtIODevice *vdev, uint8_t status)
         return;
     }
 
+    //按状态启停设备
     if (should_start) {
         vhost_vsock_start(vdev);
     } else {

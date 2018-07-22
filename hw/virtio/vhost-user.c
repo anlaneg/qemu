@@ -628,6 +628,7 @@ static int vhost_user_set_vring_endian(struct vhost_dev *dev,
     return 0;
 }
 
+//设置ring
 static int vhost_set_vring(struct vhost_dev *dev,
                            unsigned long int request,
                            struct vhost_vring_state *ring)

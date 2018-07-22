@@ -846,6 +846,7 @@ static void vhost_log_stop(MemoryListener *listener,
  */
 static inline bool vhost_needs_vring_endian(VirtIODevice *vdev)
 {
+	//采用1.0标准时，按标准规定，使用小端
     if (virtio_vdev_has_feature(vdev, VIRTIO_F_VERSION_1)) {
         return false;
     }
@@ -966,6 +967,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
         return 0;
     }
 
+    //获取队列大小，设置队列大小
     vq->num = state.num = virtio_queue_get_num(vdev, idx);
     r = dev->vhost_ops->vhost_set_vring_num(dev, &state);
     if (r) {
@@ -973,6 +975,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
         return -errno;
     }
 
+    //获取队列有效位置，设置队列有效位置
     state.num = virtio_queue_get_last_avail_idx(vdev, idx);
     r = dev->vhost_ops->vhost_set_vring_base(dev, &state);
     if (r) {
@@ -1515,6 +1518,7 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
         r = -errno;
         goto fail_mem;
     }
+    //启动各个队列
     for (i = 0; i < hdev->nvqs; ++i) {
         r = vhost_virtqueue_start(hdev,
                                   vdev,
