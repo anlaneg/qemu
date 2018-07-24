@@ -112,6 +112,7 @@ static void virtio_net_set_config(VirtIODevice *vdev, const uint8_t *config)
     }
 }
 
+//检查virtio_net是否已启动
 static bool virtio_net_started(VirtIONet *n, uint8_t status)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(n);
@@ -136,6 +137,7 @@ static void virtio_net_vhost_status(VirtIONet *n, uint8_t status)
     int queues = n->multiqueue ? n->max_queues : 1;
 
     if (!get_vhost_net(nc->peer)) {
+    	//后端不支持
         return;
     }
 
@@ -144,6 +146,7 @@ static void virtio_net_vhost_status(VirtIONet *n, uint8_t status)
         return;
     }
     if (!n->vhost_started) {
+    	//设备还未启动
         int r, i;
 
         if (n->needs_vnet_hdr_swap) {
@@ -182,6 +185,7 @@ static void virtio_net_vhost_status(VirtIONet *n, uint8_t status)
             n->vhost_started = 0;
         }
     } else {
+    	//已启动，将其stop
         vhost_net_stop(vdev, n->nic->ncs, queues);
         n->vhost_started = 0;
     }
@@ -541,6 +545,7 @@ static int peer_attach(VirtIONet *n, int index)
         return 0;
     }
 
+    //vhost user方式后端处理(使能vring)
     if (nc->peer->info->type == NET_CLIENT_DRIVER_VHOST_USER) {
         vhost_set_vring_enable(nc->peer, 1);
     }
@@ -549,6 +554,7 @@ static int peer_attach(VirtIONet *n, int index)
         return 0;
     }
 
+    //tap方式后端处理
     if (n->max_queues == 1) {
         return 0;
     }
@@ -564,6 +570,7 @@ static int peer_detach(VirtIONet *n, int index)
         return 0;
     }
 
+    //vhost_user方式后端处理（禁止vring)
     if (nc->peer->info->type == NET_CLIENT_DRIVER_VHOST_USER) {
         vhost_set_vring_enable(nc->peer, 0);
     }
@@ -584,11 +591,14 @@ static void virtio_net_set_queues(VirtIONet *n)
         return;
     }
 
+    //如果队列数增大，则创建队列，如果队列数减少，则销毁队列
     for (i = 0; i < n->max_queues; i++) {
         if (i < n->curr_queues) {
+        	//复用或者新增队列
             r = peer_attach(n, i);
             assert(!r);
         } else {
+        	//销毁队列
             r = peer_detach(n, i);
             assert(!r);
         }
@@ -936,7 +946,7 @@ static int virtio_net_handle_announce(VirtIONet *n, uint8_t cmd,
         return VIRTIO_NET_ERR;
     }
 }
-
+//处理设置虚拟队列对的处理
 static int virtio_net_handle_mq(VirtIONet *n, uint8_t cmd,
                                 struct iovec *iov, unsigned int iov_cnt)
 {
@@ -954,8 +964,10 @@ static int virtio_net_handle_mq(VirtIONet *n, uint8_t cmd,
         return VIRTIO_NET_ERR;
     }
 
+    //取出通知中的队列数
     queues = virtio_lduw_p(vdev, &mq.virtqueue_pairs);
 
+    //多队列校验
     if (queues < VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN ||
         queues > VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX ||
         queues > n->max_queues ||
@@ -966,12 +978,14 @@ static int virtio_net_handle_mq(VirtIONet *n, uint8_t cmd,
     n->curr_queues = queues;
     /* stop the backend before changing the number of queues to avoid handling a
      * disabled queue */
+    //队列数变换时，先停止后端
     virtio_net_set_status(vdev, vdev->status);
     virtio_net_set_queues(n);
 
     return VIRTIO_NET_OK;
 }
 
+//virtio_net处理控制消息
 static void virtio_net_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
 {
     VirtIONet *n = VIRTIO_NET(vdev);
@@ -997,9 +1011,11 @@ static void virtio_net_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
 
         iov_cnt = elem->out_num;
         iov2 = iov = g_memdup(elem->out_sg, sizeof(struct iovec) * elem->out_num);
+        //提取ctrl header,并自iov中移除ctl header
         s = iov_to_buf(iov, iov_cnt, 0, &ctrl, sizeof(ctrl));
         iov_discard_front(&iov, &iov_cnt, sizeof(ctrl));
         if (s != sizeof(ctrl)) {
+        	//iov长度不走ctrl header，报错
             status = VIRTIO_NET_ERR;
         } else if (ctrl.class == VIRTIO_NET_CTRL_RX) {
             status = virtio_net_handle_rx_mode(n, ctrl.cmd, iov, iov_cnt);
@@ -1010,6 +1026,7 @@ static void virtio_net_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
         } else if (ctrl.class == VIRTIO_NET_CTRL_ANNOUNCE) {
             status = virtio_net_handle_announce(n, ctrl.cmd, iov, iov_cnt);
         } else if (ctrl.class == VIRTIO_NET_CTRL_MQ) {
+        	//收到多队列消息
             status = virtio_net_handle_mq(n, ctrl.cmd, iov, iov_cnt);
         } else if (ctrl.class == VIRTIO_NET_CTRL_GUEST_OFFLOADS) {
             status = virtio_net_handle_offloads(n, ctrl.cmd, iov, iov_cnt);
@@ -2033,6 +2050,7 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
         virtio_net_add_queue(n, i);
     }
 
+    //新增控制队列，并设置其对应的处理函数
     n->ctrl_vq = virtio_add_queue(vdev, 64, virtio_net_handle_ctrl);
     qemu_macaddr_default_if_unset(&n->nic_conf.macaddr);
     memcpy(&n->mac[0], &n->nic_conf.macaddr, sizeof(n->mac));

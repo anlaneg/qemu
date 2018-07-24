@@ -287,6 +287,7 @@ static void *vhost_memory_map(struct vhost_dev *dev, hwaddr addr,
                               hwaddr *plen, int is_write)
 {
     if (!vhost_dev_has_iommu(dev)) {
+    	//无iommu时
         return cpu_physical_memory_map(addr, plen, is_write);
     } else {
         return (void *)(uintptr_t)addr;
@@ -942,6 +943,7 @@ out:
     return ret;
 }
 
+//向对端同步虚队列$idx
 static int vhost_virtqueue_start(struct vhost_dev *dev,
                                 struct VirtIODevice *vdev,
                                 struct vhost_virtqueue *vq,
@@ -961,6 +963,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
     };
     struct VirtQueue *vvq = virtio_get_queue(vdev, idx);
 
+    //取队列idx的描述符首地址
     a = virtio_queue_get_desc_addr(vdev, idx);
     if (a == 0) {
         /* Queue might not be ready for start */

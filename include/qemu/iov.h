@@ -50,12 +50,14 @@ iov_from_buf(const struct iovec *iov, unsigned int iov_cnt,
     }
 }
 
+//自iov数组（数组长度为iov_cnt)中copy一段长度为bytes的内存，copy的起始点为offset
 static inline size_t
 iov_to_buf(const struct iovec *iov, const unsigned int iov_cnt,
            size_t offset, void *buf, size_t bytes)
 {
     if (__builtin_constant_p(bytes) && iov_cnt &&
         offset <= iov[0].iov_len && bytes <= iov[0].iov_len - offset) {
+    	//第一个iov的空间恰好够buf需要填充的字节大小bytes,故直接copy即可
         memcpy(buf, iov[0].iov_base + offset, bytes);
         return bytes;
     } else {

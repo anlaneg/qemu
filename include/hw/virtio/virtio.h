@@ -85,7 +85,7 @@ struct VirtIODevice
     uint16_t config_vector;
     uint32_t generation;
     int nvectors;
-    VirtQueue *vq;
+    VirtQueue *vq;//虚队列数组
     MemoryListener listener;
     uint16_t device_id;
     bool vm_running;

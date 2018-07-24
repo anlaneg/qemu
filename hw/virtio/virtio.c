@@ -68,7 +68,7 @@ typedef struct VRingMemoryRegionCaches {
 
 typedef struct VRing
 {
-    unsigned int num;
+    unsigned int num;//队列大小
     unsigned int num_default;
     unsigned int align;
     hwaddr desc;
@@ -103,7 +103,7 @@ struct VirtQueue
     unsigned int inuse;
 
     uint16_t vector;
-    VirtIOHandleOutput handle_output;
+    VirtIOHandleOutput handle_output;//此队列的处理函数
     VirtIOHandleAIOOutput handle_aio_output;
     VirtIODevice *vdev;
     EventNotifier guest_notifier;
@@ -1521,6 +1521,7 @@ static bool virtio_queue_notify_aio_vq(VirtQueue *vq)
     return false;
 }
 
+//通知vq进行处理
 static void virtio_queue_notify_vq(VirtQueue *vq)
 {
     if (vq->vring.desc && vq->handle_output) {
@@ -1535,6 +1536,7 @@ static void virtio_queue_notify_vq(VirtQueue *vq)
     }
 }
 
+//通知n号队列进行处理（如果队列有aio_output，则采用异步方式处理，否则通过handle_output进行同步处理）
 void virtio_queue_notify(VirtIODevice *vdev, int n)
 {
     VirtQueue *vq = &vdev->vq[n];
@@ -1547,6 +1549,7 @@ void virtio_queue_notify(VirtIODevice *vdev, int n)
     if (vq->handle_aio_output) {
         event_notifier_set(&vq->host_notifier);
     } else if (vq->handle_output) {
+    	//处理vq队列的消息
         vq->handle_output(vdev, vq);
     }
 }
@@ -2345,6 +2348,7 @@ void virtio_queue_invalidate_signalled_used(VirtIODevice *vdev, int n)
     vdev->vq[n].signalled_used_valid = false;
 }
 
+//返回对应的虚队列
 VirtQueue *virtio_get_queue(VirtIODevice *vdev, int n)
 {
     return vdev->vq + n;

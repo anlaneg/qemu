@@ -310,6 +310,7 @@ int vhost_net_start(VirtIODevice *dev, NetClientState *ncs,
     for (i = 0; i < total_queues; i++) {
         struct vhost_net *net;
 
+        //取队端类型
         net = get_vhost_net(ncs[i].peer);
         vhost_net_set_vq_index(net, i * 2);
 
@@ -406,6 +407,7 @@ void vhost_net_virtqueue_mask(VHostNetState *net, VirtIODevice *dev,
     vhost_virtqueue_mask(&net->dev, dev, idx, mask);
 }
 
+//检查类型（是tap口，还是vhost_user口）
 VHostNetState *get_vhost_net(NetClientState *nc)
 {
     VHostNetState *vhost_net = 0;
@@ -418,7 +420,7 @@ VHostNetState *get_vhost_net(NetClientState *nc)
     case NET_CLIENT_DRIVER_TAP:
         vhost_net = tap_get_vhost_net(nc);
         break;
-    case NET_CLIENT_DRIVER_VHOST_USER:
+    case NET_CLIENT_DRIVER_VHOST_USER://采用vhost_user做为后端
         vhost_net = vhost_user_get_vhost_net(nc);
         assert(vhost_net);
         break;

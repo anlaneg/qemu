@@ -687,6 +687,7 @@ static int vhost_user_set_vring_base(struct vhost_dev *dev,
     return vhost_set_vring(dev, VHOST_USER_SET_VRING_BASE, ring);
 }
 
+//当enable为０时禁用所有队列，当enable为１时使能所有队列
 static int vhost_user_set_vring_enable(struct vhost_dev *dev, int enable)
 {
     int i;
@@ -695,6 +696,7 @@ static int vhost_user_set_vring_enable(struct vhost_dev *dev, int enable)
         return -1;
     }
 
+    //使能dev->nvqs个队列，num为是否使能
     for (i = 0; i < dev->nvqs; ++i) {
         struct vhost_vring_state state = {
             .index = dev->vq_index + i,
