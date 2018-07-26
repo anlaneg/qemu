@@ -76,7 +76,7 @@ struct VirtIODevice
     const char *name;
     uint8_t status;
     uint8_t isr;
-    uint16_t queue_sel;
+    uint16_t queue_sel;//当前操作(选中）的队列，设置后硬件可知道查询或设置哪个队列的信息
     uint64_t guest_features;
     uint64_t host_features;
     uint64_t backend_features;

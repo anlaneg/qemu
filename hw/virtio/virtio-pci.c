@@ -1163,6 +1163,7 @@ static int virtio_pci_add_mem_cap(VirtIOPCIProxy *proxy,
     return offset;
 }
 
+//virtio_pci硬件信息获取函数
 static uint64_t virtio_pci_common_read(void *opaque, hwaddr addr,
                                        unsigned size)
 {
@@ -1194,9 +1195,10 @@ static uint64_t virtio_pci_common_read(void *opaque, hwaddr addr,
     case VIRTIO_PCI_COMMON_MSIX:
         val = vdev->config_vector;
         break;
-    case VIRTIO_PCI_COMMON_NUMQ:
+    case VIRTIO_PCI_COMMON_NUMQ://获取支持的队列数
         for (i = 0; i < VIRTIO_QUEUE_MAX; ++i) {
             if (virtio_queue_get_num(vdev, i)) {
+            	//如果此队列数量大于０，则此队列存在
                 val = i + 1;
             }
         }
@@ -1208,37 +1210,40 @@ static uint64_t virtio_pci_common_read(void *opaque, hwaddr addr,
         val = vdev->generation;
         break;
     case VIRTIO_PCI_COMMON_Q_SELECT:
+    	//设置使用哪个队列（通过此设置硬件将知道后续在查询操作那个队列）
         val = vdev->queue_sel;
         break;
     case VIRTIO_PCI_COMMON_Q_SIZE:
+    	//取指定队列的大小
         val = virtio_queue_get_num(vdev, vdev->queue_sel);
         break;
     case VIRTIO_PCI_COMMON_Q_MSIX:
         val = virtio_queue_vector(vdev, vdev->queue_sel);
         break;
     case VIRTIO_PCI_COMMON_Q_ENABLE:
+    	//获取vdev->queue_sel号队列是否使能
         val = proxy->vqs[vdev->queue_sel].enabled;
         break;
     case VIRTIO_PCI_COMMON_Q_NOFF:
         /* Simply map queues in order */
         val = vdev->queue_sel;
         break;
-    case VIRTIO_PCI_COMMON_Q_DESCLO:
+    case VIRTIO_PCI_COMMON_Q_DESCLO://读取desc地址低32位
         val = proxy->vqs[vdev->queue_sel].desc[0];
         break;
-    case VIRTIO_PCI_COMMON_Q_DESCHI:
+    case VIRTIO_PCI_COMMON_Q_DESCHI://读取desc地址高32位
         val = proxy->vqs[vdev->queue_sel].desc[1];
         break;
-    case VIRTIO_PCI_COMMON_Q_AVAILLO:
+    case VIRTIO_PCI_COMMON_Q_AVAILLO://读取avail地址低３２位
         val = proxy->vqs[vdev->queue_sel].avail[0];
         break;
-    case VIRTIO_PCI_COMMON_Q_AVAILHI:
+    case VIRTIO_PCI_COMMON_Q_AVAILHI://读取avail地址高３２位
         val = proxy->vqs[vdev->queue_sel].avail[1];
         break;
-    case VIRTIO_PCI_COMMON_Q_USEDLO:
+    case VIRTIO_PCI_COMMON_Q_USEDLO://读取used地址低３２位
         val = proxy->vqs[vdev->queue_sel].used[0];
         break;
-    case VIRTIO_PCI_COMMON_Q_USEDHI:
+    case VIRTIO_PCI_COMMON_Q_USEDHI://读取used地址高32位
         val = proxy->vqs[vdev->queue_sel].used[1];
         break;
     default:
@@ -1248,6 +1253,7 @@ static uint64_t virtio_pci_common_read(void *opaque, hwaddr addr,
     return val;
 }
 
+//virtio_pci硬件信息设置函数
 static void virtio_pci_common_write(void *opaque, hwaddr addr,
                                     uint64_t val, unsigned size)
 {
@@ -1294,11 +1300,13 @@ static void virtio_pci_common_write(void *opaque, hwaddr addr,
 
         break;
     case VIRTIO_PCI_COMMON_Q_SELECT:
+    	//系统指明使能val号queue
         if (val < VIRTIO_QUEUE_MAX) {
             vdev->queue_sel = val;
         }
         break;
     case VIRTIO_PCI_COMMON_Q_SIZE:
+    	//指明vdev->queue_sel号queue中队列大小
         proxy->vqs[vdev->queue_sel].num = val;
         break;
     case VIRTIO_PCI_COMMON_Q_MSIX:
@@ -1311,8 +1319,10 @@ static void virtio_pci_common_write(void *opaque, hwaddr addr,
         virtio_queue_set_vector(vdev, vdev->queue_sel, val);
         break;
     case VIRTIO_PCI_COMMON_Q_ENABLE:
+    	//设置vdev->queue_sel号队列使能
         virtio_queue_set_num(vdev, vdev->queue_sel,
-                             proxy->vqs[vdev->queue_sel].num);
+                             proxy->vqs[vdev->queue_sel].num);//设置队列大小
+        //设置队列的desc,avail,used指针
         virtio_queue_set_rings(vdev, vdev->queue_sel,
                        ((uint64_t)proxy->vqs[vdev->queue_sel].desc[1]) << 32 |
                        proxy->vqs[vdev->queue_sel].desc[0],
@@ -1320,12 +1330,13 @@ static void virtio_pci_common_write(void *opaque, hwaddr addr,
                        proxy->vqs[vdev->queue_sel].avail[0],
                        ((uint64_t)proxy->vqs[vdev->queue_sel].used[1]) << 32 |
                        proxy->vqs[vdev->queue_sel].used[0]);
+        //设置队列enable
         proxy->vqs[vdev->queue_sel].enabled = 1;
         break;
-    case VIRTIO_PCI_COMMON_Q_DESCLO:
+    case VIRTIO_PCI_COMMON_Q_DESCLO://设置desc地址低32位
         proxy->vqs[vdev->queue_sel].desc[0] = val;
         break;
-    case VIRTIO_PCI_COMMON_Q_DESCHI:
+    case VIRTIO_PCI_COMMON_Q_DESCHI://设置desc地址高32位
         proxy->vqs[vdev->queue_sel].desc[1] = val;
         break;
     case VIRTIO_PCI_COMMON_Q_AVAILLO:
@@ -1477,6 +1488,7 @@ static void virtio_pci_modern_regions_init(VirtIOPCIProxy *proxy)
     };
 
 
+    //注册io region
     memory_region_init_io(&proxy->common.mr, OBJECT(proxy),
                           &common_ops,
                           proxy,
