@@ -946,7 +946,8 @@ static int virtio_net_handle_announce(VirtIONet *n, uint8_t cmd,
         return VIRTIO_NET_ERR;
     }
 }
-//处理设置虚拟队列对的处理
+
+//处理设置虚拟队列对的消息
 static int virtio_net_handle_mq(VirtIONet *n, uint8_t cmd,
                                 struct iovec *iov, unsigned int iov_cnt)
 {
@@ -1026,7 +1027,7 @@ static void virtio_net_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
         } else if (ctrl.class == VIRTIO_NET_CTRL_ANNOUNCE) {
             status = virtio_net_handle_announce(n, ctrl.cmd, iov, iov_cnt);
         } else if (ctrl.class == VIRTIO_NET_CTRL_MQ) {
-        	//收到多队列消息
+        	//收到多队列set消息,处理此消息
             status = virtio_net_handle_mq(n, ctrl.cmd, iov, iov_cnt);
         } else if (ctrl.class == VIRTIO_NET_CTRL_GUEST_OFFLOADS) {
             status = virtio_net_handle_offloads(n, ctrl.cmd, iov, iov_cnt);
