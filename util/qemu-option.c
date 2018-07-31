@@ -815,11 +815,11 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
         pe = strchr(p, '=');//检查选项中是否有'='号
         pc = strchr(p, ',');//检查选项中是否有','号
         if (!pe || (pc && pc < pe)) {
-        		//没有等号，或者下一个选项有‘＝’号
-        		//例如p指向"socket,id=char1,path=/usr/local/var/run/openvswitch/vhost-user-1"
+        	//没有等号，或者下一个选项有‘＝’号
+        	//例如p指向"socket,id=char1,path=/usr/local/var/run/openvswitch/vhost-user-1"
             /* found "foo,more" */
             if (p == params && firstname) {
-            		//如果支持firstname这种设置，则将key设置为firstname,将值置为P
+            	//如果支持firstname这种设置，则将key设置为firstname,将值置为P
                 /* implicitly named first option */
                 option = g_strdup(firstname);//将firstname做为option(隐含选项名）
                 p = get_opt_value(p, &value);//将p做为value
@@ -1166,7 +1166,7 @@ void qemu_opts_validate(QemuOpts *opts, const QemuOptDesc *desc, Error **errp)
  * When @func() returns non-zero, break the loop and return that value.
  * Return zero when the loop completes.
  */
-//遍历给定optslist中每一个opts
+//采用函数func遍历给定optslist中每一个opts
 int qemu_opts_foreach(QemuOptsList *list, qemu_opts_loopfunc func,
                       void *opaque, Error **errp)
 {

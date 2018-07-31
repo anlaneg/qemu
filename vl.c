@@ -3089,7 +3089,7 @@ int main(int argc, char **argv, char **envp)
     }
 
     if (userconfig) {
-    		//读取默认配置文件
+    	//读取默认配置文件
         if (qemu_read_default_config_file() < 0) {
             exit(1);
         }
@@ -3430,7 +3430,8 @@ int main(int argc, char **argv, char **envp)
                 default_monitor = 0;
                 break;
             case QEMU_OPTION_chardev://-chardev
-            		//解析-chardev的配置参数，并将其配置后保存在opts中
+            	//-chardev socket,id=char0,path=/var/run/openvswitch/vhost-user0
+            	//解析-chardev的配置参数，并将其配置后保存在opts中
                 opts = qemu_opts_parse_noisily(qemu_find_opts("chardev"),
                                                optarg, true);
                 if (!opts) {

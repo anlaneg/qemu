@@ -977,6 +977,7 @@ static int net_client_init1(const void *object, bool is_netdev, Error **errp)
         name = netdev->id;
 
         //对没有init_fun的报错（DUMP,NIC强制报错）
+        //例如常见的netdev->type="vhost-user"
         if (netdev->type == NET_CLIENT_DRIVER_NIC ||
             !net_client_init_fun[netdev->type]) {
             error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "type",

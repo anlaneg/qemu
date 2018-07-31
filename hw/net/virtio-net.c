@@ -83,17 +83,20 @@ static int vq2q(int queue_index)
  * - we could suppress RX interrupt if we were so inclined.
  */
 
+//自virtioNet中获取设备配置情况，并填充config结构体
 static void virtio_net_get_config(VirtIODevice *vdev, uint8_t *config)
 {
     VirtIONet *n = VIRTIO_NET(vdev);
     struct virtio_net_config netcfg;
 
+    //将n->status填充到netcfg.status中（考虚设备大小端问题）
     virtio_stw_p(vdev, &netcfg.status, n->status);
     virtio_stw_p(vdev, &netcfg.max_virtqueue_pairs, n->max_queues);
     virtio_stw_p(vdev, &netcfg.mtu, n->net_conf.mtu);
     memcpy(netcfg.mac, n->mac, ETH_ALEN);
     virtio_stl_p(vdev, &netcfg.speed, n->net_conf.speed);
     netcfg.duplex = n->net_conf.duplex;
+    //利用netcfg填充config
     memcpy(config, &netcfg, n->config_size);
 }
 

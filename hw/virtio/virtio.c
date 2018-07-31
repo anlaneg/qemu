@@ -1226,6 +1226,7 @@ void virtio_reset(void *opaque)
     }
 }
 
+//自vdev的addr位置读取配置，配置是一个字节的数据
 uint32_t virtio_config_readb(VirtIODevice *vdev, uint32_t addr)
 {
     VirtioDeviceClass *k = VIRTIO_DEVICE_GET_CLASS(vdev);
@@ -1235,8 +1236,10 @@ uint32_t virtio_config_readb(VirtIODevice *vdev, uint32_t addr)
         return (uint32_t)-1;
     }
 
+    //取出vdev对应的配置
     k->get_config(vdev, vdev->config);
 
+    //取配置结构体中指针位置的字节值
     val = ldub_p(vdev->config + addr);
     return val;
 }

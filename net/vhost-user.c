@@ -291,8 +291,8 @@ static void net_vhost_user_event(void *opaque, int event)
 
 
 static int net_vhost_user_init(NetClientState *peer, const char *device,
-                               const char *name, Chardev *chr,
-                               int queues)
+                               const char *name, Chardev *chr,//name,设备名称;char,vhost-user指定的char设备
+                               int queues)//队列数
 {
     Error *err = NULL;
     NetClientState *nc, *nc0 = NULL;
@@ -309,16 +309,17 @@ static int net_vhost_user_init(NetClientState *peer, const char *device,
         goto err;
     }
 
-    //初始化多个队列
+    //初始化多个队列(每个队列对应一个net_client)
     for (i = 0; i < queues; i++) {
         nc = qemu_new_net_client(&net_vhost_user_info, peer, device, name);
         snprintf(nc->info_str, sizeof(nc->info_str), "vhost-user%d to %s",
                  i, chr->label);
-        nc->queue_index = i;
+        nc->queue_index = i;//队列索引
         if (!nc0) {
         	//首个nc
             nc0 = nc;
             s = DO_UPCAST(NetVhostUserState, nc, nc);
+            //初始化前端
             if (!qemu_chr_fe_init(&s->chr, chr, &err)) {
                 error_report_err(err);
                 goto err;
@@ -331,7 +332,7 @@ static int net_vhost_user_init(NetClientState *peer, const char *device,
 
     s = DO_UPCAST(NetVhostUserState, nc, nc0);
     do {
-    		//等待与服务端或客户端建立连接
+    	//等待与服务端或客户端建立连接
         if (qemu_chr_fe_wait_connected(&s->chr, &err) < 0) {
             error_report_err(err);
             goto err;
@@ -366,6 +367,8 @@ static Chardev *net_vhost_claim_chardev(
     const NetdevVhostUserOptions *opts, Error **errp)
 {
 	//取出选项指明的chardev
+	//例如-netdev type=vhost-user,id=mynet1,chardev=char0
+	//此时采用char0来查找对应的chardev
     Chardev *chr = qemu_chr_find(opts->chardev);
 
     //chardev不存在，报错
@@ -405,6 +408,7 @@ static int net_vhost_check_net(void *opaque, QemuOpts *opts, Error **errp)
     }
 
     //vhost-user要求前端driver是virtio-net-X
+    //例如-device virtio-net-pci,netdev=mynet1,mac=52:54:00:02:d9:01
     if (strcmp(netdev, name) == 0 &&
         !g_str_has_prefix(driver, "virtio-net-")) {
         error_setg(errp, "vhost-user requires frontend driver virtio-net-*");
@@ -414,7 +418,7 @@ static int net_vhost_check_net(void *opaque, QemuOpts *opts, Error **errp)
     return 0;
 }
 
-int net_init_vhost_user(const Netdev *netdev, const char *name,
+int net_init_vhost_user(const Netdev *netdev, const char *name,//netdev配置时指定的id名称，例如mynet1
                         NetClientState *peer, Error **errp)
 {
     int queues;

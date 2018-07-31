@@ -651,7 +651,7 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts, Error **errp)
     Chardev *chr = NULL;
     ChardevBackend *backend = NULL;
 
-    //取backend配置类型
+    //取backend配置类型(例如socket)
     const char *name = chardev_alias_translate(qemu_opt_get(opts, "backend"));
     const char *id = qemu_opts_id(opts);
     char *bid = NULL;

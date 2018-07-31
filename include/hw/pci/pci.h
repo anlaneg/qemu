@@ -289,6 +289,7 @@ struct PCIDevice {
      * meaningless. */
     PCIReqIDCache requester_id_cache;
     char name[64];
+    //pci设备的io regions(用于模拟pci设备的设备内存）
     PCIIORegion io_regions[PCI_NUM_REGIONS];
     AddressSpace bus_master_as;
     MemoryRegion bus_master_container_region;

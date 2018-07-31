@@ -426,6 +426,7 @@ static uint64_t virtio_pci_config_read(void *opaque, hwaddr addr,
     }
     addr -= config;
 
+    //按config大小分情况读取（考虑字节序）
     switch (size) {
     case 1:
         val = virtio_config_readb(vdev, addr);
