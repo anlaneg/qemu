@@ -624,6 +624,7 @@ static BlockDriver bdrv_nbd_unix = {
     .bdrv_co_block_status       = nbd_client_co_block_status,
 };
 
+//nbd相关块设备驱动注册
 static void bdrv_nbd_init(void)
 {
     bdrv_register(&bdrv_nbd);
