@@ -27,18 +27,18 @@
 #include "qemu/units.h"
 #include "qapi/error.h"
 #include "qemu/log.h"
-#include "qemu-common.h"
+#include "qemu/module.h"
 #include "cpu.h"
 #include "hw/hw.h"
 #include "hw/char/serial.h"
 #include "ui/console.h"
-#include "hw/devices.h"
 #include "hw/sysbus.h"
 #include "hw/pci/pci.h"
 #include "hw/i2c/i2c.h"
-#include "hw/i2c/i2c-ddc.h"
+#include "hw/display/i2c-ddc.h"
 #include "qemu/range.h"
 #include "ui/pixel_ops.h"
+#include "qemu/bswap.h"
 
 /*
  * Status: 2010/05/07
@@ -812,9 +812,11 @@ static void sm501_2d_operation(SM501State *s)
             FILL_RECT(1, uint8_t);
             break;
         case 1:
+            color = cpu_to_le16(color);
             FILL_RECT(2, uint16_t);
             break;
         case 2:
+            color = cpu_to_le32(color);
             FILL_RECT(4, uint32_t);
             break;
         }
@@ -1024,7 +1026,7 @@ static void sm501_i2c_write(void *opaque, hwaddr addr, uint64_t value,
                         if (res) {
                             SM501_DPRINTF("sm501 i2c : transfer failed"
                                           " i=%d, res=%d\n", i, res);
-                            s->i2c_status |= (res ? SM501_I2C_STATUS_ERROR : 0);
+                            s->i2c_status |= SM501_I2C_STATUS_ERROR;
                             return;
                         }
                     }
@@ -1235,6 +1237,7 @@ static void sm501_disp_ctrl_write(void *opaque, hwaddr addr,
         if (value & 0x8000000) {
             qemu_log_mask(LOG_UNIMP, "Panel external memory not supported\n");
         }
+        s->do_full_update = true;
         break;
     case SM501_DC_PANEL_FB_OFFSET:
         s->dc_panel_fb_offset = value & 0x3FF03FF0;
@@ -1298,6 +1301,7 @@ static void sm501_disp_ctrl_write(void *opaque, hwaddr addr,
         if (value & 0x8000000) {
             qemu_log_mask(LOG_UNIMP, "CRT external memory not supported\n");
         }
+        s->do_full_update = true;
         break;
     case SM501_DC_CRT_FB_OFFSET:
         s->dc_crt_fb_offset = value & 0x3FF03FF0;

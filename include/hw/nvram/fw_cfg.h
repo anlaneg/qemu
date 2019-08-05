@@ -2,7 +2,7 @@
 #define FW_CFG_H
 
 #include "exec/hwaddr.h"
-#include "hw/nvram/fw_cfg_keys.h"
+#include "standard-headers/linux/qemu_fw_cfg.h"
 #include "hw/sysbus.h"
 #include "sysemu/dma.h"
 
@@ -14,12 +14,7 @@
 #define FW_CFG_IO(obj)  OBJECT_CHECK(FWCfgIoState,  (obj), TYPE_FW_CFG_IO)
 #define FW_CFG_MEM(obj) OBJECT_CHECK(FWCfgMemState, (obj), TYPE_FW_CFG_MEM)
 
-typedef struct FWCfgFile {
-    uint32_t  size;        /* file size */
-    uint16_t  select;      /* write this to 0x510 to read it */
-    uint16_t  reserved;
-    char      name[FW_CFG_MAX_FILE_PATH];
-} FWCfgFile;
+typedef struct fw_cfg_file FWCfgFile;
 
 #define FW_CFG_ORDER_OVERRIDE_VGA    70
 #define FW_CFG_ORDER_OVERRIDE_NIC    80
@@ -34,14 +29,7 @@ typedef struct FWCfgFiles {
     FWCfgFile f[];
 } FWCfgFiles;
 
-/* Control as first field allows for different structures selected by this
- * field, which might be useful in the future
- */
-typedef struct FWCfgDmaAccess {
-    uint32_t control;
-    uint32_t length;
-    uint64_t address;
-} QEMU_PACKED FWCfgDmaAccess;
+typedef struct fw_cfg_dma_access FWCfgDmaAccess;
 
 typedef void (*FWCfgCallback)(void *opaque);
 typedef void (*FWCfgWriteCallback)(void *opaque, off_t start, size_t len);
@@ -237,5 +225,19 @@ FWCfgState *fw_cfg_init_mem_wide(hwaddr ctl_addr,
 
 FWCfgState *fw_cfg_find(void);
 bool fw_cfg_dma_enabled(void *opaque);
+
+/**
+ * fw_cfg_arch_key_name:
+ *
+ * @key: The uint16 selector key.
+ *
+ * The key is architecture-specific (the FW_CFG_ARCH_LOCAL mask is expected
+ * to be set in the key).
+ *
+ * Returns: The stringified architecture-specific name if the selector
+ *          refers to a well-known numerically defined item, or NULL on
+ *          key lookup failure.
+ */
+const char *fw_cfg_arch_key_name(uint16_t key);
 
 #endif

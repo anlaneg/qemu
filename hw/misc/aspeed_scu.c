@@ -16,7 +16,8 @@
 #include "qapi/visitor.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
-#include "crypto/random.h"
+#include "qemu/guest-random.h"
+#include "qemu/module.h"
 #include "trace.h"
 
 #define TO_REG(offset) ((offset) >> 2)
@@ -157,14 +158,8 @@ static const uint32_t ast2500_a1_resets[ASPEED_SCU_NR_REGS] = {
 
 static uint32_t aspeed_scu_get_random(void)
 {
-    Error *err = NULL;
     uint32_t num;
-
-    if (qcrypto_random_bytes((uint8_t *)&num, sizeof(num), &err)) {
-        error_report_err(err);
-        exit(1);
-    }
-
+    qemu_guest_getrandom_nofail(&num, sizeof(num));
     return num;
 }
 
@@ -247,11 +242,26 @@ static void aspeed_scu_write(void *opaque, hwaddr offset, uint64_t data,
         s->regs[reg] = data;
         aspeed_scu_set_apb_freq(s);
         break;
-
+    case HW_STRAP1:
+        if (ASPEED_IS_AST2500(s->regs[SILICON_REV])) {
+            s->regs[HW_STRAP1] |= data;
+            return;
+        }
+        /* Jump to assignment below */
+        break;
+    case SILICON_REV:
+        if (ASPEED_IS_AST2500(s->regs[SILICON_REV])) {
+            s->regs[HW_STRAP1] &= ~data;
+        } else {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "%s: Write to read-only offset 0x%" HWADDR_PRIx "\n",
+                          __func__, offset);
+        }
+        /* Avoid assignment below, we've handled everything */
+        return;
     case FREQ_CNTR_EVAL:
     case VGA_SCRATCH1 ... VGA_SCRATCH8:
     case RNG_DATA:
-    case SILICON_REV:
     case FREE_CNTR4:
     case FREE_CNTR4_EXT:
         qemu_log_mask(LOG_GUEST_ERROR,

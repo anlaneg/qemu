@@ -56,7 +56,7 @@ struct NetQueue {
     uint32_t nq_count;//队列中缓存的报文数
     NetQueueDeliverFunc *deliver;
 
-    QTAILQ_HEAD(packets, NetPacket) packets;//缓存的报文
+    QTAILQ_HEAD(, NetPacket) packets;//缓存的报文
 
     unsigned delivering : 1;
 };

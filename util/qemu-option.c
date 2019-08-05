@@ -26,7 +26,6 @@
 #include "qemu/osdep.h"
 
 #include "qapi/error.h"
-#include "qemu-common.h"
 #include "qemu/error-report.h"
 #include "qapi/qmp/qbool.h"
 #include "qapi/qmp/qdict.h"
@@ -83,11 +82,9 @@ const char *get_opt_value(const char *p, char **value)
         if (*offset != '\0' && *(offset + 1) == ',') {
             length++;
         }
-        if (value) {
-            *value = g_renew(char, *value, capacity + length + 1);
-            strncpy(*value + capacity, p, length);
-            (*value)[capacity + length] = '\0';
-        }
+        *value = g_renew(char, *value, capacity + length + 1);
+        strncpy(*value + capacity, p, length);
+        (*value)[capacity + length] = '\0';
         capacity += length;
         if (*offset == '\0' ||
             *(offset + 1) != ',') {
@@ -220,18 +217,72 @@ out:
     return result;
 }
 
+static const char *opt_type_to_string(enum QemuOptType type)
+{
+    switch (type) {
+    case QEMU_OPT_STRING:
+        return "str";
+    case QEMU_OPT_BOOL:
+        return "bool (on/off)";
+    case QEMU_OPT_NUMBER:
+        return "num";
+    case QEMU_OPT_SIZE:
+        return "size";
+    }
+
+    g_assert_not_reached();
+}
+
+/**
+ * Print the list of options available in the given list.  If
+ * @print_caption is true, a caption (including the list name, if it
+ * exists) is printed.  The options itself will be indented, so
+ * @print_caption should only be set to false if the caller prints its
+ * own custom caption (so that the indentation makes sense).
+ */
 //显示支持的选项
-void qemu_opts_print_help(QemuOptsList *list)
+void qemu_opts_print_help(QemuOptsList *list, bool print_caption)
 {
     QemuOptDesc *desc;
+    int i;
+    GPtrArray *array = g_ptr_array_new();
 
     assert(list);
     desc = list->desc;
     while (desc && desc->name) {
-        printf("%-16s %s\n", desc->name,
-               desc->help ? desc->help : "No description available");
+        GString *str = g_string_new(NULL);
+        g_string_append_printf(str, "  %s=<%s>", desc->name,
+                               opt_type_to_string(desc->type));
+        if (desc->help) {
+            if (str->len < 24) {
+                g_string_append_printf(str, "%*s", 24 - (int)str->len, "");
+            }
+            g_string_append_printf(str, " - %s", desc->help);
+        }
+        g_ptr_array_add(array, g_string_free(str, false));
         desc++;
     }
+
+    g_ptr_array_sort(array, (GCompareFunc)qemu_pstrcmp0);
+    if (print_caption && array->len > 0) {
+        if (list->name) {
+            printf("%s options:\n", list->name);
+        } else {
+            printf("Options:\n");
+        }
+    } else if (array->len == 0) {
+        if (list->name) {
+            printf("There are no options for %s.\n", list->name);
+        } else {
+            printf("No options available.\n");
+        }
+    }
+    for (i = 0; i < array->len; i++) {
+        printf("%s\n", (char *)array->pdata[i]);
+    }
+    g_ptr_array_set_free_func(array, g_free);
+    g_ptr_array_free(array, true);
+
 }
 /* ------------------------------------------------------------------ */
 
@@ -240,7 +291,7 @@ QemuOpt *qemu_opt_find(QemuOpts *opts, const char *name)
 {
     QemuOpt *opt;
 
-    QTAILQ_FOREACH_REVERSE(opt, &opts->head, QemuOptHead, next) {
+    QTAILQ_FOREACH_REVERSE(opt, &opts->head, next) {
         if (strcmp(opt->name, name) != 0)
             continue;
         return opt;
@@ -343,7 +394,7 @@ bool qemu_opt_has_help_opt(QemuOpts *opts)
 {
     QemuOpt *opt;
 
-    QTAILQ_FOREACH_REVERSE(opt, &opts->head, QemuOptHead, next) {
+    QTAILQ_FOREACH_REVERSE(opt, &opts->head, next) {
         if (is_help_option(opt->name)) {
             return true;
         }
@@ -518,7 +569,7 @@ int qemu_opt_unset(QemuOpts *opts, const char *name)
 
 //构造QemuOpt将其串在opts链上，prepend用于控制是否串在最前面
 static void opt_set(QemuOpts *opts, const char *name, char *value,
-                    bool prepend, Error **errp)
+                    bool prepend, bool *invalidp, Error **errp)
 {
     QemuOpt *opt;
     const QemuOptDesc *desc;
@@ -530,6 +581,9 @@ static void opt_set(QemuOpts *opts, const char *name, char *value,
         g_free(value);
     	//不支持此参数名，报错
         error_setg(errp, QERR_INVALID_PARAMETER, name);
+        if (invalidp) {
+            *invalidp = true;
+        }
         return;
     }
 
@@ -555,7 +609,7 @@ static void opt_set(QemuOpts *opts, const char *name, char *value,
 void qemu_opt_set(QemuOpts *opts, const char *name, const char *value,
                   Error **errp)
 {
-    opt_set(opts, name, g_strdup(value), false, errp);
+    opt_set(opts, name, g_strdup(value), false, NULL, errp);
 }
 
 void qemu_opt_set_bool(QemuOpts *opts, const char *name, bool val,
@@ -804,7 +858,8 @@ void qemu_opts_print(QemuOpts *opts, const char *separator)
 
 //解析params中指明的选项，将选项串连在opts上，prepend用于控制是否串在首位
 static void opts_do_parse(QemuOpts *opts, const char *params,
-                          const char *firstname, bool prepend, Error **errp)
+                          const char *firstname, bool prepend,
+                          bool *invalidp, Error **errp)
 {
     char *option = NULL;
     char *value = NULL;
@@ -847,7 +902,7 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
         //如果option不是id,则加入此选项（id选项不被加入,前面已使用，创建了opts变量）
         if (strcmp(option, "id") != 0) {
             /* store and parse */
-            opt_set(opts, option, value, prepend, &local_err);
+            opt_set(opts, option, value, prepend, invalidp, &local_err);
             value = NULL;
             if (local_err) {
                 error_propagate(errp, local_err);
@@ -879,13 +934,14 @@ static void opts_do_parse(QemuOpts *opts, const char *params,
 void qemu_opts_do_parse(QemuOpts *opts, const char *params,
                        const char *firstname, Error **errp)
 {
-    opts_do_parse(opts, params, firstname, false, errp);
+    opts_do_parse(opts, params, firstname, false, NULL, errp);
 }
 
 //由于list为一组opts,而params为一组配置，将params转换单个的QemuOpts，并串在list上
 //例如“-chardev socket,id=char1,path=/usr/local/var/run/openvswitch/vhost-user-1”
 static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
-                            bool permit_abbrev, bool defaults, Error **errp)
+                            bool permit_abbrev, bool defaults,
+                            bool *invalidp, Error **errp)
 {
     const char *firstname;
     char *id = NULL;
@@ -922,7 +978,7 @@ static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
     }
 
     //解析此id下的其它参数
-    opts_do_parse(opts, params, firstname, defaults, &local_err);
+    opts_do_parse(opts, params, firstname, defaults, invalidp, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         qemu_opts_del(opts);
@@ -942,7 +998,7 @@ static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
 QemuOpts *qemu_opts_parse(QemuOptsList *list, const char *params,
                           bool permit_abbrev, Error **errp)
 {
-    return opts_parse(list, params, permit_abbrev, false, errp);
+    return opts_parse(list, params, permit_abbrev, false, NULL, errp);
 }
 
 /**
@@ -959,10 +1015,16 @@ QemuOpts *qemu_opts_parse_noisily(QemuOptsList *list, const char *params,
 {
     Error *err = NULL;
     QemuOpts *opts;
+    bool invalidp = false;
 
-    opts = opts_parse(list, params, permit_abbrev, false, &err);
+    opts = opts_parse(list, params, permit_abbrev, false, &invalidp, &err);
     if (err) {
-        error_report_err(err);
+        if (invalidp && has_help_option(params)) {
+            qemu_opts_print_help(list, true);
+            error_free(err);
+        } else {
+            error_report_err(err);
+        }
     }
     return opts;
 }
@@ -972,7 +1034,7 @@ void qemu_opts_set_defaults(QemuOptsList *list, const char *params,
 {
     QemuOpts *opts;
 
-    opts = opts_parse(list, params, permit_abbrev, true, NULL);
+    opts = opts_parse(list, params, permit_abbrev, true, NULL, NULL);
     assert(opts);
 }
 

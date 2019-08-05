@@ -55,7 +55,6 @@ typedef struct SiFivePLICState {
     uint32_t *pending;
     uint32_t *claimed;
     uint32_t *enable;
-    QemuMutex lock;
 
     /* config */
     char *hart_config;
@@ -81,4 +80,3 @@ DeviceState *sifive_plic_create(hwaddr addr, char *hart_config,
     uint32_t aperture_size);
 
 #endif
-

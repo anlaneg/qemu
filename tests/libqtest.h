@@ -17,38 +17,40 @@
 #ifndef LIBQTEST_H
 #define LIBQTEST_H
 
+#include "qapi/qmp/qobject.h"
+#include "qapi/qmp/qdict.h"
+
 typedef struct QTestState QTestState;
 
 extern QTestState *global_qtest;
 
 /**
- * qtest_startf:
+ * qtest_initf:
  * @fmt...: Format for creating other arguments to pass to QEMU, formatted
  * like sprintf().
  *
- * Start QEMU and return the resulting #QTestState (but unlike qtest_start(),
- * #global_qtest is left at NULL).
+ * Convenience wrapper around qtest_init().
  *
  * Returns: #QTestState instance.
  */
-QTestState *qtest_startf(const char *fmt, ...) GCC_FMT_ATTR(1, 2);
+QTestState *qtest_initf(const char *fmt, ...) GCC_FMT_ATTR(1, 2);
 
 /**
- * qtest_vstartf:
+ * qtest_vinitf:
  * @fmt: Format for creating other arguments to pass to QEMU, formatted
  * like vsprintf().
  * @ap: Format arguments.
  *
- * Start QEMU and return the resulting #QTestState (but unlike qtest_start(),
- * #global_qtest is left at NULL).
+ * Convenience wrapper around qtest_init().
  *
  * Returns: #QTestState instance.
  */
-QTestState *qtest_vstartf(const char *fmt, va_list ap) GCC_FMT_ATTR(1, 0);
+QTestState *qtest_vinitf(const char *fmt, va_list ap) GCC_FMT_ATTR(1, 0);
 
 /**
  * qtest_init:
- * @extra_args: other arguments to pass to QEMU.
+ * @extra_args: other arguments to pass to QEMU.  CAUTION: these
+ * arguments are subject to word splitting and shell evaluation.
  *
  * Returns: #QTestState instance.
  */
@@ -56,14 +58,23 @@ QTestState *qtest_init(const char *extra_args);
 
 /**
  * qtest_init_without_qmp_handshake:
- * @use_oob: true to have the server advertise OOB support
  * @extra_args: other arguments to pass to QEMU.  CAUTION: these
  * arguments are subject to word splitting and shell evaluation.
  *
  * Returns: #QTestState instance.
  */
-QTestState *qtest_init_without_qmp_handshake(bool use_oob,
-                                             const char *extra_args);
+QTestState *qtest_init_without_qmp_handshake(const char *extra_args);
+
+/**
+ * qtest_init_with_serial:
+ * @extra_args: other arguments to pass to QEMU.  CAUTION: these
+ * arguments are subject to word splitting and shell evaluation.
+ * @sock_fd: pointer to store the socket file descriptor for
+ * connection with serial.
+ *
+ * Returns: #QTestState instance.
+ */
+QTestState *qtest_init_with_serial(const char *extra_args, int *sock_fd);
 
 /**
  * qtest_quit:
@@ -74,61 +85,112 @@ QTestState *qtest_init_without_qmp_handshake(bool use_oob,
 void qtest_quit(QTestState *s);
 
 /**
- * qtest_qmp_discard_response:
+ * qtest_qmp_fds:
  * @s: #QTestState instance to operate on.
- * @fmt...: QMP message to send to qemu
+ * @fds: array of file descriptors
+ * @fds_num: number of elements in @fds
+ * @fmt...: QMP message to send to qemu, formatted like
+ * qobject_from_jsonf_nofail().  See parse_escape() for what's
+ * supported after '%'.
  *
- * Sends a QMP message to QEMU and consumes the response.
+ * Sends a QMP message to QEMU with fds and returns the response.
  */
-void qtest_qmp_discard_response(QTestState *s, const char *fmt, ...);
+QDict *qtest_qmp_fds(QTestState *s, int *fds, size_t fds_num,
+                     const char *fmt, ...)
+    GCC_FMT_ATTR(4, 5);
 
 /**
  * qtest_qmp:
  * @s: #QTestState instance to operate on.
- * @fmt...: QMP message to send to qemu
+ * @fmt...: QMP message to send to qemu, formatted like
+ * qobject_from_jsonf_nofail().  See parse_escape() for what's
+ * supported after '%'.
  *
  * Sends a QMP message to QEMU and returns the response.
  */
-QDict *qtest_qmp(QTestState *s, const char *fmt, ...);
+QDict *qtest_qmp(QTestState *s, const char *fmt, ...)
+    GCC_FMT_ATTR(2, 3);
 
 /**
- * qtest_async_qmp:
+ * qtest_qmp_send:
  * @s: #QTestState instance to operate on.
- * @fmt...: QMP message to send to qemu
+ * @fmt...: QMP message to send to qemu, formatted like
+ * qobject_from_jsonf_nofail().  See parse_escape() for what's
+ * supported after '%'.
  *
  * Sends a QMP message to QEMU and leaves the response in the stream.
  */
-void qtest_async_qmp(QTestState *s, const char *fmt, ...);
+void qtest_qmp_send(QTestState *s, const char *fmt, ...)
+    GCC_FMT_ATTR(2, 3);
 
 /**
- * qtest_qmpv_discard_response:
+ * qtest_qmp_send_raw:
  * @s: #QTestState instance to operate on.
- * @fmt: QMP message to send to QEMU
+ * @fmt...: text to send, formatted like sprintf()
+ *
+ * Sends text to the QMP monitor verbatim.  Need not be valid JSON;
+ * this is useful for negative tests.
+ */
+void qtest_qmp_send_raw(QTestState *s, const char *fmt, ...)
+    GCC_FMT_ATTR(2, 3);
+
+/**
+ * qtest_vqmp_fds:
+ * @s: #QTestState instance to operate on.
+ * @fds: array of file descriptors
+ * @fds_num: number of elements in @fds
+ * @fmt: QMP message to send to QEMU, formatted like
+ * qobject_from_jsonf_nofail().  See parse_escape() for what's
+ * supported after '%'.
  * @ap: QMP message arguments
  *
- * Sends a QMP message to QEMU and consumes the response.
+ * Sends a QMP message to QEMU with fds and returns the response.
  */
-void qtest_qmpv_discard_response(QTestState *s, const char *fmt, va_list ap);
+QDict *qtest_vqmp_fds(QTestState *s, int *fds, size_t fds_num,
+                      const char *fmt, va_list ap)
+    GCC_FMT_ATTR(4, 0);
 
 /**
- * qtest_qmpv:
+ * qtest_vqmp:
  * @s: #QTestState instance to operate on.
- * @fmt: QMP message to send to QEMU
+ * @fmt: QMP message to send to QEMU, formatted like
+ * qobject_from_jsonf_nofail().  See parse_escape() for what's
+ * supported after '%'.
  * @ap: QMP message arguments
  *
  * Sends a QMP message to QEMU and returns the response.
  */
-QDict *qtest_qmpv(QTestState *s, const char *fmt, va_list ap);
+QDict *qtest_vqmp(QTestState *s, const char *fmt, va_list ap)
+    GCC_FMT_ATTR(2, 0);
 
 /**
- * qtest_async_qmpv:
+ * qtest_qmp_vsend_fds:
  * @s: #QTestState instance to operate on.
- * @fmt: QMP message to send to QEMU
+ * @fds: array of file descriptors
+ * @fds_num: number of elements in @fds
+ * @fmt: QMP message to send to QEMU, formatted like
+ * qobject_from_jsonf_nofail().  See parse_escape() for what's
+ * supported after '%'.
  * @ap: QMP message arguments
  *
  * Sends a QMP message to QEMU and leaves the response in the stream.
  */
-void qtest_async_qmpv(QTestState *s, const char *fmt, va_list ap);
+void qtest_qmp_vsend_fds(QTestState *s, int *fds, size_t fds_num,
+                         const char *fmt, va_list ap)
+    GCC_FMT_ATTR(4, 0);
+
+/**
+ * qtest_qmp_vsend:
+ * @s: #QTestState instance to operate on.
+ * @fmt: QMP message to send to QEMU, formatted like
+ * qobject_from_jsonf_nofail().  See parse_escape() for what's
+ * supported after '%'.
+ * @ap: QMP message arguments
+ *
+ * Sends a QMP message to QEMU and leaves the response in the stream.
+ */
+void qtest_qmp_vsend(QTestState *s, const char *fmt, va_list ap)
+    GCC_FMT_ATTR(2, 0);
 
 /**
  * qtest_receive:
@@ -158,6 +220,23 @@ void qtest_qmp_eventwait(QTestState *s, const char *event);
 QDict *qtest_qmp_eventwait_ref(QTestState *s, const char *event);
 
 /**
+ * qtest_qmp_receive_success:
+ * @s: #QTestState instance to operate on
+ * @event_cb: Event callback
+ * @opaque: Argument for @event_cb
+ *
+ * Poll QMP messages until a command success response is received.
+ * If @event_cb, call it for each event received, passing @opaque,
+ * the event's name and data.
+ * Return the success response's "return" member.
+ */
+QDict *qtest_qmp_receive_success(QTestState *s,
+                                 void (*event_cb)(void *opaque,
+                                                  const char *name,
+                                                  QDict *data),
+                                 void *opaque);
+
+/**
  * qtest_hmp:
  * @s: #QTestState instance to operate on.
  * @fmt...: HMP command to send to QEMU, formats arguments like sprintf().
@@ -172,7 +251,7 @@ char *qtest_hmp(QTestState *s, const char *fmt, ...) GCC_FMT_ATTR(2, 3);
 /**
  * qtest_hmpv:
  * @s: #QTestState instance to operate on.
- * @fmt: HMP command to send to QEMU
+ * @fmt: HMP command to send to QEMU, formats arguments like vsprintf().
  * @ap: HMP command arguments
  *
  * Send HMP command to QEMU via QMP's human-monitor-command.
@@ -180,7 +259,8 @@ char *qtest_hmp(QTestState *s, const char *fmt, ...) GCC_FMT_ATTR(2, 3);
  *
  * Returns: the command's output.  The caller should g_free() it.
  */
-char *qtest_hmpv(QTestState *s, const char *fmt, va_list ap);
+char *qtest_vhmp(QTestState *s, const char *fmt, va_list ap)
+    GCC_FMT_ATTR(2, 0);
 
 /**
  * qtest_get_irq:
@@ -210,6 +290,19 @@ void qtest_irq_intercept_in(QTestState *s, const char *string);
  * whose path is specified by @string.
  */
 void qtest_irq_intercept_out(QTestState *s, const char *string);
+
+/**
+ * qtest_set_irq_in:
+ * @s: QTestState instance to operate on.
+ * @string: QOM path of a device
+ * @name: IRQ name
+ * @irq: IRQ number
+ * @level: IRQ level
+ *
+ * Force given device/irq GPIO-in pin to the given level.
+ */
+void qtest_set_irq_in(QTestState *s, const char *string, const char *name,
+                      int irq, int level);
 
 /**
  * qtest_outb:
@@ -555,45 +648,35 @@ static inline QTestState *qtest_start(const char *args)
  */
 static inline void qtest_end(void)
 {
+    if (!global_qtest) {
+        return;
+    }
     qtest_quit(global_qtest);
     global_qtest = NULL;
 }
 
 /**
  * qmp:
- * @fmt...: QMP message to send to qemu
+ * @fmt...: QMP message to send to qemu, formatted like
+ * qobject_from_jsonf_nofail().  See parse_escape() for what's
+ * supported after '%'.
  *
  * Sends a QMP message to QEMU and returns the response.
  */
-QDict *qmp(const char *fmt, ...);
+QDict *qmp(const char *fmt, ...) GCC_FMT_ATTR(1, 2);
 
 /**
- * qmp_async:
- * @fmt...: QMP message to send to qemu
+ * qmp_assert_success:
+ * @fmt...: QMP message to send to qemu, formatted like
+ * qobject_from_jsonf_nofail().  See parse_escape() for what's
+ * supported after '%'.
  *
- * Sends a QMP message to QEMU and leaves the response in the stream.
+ * Sends a QMP message to QEMU and asserts that a 'return' key is present in
+ * the response.
  */
-void qmp_async(const char *fmt, ...);
+void qmp_assert_success(const char *fmt, ...) GCC_FMT_ATTR(1, 2);
 
-/**
- * qmp_discard_response:
- * @fmt...: QMP message to send to qemu
- *
- * Sends a QMP message to QEMU and consumes the response.
- */
-void qmp_discard_response(const char *fmt, ...);
-
-/**
- * qmp_receive:
- *
- * Reads a QMP message from QEMU and returns the response.
- */
-static inline QDict *qmp_receive(void)
-{
-    return qtest_qmp_receive(global_qtest);
-}
-
-/**
+/*
  * qmp_eventwait:
  * @s: #event event to wait for.
  *
@@ -602,18 +685,6 @@ static inline QDict *qmp_receive(void)
 static inline void qmp_eventwait(const char *event)
 {
     return qtest_qmp_eventwait(global_qtest, event);
-}
-
-/**
- * qmp_eventwait_ref:
- * @s: #event event to wait for.
- *
- * Continuously polls for QMP responses until it receives the desired event.
- * Returns a copy of the event for further investigation.
- */
-static inline QDict *qmp_eventwait_ref(const char *event)
-{
-    return qtest_qmp_eventwait_ref(global_qtest, event);
 }
 
 /**
@@ -635,30 +706,6 @@ char *hmp(const char *fmt, ...) GCC_FMT_ATTR(1, 2);
 static inline bool get_irq(int num)
 {
     return qtest_get_irq(global_qtest, num);
-}
-
-/**
- * irq_intercept_in:
- * @string: QOM path of a device.
- *
- * Associate qtest irqs with the GPIO-in pins of the device
- * whose path is specified by @string.
- */
-static inline void irq_intercept_in(const char *string)
-{
-    qtest_irq_intercept_in(global_qtest, string);
-}
-
-/**
- * qtest_irq_intercept_out:
- * @string: QOM path of a device.
- *
- * Associate qtest irqs with the GPIO-out pins of the device
- * whose path is specified by @string.
- */
-static inline void irq_intercept_out(const char *string)
-{
-    qtest_irq_intercept_out(global_qtest, string);
 }
 
 /**
@@ -850,19 +897,6 @@ static inline void memread(uint64_t addr, void *data, size_t size)
 }
 
 /**
- * bufread:
- * @addr: Guest address to read from.
- * @data: Pointer to where memory contents will be stored.
- * @size: Number of bytes to read.
- *
- * Read guest memory into a buffer, receive using a base64 encoding.
- */
-static inline void bufread(uint64_t addr, void *data, size_t size)
-{
-    qtest_bufread(global_qtest, addr, data, size);
-}
-
-/**
  * memwrite:
  * @addr: Guest address to write to.
  * @data: Pointer to the bytes that will be written to guest memory.
@@ -873,32 +907,6 @@ static inline void bufread(uint64_t addr, void *data, size_t size)
 static inline void memwrite(uint64_t addr, const void *data, size_t size)
 {
     qtest_memwrite(global_qtest, addr, data, size);
-}
-
-/**
- * bufwrite:
- * @addr: Guest address to write to.
- * @data: Pointer to the bytes that will be written to guest memory.
- * @size: Number of bytes to write.
- *
- * Write a buffer to guest memory, transmit using a base64 encoding.
- */
-static inline void bufwrite(uint64_t addr, const void *data, size_t size)
-{
-    qtest_bufwrite(global_qtest, addr, data, size);
-}
-
-/**
- * qmemset:
- * @addr: Guest address to write to.
- * @patt: Byte pattern to fill the guest memory region with.
- * @size: Number of bytes to write.
- *
- * Write a pattern to guest memory.
- */
-static inline void qmemset(uint64_t addr, uint8_t patt, size_t size)
-{
-    qtest_memset(global_qtest, addr, patt, size);
 }
 
 /**
@@ -926,38 +934,33 @@ static inline int64_t clock_step(int64_t step)
     return qtest_clock_step(global_qtest, step);
 }
 
-/**
- * clock_set:
- * @val: Nanoseconds value to advance the clock to.
- *
- * Advance the QEMU_CLOCK_VIRTUAL to @val nanoseconds since the VM was launched.
- *
- * Returns: The current value of the QEMU_CLOCK_VIRTUAL in nanoseconds.
- */
-static inline int64_t clock_set(int64_t val)
-{
-    return qtest_clock_set(global_qtest, val);
-}
-
 QDict *qmp_fd_receive(int fd);
-void qmp_fd_sendv(int fd, const char *fmt, va_list ap);
-void qmp_fd_send(int fd, const char *fmt, ...);
-QDict *qmp_fdv(int fd, const char *fmt, va_list ap);
-QDict *qmp_fd(int fd, const char *fmt, ...);
+void qmp_fd_vsend_fds(int fd, int *fds, size_t fds_num,
+                      const char *fmt, va_list ap) GCC_FMT_ATTR(4, 0);
+void qmp_fd_vsend(int fd, const char *fmt, va_list ap) GCC_FMT_ATTR(2, 0);
+void qmp_fd_send(int fd, const char *fmt, ...) GCC_FMT_ATTR(2, 3);
+void qmp_fd_send_raw(int fd, const char *fmt, ...) GCC_FMT_ATTR(2, 3);
+void qmp_fd_vsend_raw(int fd, const char *fmt, va_list ap) GCC_FMT_ATTR(2, 0);
+QDict *qmp_fdv(int fd, const char *fmt, va_list ap) GCC_FMT_ATTR(2, 0);
+QDict *qmp_fd(int fd, const char *fmt, ...) GCC_FMT_ATTR(2, 3);
 
 /**
  * qtest_cb_for_every_machine:
  * @cb: Pointer to the callback function
+ * @skip_old_versioned: true if versioned old machine types should be skipped
  *
  *  Call a callback function for every name of all available machines.
  */
-void qtest_cb_for_every_machine(void (*cb)(const char *machine));
+void qtest_cb_for_every_machine(void (*cb)(const char *machine),
+                                bool skip_old_versioned);
 
 /**
  * qtest_qmp_device_add:
  * @driver: Name of the device that should be added
  * @id: Identification string
- * @fmt: printf-like format string for further options to device_add
+ * @fmt...: QMP message to send to qemu, formatted like
+ * qobject_from_jsonf_nofail().  See parse_escape() for what's
+ * supported after '%'.
  *
  * Generic hot-plugging test via the device_add QMP command.
  */
@@ -980,5 +983,22 @@ void qtest_qmp_device_del(const char *id);
  * Returns 'true' if there is error in @rsp and 'false' otherwise.
  */
 bool qmp_rsp_is_err(QDict *rsp);
+
+/**
+ * qmp_assert_error_class:
+ * @rsp: QMP response to check for error
+ * @class: an error class
+ *
+ * Assert the response has the given error class and discard @rsp.
+ */
+void qmp_assert_error_class(QDict *rsp, const char *class);
+
+/**
+ * qtest_probe_child:
+ * @s: QTestState instance to operate on.
+ *
+ * Returns: true if the child is still alive.
+ */
+bool qtest_probe_child(QTestState *s);
 
 #endif

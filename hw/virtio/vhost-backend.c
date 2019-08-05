@@ -9,11 +9,14 @@
  */
 
 #include "qemu/osdep.h"
-#include <linux/vhost.h>
-#include <sys/ioctl.h>
 #include "hw/virtio/vhost.h"
 #include "hw/virtio/vhost-backend.h"
 #include "qemu/error-report.h"
+#include "standard-headers/linux/vhost_types.h"
+
+#ifdef CONFIG_VHOST_KERNEL
+#include <linux/vhost.h>
+#include <sys/ioctl.h>
 
 static int vhost_kernel_call(struct vhost_dev *dev, unsigned long int request,
                              void *arg)
@@ -266,6 +269,7 @@ static const VhostOps kernel_ops = {
         .vhost_set_iotlb_callback = vhost_kernel_set_iotlb_callback,
         .vhost_send_device_iotlb_msg = vhost_kernel_send_device_iotlb_msg,
 };
+#endif
 
 //设置后端类型
 int vhost_set_backend_type(struct vhost_dev *dev, VhostBackendType backend_type)
@@ -274,12 +278,16 @@ int vhost_set_backend_type(struct vhost_dev *dev, VhostBackendType backend_type)
 
     //后端现在有两种类型，一个是vhost-kernel,一个是vhost-user
     switch (backend_type) {
+#ifdef CONFIG_VHOST_KERNEL
     case VHOST_BACKEND_TYPE_KERNEL:
         dev->vhost_ops = &kernel_ops;
         break;
+#endif
+#ifdef CONFIG_VHOST_USER
     case VHOST_BACKEND_TYPE_USER:
         dev->vhost_ops = &user_ops;
         break;
+#endif
     default:
         error_report("Unknown vhost backend type");
         r = -1;

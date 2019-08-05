@@ -10,7 +10,6 @@
 #ifndef TRACE__CONTROL_H
 #define TRACE__CONTROL_H
 
-#include "qemu-common.h"
 #include "event-internal.h"
 
 typedef struct TraceEventIter {
@@ -193,7 +192,7 @@ void trace_event_set_vcpu_state_dynamic(CPUState *vcpu,
 /**
  * trace_init_backends:
  * @file:   Name of trace output file; may be NULL.
- *          Corresponds to commandline option "-trace file=...".
+ *          Corresponds to commandline option "--trace file=...".
  *
  * Initialize the tracing backend.
  *
@@ -204,7 +203,7 @@ bool trace_init_backends(void);
 /**
  * trace_init_file:
  * @file:   Name of trace output file; may be NULL.
- *          Corresponds to commandline option "-trace file=...".
+ *          Corresponds to commandline option "--trace file=...".
  *
  * Record the name of the output file for the tracing backend.
  * Exits if no selected backend does not support specifying the

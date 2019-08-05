@@ -7,9 +7,13 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/host-utils.h"
+#include "qemu/atomic.h"
 
 int qemu_icache_linesize = 0;
+int qemu_icache_linesize_log;
 int qemu_dcache_linesize = 0;
+int qemu_dcache_linesize_log;
 
 /*
  * Operating system specific detection mechanisms.
@@ -103,7 +107,7 @@ static void sys_cache_info(int *isize, int *dsize)
 static void arch_cache_info(int *isize, int *dsize)
 {
     if (*isize == 0 || *dsize == 0) {
-        unsigned long ctr;
+        uint64_t ctr;
 
         /* The real cache geometry is in CCSIDR_EL1/CLIDR_EL1/CSSELR_EL1,
            but (at least under Linux) these are marked protected by the
@@ -172,6 +176,13 @@ static void __attribute__((constructor)) init_cache_info(void)
     arch_cache_info(&isize, &dsize);
     fallback_cache_info(&isize, &dsize);
 
+    assert((isize & (isize - 1)) == 0);
+    assert((dsize & (dsize - 1)) == 0);
+
     qemu_icache_linesize = isize;
+    qemu_icache_linesize_log = ctz32(isize);
     qemu_dcache_linesize = dsize;
+    qemu_dcache_linesize_log = ctz32(dsize);
+
+    atomic64_init();
 }

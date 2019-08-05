@@ -10,7 +10,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
+#include "qemu/module.h"
 #include "block/block_int.h"
 #include "sysemu/replay.h"
 #include "qapi/error.h"
@@ -41,10 +41,6 @@ static int blkreplay_open(BlockDriverState *bs, QDict *options, int flags,
     ret = 0;
 fail:
     return ret;
-}
-
-static void blkreplay_close(BlockDriverState *bs)
-{
 }
 
 static int64_t blkreplay_getlength(BlockDriverState *bs)
@@ -135,7 +131,6 @@ static BlockDriver bdrv_blkreplay = {
     .instance_size          = 0,
 
     .bdrv_open              = blkreplay_open,
-    .bdrv_close             = blkreplay_close,
     .bdrv_child_perm        = bdrv_filter_default_perms,
     .bdrv_getlength         = blkreplay_getlength,
 

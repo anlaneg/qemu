@@ -46,6 +46,8 @@ typedef enum {
     MODULE_INIT_OPTS,//选项注册（添加）
     MODULE_INIT_QOM,//类型注册
     MODULE_INIT_TRACE,
+    MODULE_INIT_XEN_BACKEND,
+    MODULE_INIT_LIBQOS,
     MODULE_INIT_MAX
 } module_init_type;
 
@@ -55,6 +57,9 @@ typedef enum {
 //类型注册
 #define type_init(function) module_init(function, MODULE_INIT_QOM)
 #define trace_init(function) module_init(function, MODULE_INIT_TRACE)
+#define xen_backend_init(function) module_init(function, \
+                                               MODULE_INIT_XEN_BACKEND)
+#define libqos_init(function) module_init(function, MODULE_INIT_LIBQOS)
 
 #define block_module_load_one(lib) module_load_one("block-", lib)
 #define ui_module_load_one(lib) module_load_one("ui-", lib)

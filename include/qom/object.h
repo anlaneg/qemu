@@ -16,11 +16,11 @@
 
 #include "qapi/qapi-builtin-types.h"
 #include "qemu/queue.h"
+#include "qemu/module.h"
 
 struct TypeImpl;
 typedef struct TypeImpl *Type;
 
-typedef struct ObjectClass ObjectClass;
 typedef struct Object Object;
 
 typedef struct TypeInfo TypeInfo;
@@ -459,14 +459,10 @@ struct Object
  * @class_base_init: This function is called for all base classes after all
  *   parent class initialization has occurred, but before the class itself
  *   is initialized.  This is the function to use to undo the effects of
- *   memcpy from the parent class to the descendants. 为了消除通过memcpy将父class copy到
- *   子类的影响，而引入本函数。本函数在所有父类初始化完成后，本类初始化完成前，由当前类针对所有基类调用。
- * @class_finalize: This function is called during class destruction and is
- *   meant to release and dynamic parameters allocated by @class_init. 类销毁函数，
- *   用于释放@class_init申请的资源
- * @class_data: Data to pass to the @class_init, @class_base_init and
- *   @class_finalize functions.  This can be useful when building dynamic
- *   classes. 函数@class_init,@class_init,@class_finalize在调用时传入的参数
+ *   memcpy from the parent class to the descendants.
+ * @class_data: Data to pass to the @class_init,
+ *   @class_base_init. This can be useful when building dynamic
+ *   classes.
  * @interfaces: The list of interfaces associated with this type.  This
  *   should point to a static array that's terminated with a zero filled
  *   element. 本类型的一组接口，此指定应指向一个以0结尾的静态数组
@@ -487,8 +483,6 @@ struct TypeInfo
     //构造函数
     void (*class_init)(ObjectClass *klass, void *data);
     void (*class_base_init)(ObjectClass *klass, void *data);
-    //析构函数
-    void (*class_finalize)(ObjectClass *klass, void *data);
     //class_init,class_base_init,class_finalize的函数参数
     void *class_data;
 
@@ -691,6 +685,12 @@ Object *object_new_with_propv(const char *typename,
                               Error **errp,
                               va_list vargs);
 
+void object_apply_global_props(Object *obj, const GPtrArray *props,
+                               Error **errp);
+void object_set_machine_compat_props(GPtrArray *compat_props);
+void object_set_accelerator_compat_props(GPtrArray *compat_props);
+void object_apply_compat_props(Object *obj);
+
 /**
  * object_set_props:
  * @obj: the object instance to set properties on
@@ -759,6 +759,47 @@ int object_set_propv(Object *obj,
  * and will be finalized when the last reference is dropped.
  */
 void object_initialize(void *obj, size_t size, const char *typename);
+
+/**
+ * object_initialize_child:
+ * @parentobj: The parent object to add a property to
+ * @propname: The name of the property
+ * @childobj: A pointer to the memory to be used for the object.
+ * @size: The maximum size available at @childobj for the object.
+ * @type: The name of the type of the object to instantiate.
+ * @errp: If an error occurs, a pointer to an area to store the error
+ * @...: list of property names and values
+ *
+ * This function will initialize an object. The memory for the object should
+ * have already been allocated. The object will then be added as child property
+ * to a parent with object_property_add_child() function. The returned object
+ * has a reference count of 1 (for the "child<...>" property from the parent),
+ * so the object will be finalized automatically when the parent gets removed.
+ *
+ * The variadic parameters are a list of pairs of (propname, propvalue)
+ * strings. The propname of %NULL indicates the end of the property list.
+ * If the object implements the user creatable interface, the object will
+ * be marked complete once all the properties have been processed.
+ */
+void object_initialize_child(Object *parentobj, const char *propname,
+                             void *childobj, size_t size, const char *type,
+                             Error **errp, ...) QEMU_SENTINEL;
+
+/**
+ * object_initialize_childv:
+ * @parentobj: The parent object to add a property to
+ * @propname: The name of the property
+ * @childobj: A pointer to the memory to be used for the object.
+ * @size: The maximum size available at @childobj for the object.
+ * @type: The name of the type of the object to instantiate.
+ * @errp: If an error occurs, a pointer to an area to store the error
+ * @vargs: list of property names and values
+ *
+ * See object_initialize_child() for documentation.
+ */
+void object_initialize_childv(Object *parentobj, const char *propname,
+                              void *childobj, size_t size, const char *type,
+                              Error **errp, va_list vargs);
 
 /**
  * object_dynamic_cast:
@@ -1394,7 +1435,7 @@ Object *object_resolve_path_component(Object *parent, const gchar *part);
  * @obj: the object to add a property to
  * @name: the name of the property
  * @child: the child object
- * @errp: if an error occurs, a pointer to an area to store the area
+ * @errp: if an error occurs, a pointer to an area to store the error
  *
  * Child properties form the composition tree.  All objects need to be a child
  * of another object.  Objects can only be a child of one object.
@@ -1432,7 +1473,7 @@ void object_property_allow_set_link(const Object *, const char *,
  * @child: a pointer to where the link object reference is stored
  * @check: callback to veto setting or NULL if the property is read-only
  * @flags: additional options for the link
- * @errp: if an error occurs, a pointer to an area to store the area
+ * @errp: if an error occurs, a pointer to an area to store the error
  *
  * Links establish relationships between objects.  Links are unidirectional
  * although two links can be combined to form a bidirectional relationship

@@ -10,7 +10,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu/error-report.h"
 #include "sysemu/replay.h"
 #include "replay-internal.h"
@@ -91,18 +90,6 @@ void replay_disable_events(void)
         events_enabled = false;
         /* Flush events queue before waiting of completion */
         replay_flush_events();
-    }
-}
-
-void replay_clear_events(void)
-{
-    g_assert(replay_mutex_locked());
-
-    while (!QTAILQ_EMPTY(&events_list)) {
-        Event *event = QTAILQ_FIRST(&events_list);
-        QTAILQ_REMOVE(&events_list, event, events);
-
-        g_free(event);
     }
 }
 
@@ -202,6 +189,7 @@ void replay_save_events(int checkpoint)
 {
     g_assert(replay_mutex_locked());
     g_assert(checkpoint != CHECKPOINT_CLOCK_WARP_START);
+    g_assert(checkpoint != CHECKPOINT_CLOCK_VIRTUAL);
     while (!QTAILQ_EMPTY(&events_list)) {
         Event *event = QTAILQ_FIRST(&events_list);
         replay_save_event(event, checkpoint);
@@ -308,7 +296,7 @@ void replay_init_events(void)
 void replay_finish_events(void)
 {
     events_enabled = false;
-    replay_clear_events();
+    replay_flush_events();
 }
 
 bool replay_events_enabled(void)

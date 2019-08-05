@@ -29,20 +29,15 @@ test-i386: test-i386.c test-i386-code16.S test-i386-vm86.S test-i386.h test-i386
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ \
 	   $(<D)/test-i386.c $(<D)/test-i386-code16.S $(<D)/test-i386-vm86.S -lm
 
-# Specialist test runners
-run-runcom: TIMEOUT=30
-run-runcom: runcom pi_10.com
-	$(call run-test,$<,$(QEMU) ./runcom $(I386_SRC)/pi_10.com,"$< on $(TARGET_NAME)")
-
 ifeq ($(SPEED), slow)
 
 test-i386-fprem.ref: test-i386-fprem
 	$(call quiet-command, ./$< > $@,"GENREF","generating $@")
 
 run-test-i386-fprem: TIMEOUT=60
-run-test-i386-fprem: test-i386-fprem
+run-test-i386-fprem: test-i386-fprem test-i386-fprem.ref
 	$(call run-test,test-i386-fprem, $(QEMU) $<,"$< on $(TARGET_NAME)")
-	$(call diff-out,test-i386-fprem, $(I386_SRC)/$<.ref)
+	$(call diff-out,test-i386-fprem, test-i386-fprem.ref)
 else
 run-test-i386-fprem: test-i386-fprem
 	$(call skip-test, $<, "SLOW")

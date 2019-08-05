@@ -69,8 +69,10 @@ int monitor_get_fd(Monitor *mon, const char *fdname, Error **errp)
  * stubs/monitor.c is defined, to make sure monitor.o is discarded
  * otherwise we get duplicate syms at link time.
  */
-Monitor *cur_mon;
-void monitor_init(Chardev *chr, int flags) {}
+__thread Monitor *cur_mon;
+int monitor_vprintf(Monitor *mon, const char *fmt, va_list ap) { abort(); }
+void monitor_init_qmp(Chardev *chr, bool pretty) {}
+void monitor_init_hmp(Chardev *chr, bool use_readline) {}
 
 
 static void test_socket_fd_pass_name_good(void)

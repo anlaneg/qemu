@@ -19,6 +19,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu-common.h"
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
 #include "sysemu/dma.h"
@@ -26,6 +27,7 @@
 #include "hw/pci/msi.h"
 #include "hw/pci/msix.h"
 #include "qemu/iov.h"
+#include "qemu/module.h"
 #include "hw/scsi/scsi.h"
 #include "scsi/constants.h"
 #include "trace.h"
@@ -464,6 +466,7 @@ static void megasas_unmap_frame(MegasasState *s, MegasasCmd *cmd)
     cmd->frame = NULL;
     cmd->pa = 0;
     cmd->pa_size = 0;
+    qemu_sglist_destroy(&cmd->qsg);
     clear_bit(cmd->index, s->frame_map);
 }
 
@@ -476,7 +479,7 @@ static MegasasCmd *megasas_enqueue_frame(MegasasState *s,
 {
     PCIDevice *pcid = PCI_DEVICE(s);
     MegasasCmd *cmd = NULL;
-    int frame_size = MFI_FRAME_SIZE * 16;
+    int frame_size = MEGASAS_MAX_SGE * sizeof(union mfi_sgl);
     hwaddr frame_size_p = frame_size;
     unsigned long index;
 
@@ -580,7 +583,6 @@ static void megasas_complete_frame(MegasasState *s, uint64_t context)
 
 static void megasas_complete_command(MegasasCmd *cmd)
 {
-    qemu_sglist_destroy(&cmd->qsg);
     cmd->iov_size = 0;
     cmd->iov_offset = 0;
 
