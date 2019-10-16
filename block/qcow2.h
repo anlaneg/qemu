@@ -65,6 +65,9 @@
 #define QCOW2_MAX_BITMAPS 65535
 #define QCOW2_MAX_BITMAP_DIRECTORY_SIZE (1024 * QCOW2_MAX_BITMAPS)
 
+/* Maximum of parallel sub-request per guest request */
+#define QCOW2_MAX_WORKERS 8
+
 /* indicate that the refcount of the referenced cluster is exactly one. */
 #define QCOW_OFLAG_COPIED     (1ULL << 63)
 /* indicate that the cluster is compressed (they never have the copied flag) */
@@ -420,6 +423,7 @@ typedef struct QCowL2Meta
      * from @cow_start and @cow_end into one single write operation.
      */
     QEMUIOVector *data_qiov;
+    size_t data_qiov_offset;
 
     /** Pointer to next L2Meta of the same write request */
     struct QCowL2Meta *next;
@@ -757,10 +761,10 @@ ssize_t coroutine_fn
 qcow2_co_decompress(BlockDriverState *bs, void *dest, size_t dest_size,
                     const void *src, size_t src_size);
 int coroutine_fn
-qcow2_co_encrypt(BlockDriverState *bs, uint64_t file_cluster_offset,
-                 uint64_t offset, void *buf, size_t len);
+qcow2_co_encrypt(BlockDriverState *bs, uint64_t host_offset,
+                 uint64_t guest_offset, void *buf, size_t len);
 int coroutine_fn
-qcow2_co_decrypt(BlockDriverState *bs, uint64_t file_cluster_offset,
-                 uint64_t offset, void *buf, size_t len);
+qcow2_co_decrypt(BlockDriverState *bs, uint64_t host_offset,
+                 uint64_t guest_offset, void *buf, size_t len);
 
 #endif

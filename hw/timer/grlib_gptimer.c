@@ -26,7 +26,9 @@
 #include "hw/sparc/grlib.h"
 #include "hw/sysbus.h"
 #include "qemu/timer.h"
+#include "hw/irq.h"
 #include "hw/ptimer.h"
+#include "hw/qdev-properties.h"
 #include "qemu/main-loop.h"
 #include "qemu/module.h"
 
@@ -364,7 +366,7 @@ static void grlib_gptimer_realize(DeviceState *dev, Error **errp)
 
         timer->unit   = unit;
         timer->bh     = qemu_bh_new(grlib_gptimer_hit, timer);
-        timer->ptimer = ptimer_init(timer->bh, PTIMER_POLICY_DEFAULT);
+        timer->ptimer = ptimer_init_with_bh(timer->bh, PTIMER_POLICY_DEFAULT);
         timer->id     = i;
 
         /* One IRQ line for each timer */

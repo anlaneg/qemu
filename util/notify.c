@@ -44,6 +44,11 @@ void notifier_list_notify(NotifierList *list, void *data)
     }
 }
 
+bool notifier_list_empty(NotifierList *list)
+{
+    return QLIST_EMPTY(&list->notifiers);
+}
+
 //含返回值的通知链初始化，添加，移除
 void notifier_with_return_list_init(NotifierWithReturnList *list)
 {

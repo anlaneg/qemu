@@ -18,10 +18,11 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
+#include "hw/irq.h"
 #include "target/ppc/cpu.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "sysemu/reset.h"
 #include "qapi/error.h"
 #include "monitor/monitor.h"
 
@@ -30,6 +31,7 @@
 #include "hw/ppc/fdt.h"
 #include "hw/ppc/pnv.h"
 #include "hw/ppc/pnv_xscom.h"
+#include "hw/qdev-properties.h"
 #include "hw/ppc/pnv_psi.h"
 
 #include <libfdt.h>
@@ -309,7 +311,7 @@ static void pnv_psi_set_xivr(PnvPsi *psi, uint32_t reg, uint64_t val)
      * do for now but a more accurate implementation would instead
      * use a fixed server/prio and a remapper of the generated irq.
      */
-    ics_simple_write_xive(ics, src, server, prio, prio);
+    ics_write_xive(ics, src, server, prio, prio);
 }
 
 static uint64_t pnv_psi_reg_read(PnvPsi *psi, uint32_t offset, bool mmio)
@@ -467,7 +469,7 @@ static void pnv_psi_power8_instance_init(Object *obj)
     Pnv8Psi *psi8 = PNV8_PSI(obj);
 
     object_initialize_child(obj, "ics-psi",  &psi8->ics, sizeof(psi8->ics),
-                            TYPE_ICS_SIMPLE, &error_abort, NULL);
+                            TYPE_ICS, &error_abort, NULL);
 }
 
 static const uint8_t irq_to_xivr[] = {
@@ -512,7 +514,7 @@ static void pnv_psi_power8_realize(DeviceState *dev, Error **errp)
         ics_set_irq_type(ics, i, true);
     }
 
-    psi->qirqs = qemu_allocate_irqs(ics_simple_set_irq, ics, ics->nr_irqs);
+    psi->qirqs = qemu_allocate_irqs(ics_set_irq, ics, ics->nr_irqs);
 
     /* XSCOM region for PSI registers */
     pnv_xscom_region_init(&psi->xscom_regs, OBJECT(dev), &pnv_psi_xscom_ops,

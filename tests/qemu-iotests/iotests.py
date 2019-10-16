@@ -35,6 +35,7 @@ from collections import OrderedDict
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'python'))
 from qemu import qtest
 
+assert sys.version_info >= (3,6)
 
 # This will not work if arguments contain spaces but is necessary if we
 # want to support the override options that ./check supports.
@@ -61,7 +62,6 @@ cachemode = os.environ.get('CACHEMODE')
 qemu_default_machine = os.environ.get('QEMU_DEFAULT_MACHINE')
 
 socket_scm_helper = os.environ.get('SOCKET_SCM_HELPER', 'socket_scm_helper')
-debug = False
 
 luks_default_secret_object = 'secret,id=keysec0,data=' + \
                              os.environ.get('IMGKEYSECRET', '')
@@ -165,6 +165,10 @@ def qemu_io_silent(*args):
                          (-exitcode, ' '.join(args)))
     return exitcode
 
+def get_virtio_scsi_device():
+    if qemu_default_machine == 's390-ccw-virtio':
+        return 'virtio-scsi-ccw'
+    return 'virtio-scsi-pci'
 
 class QemuIoInteractive:
     def __init__(self, *args):
@@ -247,10 +251,7 @@ def image_size(img):
     return json.loads(r)['virtual-size']
 
 def is_str(val):
-    if sys.version_info.major >= 3:
-        return isinstance(val, str)
-    else:
-        return isinstance(val, str) or isinstance(val, unicode)
+    return isinstance(val, str)
 
 test_dir_re = re.compile(r"%s" % test_dir)
 def filter_test_dir(msg):
@@ -359,31 +360,45 @@ class Timeout:
     def timeout(self, signum, frame):
         raise Exception(self.errmsg)
 
+def file_pattern(name):
+    return "{0}-{1}".format(os.getpid(), name)
 
-class FilePath(object):
-    '''An auto-generated filename that cleans itself up.
+class FilePaths(object):
+    """
+    FilePaths is an auto-generated filename that cleans itself up.
 
     Use this context manager to generate filenames and ensure that the file
     gets deleted::
 
-        with TestFilePath('test.img') as img_path:
+        with FilePaths(['test.img']) as img_path:
             qemu_img('create', img_path, '1G')
         # migration_sock_path is automatically deleted
-    '''
-    def __init__(self, name):
-        filename = '{0}-{1}'.format(os.getpid(), name)
-        self.path = os.path.join(test_dir, filename)
+    """
+    def __init__(self, names):
+        self.paths = []
+        for name in names:
+            self.paths.append(os.path.join(test_dir, file_pattern(name)))
 
     def __enter__(self):
-        return self.path
+        return self.paths
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         try:
-            os.remove(self.path)
+            for path in self.paths:
+                os.remove(path)
         except OSError:
             pass
         return False
 
+class FilePath(FilePaths):
+    """
+    FilePath is a specialization of FilePaths that takes a single filename.
+    """
+    def __init__(self, name):
+        super(FilePath, self).__init__([name])
+
+    def __enter__(self):
+        return self.paths[0]
 
 def file_path_remover():
     for path in reversed(file_path_remover.paths):
@@ -408,7 +423,7 @@ def file_path(*names):
 
     paths = []
     for name in names:
-        filename = '{0}-{1}'.format(os.getpid(), name)
+        filename = file_pattern(name)
         path = os.path.join(test_dir, filename)
         file_path_remover.paths.append(path)
         paths.append(path)
@@ -542,7 +557,23 @@ class VM(qtest.QEMUQtestMachine):
 
     # Returns None on success, and an error string on failure
     def run_job(self, job, auto_finalize=True, auto_dismiss=False,
-                pre_finalize=None, use_log=True, wait=60.0):
+                pre_finalize=None, cancel=False, use_log=True, wait=60.0):
+        """
+        run_job moves a job from creation through to dismissal.
+
+        :param job: String. ID of recently-launched job
+        :param auto_finalize: Bool. True if the job was launched with
+                              auto_finalize. Defaults to True.
+        :param auto_dismiss: Bool. True if the job was launched with
+                             auto_dismiss=True. Defaults to False.
+        :param pre_finalize: Callback. A callable that takes no arguments to be
+                             invoked prior to issuing job-finalize, if any.
+        :param cancel: Bool. When true, cancels the job after the pre_finalize
+                       callback.
+        :param use_log: Bool. When false, does not log QMP messages.
+        :param wait: Float. Timeout value specifying how long to wait for any
+                     event, in seconds. Defaults to 60.0.
+        """
         match_device = {'data': {'device': job}}
         match_id = {'data': {'id': job}}
         events = [
@@ -571,7 +602,11 @@ class VM(qtest.QEMUQtestMachine):
             elif status == 'pending' and not auto_finalize:
                 if pre_finalize:
                     pre_finalize()
-                if use_log:
+                if cancel and use_log:
+                    self.qmp_log('job-cancel', id=job)
+                elif cancel:
+                    self.qmp('job-cancel', id=job)
+                elif use_log:
                     self.qmp_log('job-finalize', id=job)
                 else:
                     self.qmp('job-finalize', id=job)
@@ -583,12 +618,55 @@ class VM(qtest.QEMUQtestMachine):
             elif status == 'null':
                 return error
 
+    def enable_migration_events(self, name):
+        log('Enabling migration QMP events on %s...' % name)
+        log(self.qmp('migrate-set-capabilities', capabilities=[
+            {
+                'capability': 'events',
+                'state': True
+            }
+        ]))
+
+    def wait_migration(self):
+        while True:
+            event = self.event_wait('MIGRATION')
+            log(event, filters=[filter_qmp_event])
+            if event['data']['status'] == 'completed':
+                break
+
     def node_info(self, node_name):
         nodes = self.qmp('query-named-block-nodes')
         for x in nodes['return']:
             if x['node-name'] == node_name:
                 return x
         return None
+
+    def query_bitmaps(self):
+        res = self.qmp("query-named-block-nodes")
+        return {device['node-name']: device['dirty-bitmaps']
+                for device in res['return'] if 'dirty-bitmaps' in device}
+
+    def get_bitmap(self, node_name, bitmap_name, recording=None, bitmaps=None):
+        """
+        get a specific bitmap from the object returned by query_bitmaps.
+        :param recording: If specified, filter results by the specified value.
+        :param bitmaps: If specified, use it instead of call query_bitmaps()
+        """
+        if bitmaps is None:
+            bitmaps = self.query_bitmaps()
+
+        for bitmap in bitmaps[node_name]:
+            if bitmap.get('name', '') == bitmap_name:
+                if recording is None:
+                    return bitmap
+                elif bitmap.get('recording') == recording:
+                    return bitmap
+        return None
+
+    def check_bitmap_status(self, node_name, bitmap_name, fields):
+        ret = self.get_bitmap(node_name, bitmap_name)
+
+        return fields.items() <= ret.items()
 
 
 index_re = re.compile(r'([^\[]+)\[([^\]]+)\]')
@@ -842,11 +920,23 @@ def skip_if_unsupported(required_formats=[], read_only=False):
         return func_wrapper
     return skip_test_decorator
 
-def main(supported_fmts=[], supported_oses=['linux'], supported_cache_modes=[],
-         unsupported_fmts=[]):
-    '''Run tests'''
+def execute_unittest(output, verbosity, debug):
+    runner = unittest.TextTestRunner(stream=output, descriptions=True,
+                                     verbosity=verbosity)
+    try:
+        # unittest.main() will use sys.exit(); so expect a SystemExit
+        # exception
+        unittest.main(testRunner=runner)
+    finally:
+        if not debug:
+            sys.stderr.write(re.sub(r'Ran (\d+) tests? in [\d.]+s',
+                                    r'Ran \1 tests', output.getvalue()))
 
-    global debug
+def execute_test(test_function=None,
+                 supported_fmts=[], supported_oses=['linux'],
+                 supported_cache_modes=[], unsupported_fmts=[],
+                 supported_protocols=[], unsupported_protocols=[]):
+    """Run either unittest or script-style tests."""
 
     # We are using TEST_DIR and QEMU_DEFAULT_MACHINE as proxies to
     # indicate that we're not being run via "check". There may be
@@ -859,6 +949,7 @@ def main(supported_fmts=[], supported_oses=['linux'], supported_cache_modes=[],
     debug = '-d' in sys.argv
     verbosity = 1
     verify_image_format(supported_fmts, unsupported_fmts)
+    verify_protocol(supported_protocols, unsupported_protocols)
     verify_platform(supported_oses)
     verify_cache_mode(supported_cache_modes)
 
@@ -869,22 +960,19 @@ def main(supported_fmts=[], supported_oses=['linux'], supported_cache_modes=[],
     else:
         # We need to filter out the time taken from the output so that
         # qemu-iotest can reliably diff the results against master output.
-        if sys.version_info.major >= 3:
-            output = io.StringIO()
-        else:
-            # io.StringIO is for unicode strings, which is not what
-            # 2.x's test runner emits.
-            output = io.BytesIO()
+        output = io.StringIO()
 
     logging.basicConfig(level=(logging.DEBUG if debug else logging.WARN))
 
-    class MyTestRunner(unittest.TextTestRunner):
-        def __init__(self, stream=output, descriptions=True, verbosity=verbosity):
-            unittest.TextTestRunner.__init__(self, stream, descriptions, verbosity)
+    if not test_function:
+        execute_unittest(output, verbosity, debug)
+    else:
+        test_function()
 
-    # unittest.main() will use sys.exit() so expect a SystemExit exception
-    try:
-        unittest.main(testRunner=MyTestRunner)
-    finally:
-        if not debug:
-            sys.stderr.write(re.sub(r'Ran (\d+) tests? in [\d.]+s', r'Ran \1 tests', output.getvalue()))
+def script_main(test_function, *args, **kwargs):
+    """Run script-style tests outside of the unittest framework"""
+    execute_test(test_function, *args, **kwargs)
+
+def main(*args, **kwargs):
+    """Run tests using the unittest framework"""
+    execute_test(None, *args, **kwargs)

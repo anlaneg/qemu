@@ -576,16 +576,16 @@ static void arm_cpu_kvm_set_irq(void *opaque, int irq, int level)
     ARMCPU *cpu = opaque;
     CPUARMState *env = &cpu->env;
     CPUState *cs = CPU(cpu);
-    int kvm_irq = KVM_ARM_IRQ_TYPE_CPU << KVM_ARM_IRQ_TYPE_SHIFT;
     uint32_t linestate_bit;
+    int irq_id;
 
     switch (irq) {
     case ARM_CPU_IRQ:
-        kvm_irq |= KVM_ARM_IRQ_CPU_IRQ;
+        irq_id = KVM_ARM_IRQ_CPU_IRQ;
         linestate_bit = CPU_INTERRUPT_HARD;
         break;
     case ARM_CPU_FIQ:
-        kvm_irq |= KVM_ARM_IRQ_CPU_FIQ;
+        irq_id = KVM_ARM_IRQ_CPU_FIQ;
         linestate_bit = CPU_INTERRUPT_FIQ;
         break;
     default:
@@ -597,9 +597,7 @@ static void arm_cpu_kvm_set_irq(void *opaque, int irq, int level)
     } else {
         env->irq_line_state &= ~linestate_bit;
     }
-
-    kvm_irq |= cs->cpu_index << KVM_ARM_IRQ_VCPU_SHIFT;
-    kvm_set_irq(kvm_state, kvm_irq, level ? 1 : 0);
+    kvm_arm_set_irq(cs->cpu_index, KVM_ARM_IRQ_TYPE_CPU, irq_id, !!level);
 #endif
 }
 
@@ -994,10 +992,6 @@ static Property arm_cpu_has_el3_property =
 static Property arm_cpu_cfgend_property =
             DEFINE_PROP_BOOL("cfgend", ARMCPU, cfgend, false);
 
-/* use property name "pmu" to match other archs and virt tools */
-static Property arm_cpu_has_pmu_property =
-            DEFINE_PROP_BOOL("pmu", ARMCPU, has_pmu, true);
-
 static Property arm_cpu_has_vfp_property =
             DEFINE_PROP_BOOL("vfp", ARMCPU, has_vfp, true);
 
@@ -1019,6 +1013,29 @@ static Property arm_cpu_pmsav7_dregion_property =
             DEFINE_PROP_UNSIGNED_NODEFAULT("pmsav7-dregion", ARMCPU,
                                            pmsav7_dregion,
                                            qdev_prop_uint32, uint32_t);
+
+static bool arm_get_pmu(Object *obj, Error **errp)
+{
+    ARMCPU *cpu = ARM_CPU(obj);
+
+    return cpu->has_pmu;
+}
+
+static void arm_set_pmu(Object *obj, bool value, Error **errp)
+{
+    ARMCPU *cpu = ARM_CPU(obj);
+
+    if (value) {
+        if (kvm_enabled() && !kvm_arm_pmu_supported(CPU(cpu))) {
+            error_setg(errp, "'pmu' feature not supported by KVM on this host");
+            return;
+        }
+        set_feature(&cpu->env, ARM_FEATURE_PMU);
+    } else {
+        unset_feature(&cpu->env, ARM_FEATURE_PMU);
+    }
+    cpu->has_pmu = value;
+}
 
 static void arm_get_init_svtor(Object *obj, Visitor *v, const char *name,
                                void *opaque, Error **errp)
@@ -1094,7 +1111,8 @@ void arm_cpu_post_init(Object *obj)
     }
 
     if (arm_feature(&cpu->env, ARM_FEATURE_PMU)) {
-        qdev_property_add_static(DEVICE(obj), &arm_cpu_has_pmu_property,
+        cpu->has_pmu = true;
+        object_property_add_bool(obj, "pmu", arm_get_pmu, arm_set_pmu,
                                  &error_abort);
     }
 

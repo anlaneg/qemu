@@ -26,8 +26,6 @@
    this API directly.  */
 
 #include "qemu/osdep.h"
-#include "hw/qdev.h"
-#include "sysemu/sysemu.h"
 #include "qapi/error.h"
 #include "qapi/qapi-events-qdev.h"
 #include "qapi/qmp/qerror.h"
@@ -35,8 +33,11 @@
 #include "qemu/error-report.h"
 #include "qemu/option.h"
 #include "hw/hotplug.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "hw/boards.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 
 bool qdev_hotplug = false;
 static bool qdev_hot_added = false;
@@ -234,6 +235,23 @@ HotplugHandler *qdev_get_machine_hotplug_handler(DeviceState *dev)
     }
 
     return NULL;
+}
+
+bool qdev_hotplug_allowed(DeviceState *dev, Error **errp)
+{
+    MachineState *machine;
+    MachineClass *mc;
+    Object *m_obj = qdev_get_machine();
+
+    if (object_dynamic_cast(m_obj, TYPE_MACHINE)) {
+        machine = MACHINE(m_obj);
+        mc = MACHINE_GET_CLASS(machine);
+        if (mc->hotplug_allowed) {
+            return mc->hotplug_allowed(machine, dev, errp);
+        }
+    }
+
+    return true;
 }
 
 HotplugHandler *qdev_get_bus_hotplug_handler(DeviceState *dev)

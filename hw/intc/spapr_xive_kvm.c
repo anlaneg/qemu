@@ -14,6 +14,7 @@
 #include "target/ppc/cpu.h"
 #include "sysemu/cpus.h"
 #include "sysemu/kvm.h"
+#include "sysemu/runstate.h"
 #include "hw/ppc/spapr.h"
 #include "hw/ppc/spapr_cpu_core.h"
 #include "hw/ppc/spapr_xive.h"
@@ -72,10 +73,16 @@ static void kvm_cpu_disable_all(void)
  * XIVE Thread Interrupt Management context (KVM)
  */
 
-static void kvmppc_xive_cpu_set_state(XiveTCTX *tctx, Error **errp)
+void kvmppc_xive_cpu_set_state(XiveTCTX *tctx, Error **errp)
 {
+    SpaprXive *xive = SPAPR_MACHINE(qdev_get_machine())->xive;
     uint64_t state[2];
     int ret;
+
+    /* The KVM XIVE device is not in use yet */
+    if (xive->fd == -1) {
+        return;
+    }
 
     /* word0 and word1 of the OS ring. */
     state[0] = *((uint64_t *) &tctx->regs[TM_QW1_OS]);
@@ -225,14 +232,14 @@ void kvmppc_xive_sync_source(SpaprXive *xive, uint32_t lisn, Error **errp)
  * only need to inform the KVM XIVE device about their type: LSI or
  * MSI.
  */
-void kvmppc_xive_source_reset_one(XiveSource *xsrc, int srcno, Error **errp)
+int kvmppc_xive_source_reset_one(XiveSource *xsrc, int srcno, Error **errp)
 {
     SpaprXive *xive = SPAPR_XIVE(xsrc->xive);
     uint64_t state = 0;
 
     /* The KVM XIVE device is not in use */
     if (xive->fd == -1) {
-        return;
+        return -ENODEV;
     }
 
     if (xive_source_irq_is_lsi(xsrc, srcno)) {
@@ -242,16 +249,21 @@ void kvmppc_xive_source_reset_one(XiveSource *xsrc, int srcno, Error **errp)
         }
     }
 
-    kvm_device_access(xive->fd, KVM_DEV_XIVE_GRP_SOURCE, srcno, &state,
-                      true, errp);
+    return kvm_device_access(xive->fd, KVM_DEV_XIVE_GRP_SOURCE, srcno, &state,
+                             true, errp);
 }
 
 static void kvmppc_xive_source_reset(XiveSource *xsrc, Error **errp)
 {
+    SpaprXive *xive = SPAPR_XIVE(xsrc->xive);
     int i;
 
     for (i = 0; i < xsrc->nr_irqs; i++) {
         Error *local_err = NULL;
+
+        if (!xive_eas_is_valid(&xive->eat[i])) {
+            continue;
+        }
 
         kvmppc_xive_source_reset_one(xsrc, i, &local_err);
         if (local_err) {
@@ -321,11 +333,18 @@ uint64_t kvmppc_xive_esb_rw(XiveSource *xsrc, int srcno, uint32_t offset,
 
 static void kvmppc_xive_source_get_state(XiveSource *xsrc)
 {
+    SpaprXive *xive = SPAPR_XIVE(xsrc->xive);
     int i;
 
     for (i = 0; i < xsrc->nr_irqs; i++) {
+        uint8_t pq;
+
+        if (!xive_eas_is_valid(&xive->eat[i])) {
+            continue;
+        }
+
         /* Perform a load without side effect to retrieve the PQ bits */
-        uint8_t pq = xive_esb_read(xsrc, i, XIVE_ESB_GET);
+        pq = xive_esb_read(xsrc, i, XIVE_ESB_GET);
 
         /* and save PQ locally */
         xive_source_esb_set(xsrc, i, pq);
@@ -514,9 +533,14 @@ static void kvmppc_xive_change_state_handler(void *opaque, int running,
      */
     if (running) {
         for (i = 0; i < xsrc->nr_irqs; i++) {
-            uint8_t pq = xive_source_esb_get(xsrc, i);
+            uint8_t pq;
             uint8_t old_pq;
 
+            if (!xive_eas_is_valid(&xive->eat[i])) {
+                continue;
+            }
+
+            pq = xive_source_esb_get(xsrc, i);
             old_pq = xive_esb_read(xsrc, i, XIVE_ESB_SET_PQ_00 + (pq << 8));
 
             /*
@@ -538,7 +562,13 @@ static void kvmppc_xive_change_state_handler(void *opaque, int running,
      * migration is in progress.
      */
     for (i = 0; i < xsrc->nr_irqs; i++) {
-        uint8_t pq = xive_esb_read(xsrc, i, XIVE_ESB_GET);
+        uint8_t pq;
+
+        if (!xive_eas_is_valid(&xive->eat[i])) {
+            continue;
+        }
+
+        pq = xive_esb_read(xsrc, i, XIVE_ESB_GET);
 
         /*
          * PQ is set to PENDING to possibly catch a triggered
@@ -648,6 +678,17 @@ int kvmppc_xive_post_load(SpaprXive *xive, int version_id)
             continue;
         }
 
+        /*
+         * We can only restore the source config if the source has been
+         * previously set in KVM. Since we don't do that for all interrupts
+         * at reset time anymore, let's do it now.
+         */
+        kvmppc_xive_source_reset_one(&xive->source, i, &local_err);
+        if (local_err) {
+            error_report_err(local_err);
+            return -1;
+        }
+
         kvmppc_xive_set_source_config(xive, i, &xive->eat[i], &local_err);
         if (local_err) {
             error_report_err(local_err);
@@ -655,7 +696,16 @@ int kvmppc_xive_post_load(SpaprXive *xive, int version_id)
         }
     }
 
-    /* Restore the thread interrupt contexts */
+    /*
+     * Restore the thread interrupt contexts of initial CPUs.
+     *
+     * The context of hotplugged CPUs is restored later, by the
+     * 'post_load' handler of the XiveTCTX model because they are not
+     * available at the time the SpaprXive 'post_load' method is
+     * called. We can not restore the context of all CPUs in the
+     * 'post_load' handler of XiveTCTX because the machine is not
+     * necessarily connected to the KVM device at that time.
+     */
     CPU_FOREACH(cs) {
         PowerPCCPU *cpu = POWERPC_CPU(cs);
 

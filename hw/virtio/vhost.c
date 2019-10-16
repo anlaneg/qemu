@@ -16,7 +16,6 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "hw/virtio/vhost.h"
-#include "hw/hw.h"
 #include "qemu/atomic.h"
 #include "qemu/range.h"
 #include "qemu/error-report.h"
@@ -26,6 +25,7 @@
 #include "hw/virtio/virtio-bus.h"
 #include "hw/virtio/virtio-access.h"
 #include "migration/blocker.h"
+#include "migration/qemu-file-types.h"
 #include "sysemu/dma.h"
 #include "trace.h"
 
@@ -452,8 +452,13 @@ static void vhost_commit(MemoryListener *listener)
         changed = true;
     } else {
         /* Same size, lets check the contents */
-        changed = n_old_sections && memcmp(dev->mem_sections, old_sections,
-                         n_old_sections * sizeof(old_sections[0])) != 0;
+        for (int i = 0; i < n_old_sections; i++) {
+            if (!MemoryRegionSection_eq(&old_sections[i],
+                                        &dev->mem_sections[i])) {
+                changed = true;
+                break;
+            }
+        }
     }
 
     trace_vhost_commit(dev->started, changed);
@@ -675,8 +680,9 @@ static void vhost_iommu_region_add(MemoryListener *listener,
                                          iommu_listener);
     struct vhost_iommu *iommu;
     Int128 end;
-    int iommu_idx;
+    int iommu_idx, ret;
     IOMMUMemoryRegion *iommu_mr;
+    Error *err = NULL;
 
     if (!memory_region_is_iommu(section->mr)) {
         return;
@@ -699,7 +705,11 @@ static void vhost_iommu_region_add(MemoryListener *listener,
     iommu->iommu_offset = section->offset_within_address_space -
                           section->offset_within_region;
     iommu->hdev = dev;
-    memory_region_register_iommu_notifier(section->mr, &iommu->n);
+    ret = memory_region_register_iommu_notifier(section->mr, &iommu->n, &err);
+    if (ret) {
+        error_report_err(err);
+        exit(1);
+    }
     QLIST_INSERT_HEAD(&dev->iommu_list, iommu, iommu_next);
     /* TODO: can replay help performance here? */
 }

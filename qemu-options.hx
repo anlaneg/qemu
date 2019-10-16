@@ -254,10 +254,10 @@ This option defines a free-form string that can be used to describe @var{fd}.
 
 You can open an image using pre-opened file descriptors from an fd set:
 @example
-qemu-system-i386
--add-fd fd=3,set=2,opaque="rdwr:/path/to/file"
--add-fd fd=4,set=2,opaque="rdonly:/path/to/file"
--drive file=/dev/fdset/2,index=0,media=disk
+@value{qemu_system} \
+ -add-fd fd=3,set=2,opaque="rdwr:/path/to/file" \
+ -add-fd fd=4,set=2,opaque="rdonly:/path/to/file" \
+ -drive file=/dev/fdset/2,index=0,media=disk
 @end example
 ETEXI
 
@@ -283,7 +283,7 @@ STEXI
 Set default value of @var{driver}'s property @var{prop} to @var{value}, e.g.:
 
 @example
-qemu-system-i386 -global ide-hd.physical_block_size=4096 disk-image.img
+@value{qemu_system_x86} -global ide-hd.physical_block_size=4096 disk-image.img
 @end example
 
 In particular, you can use this to set driver properties for devices which are
@@ -337,11 +337,11 @@ bootindex options. The default is non-strict boot.
 
 @example
 # try to boot from network first, then from hard disk
-qemu-system-i386 -boot order=nc
+@value{qemu_system_x86} -boot order=nc
 # boot from CD-ROM first, switch back to default order after reboot
-qemu-system-i386 -boot once=d
+@value{qemu_system_x86} -boot once=d
 # boot with a splash picture for 5 seconds.
-qemu-system-i386 -boot menu=on,splash=/root/boot.bmp,splash-time=5000
+@value{qemu_system_x86} -boot menu=on,splash=/root/boot.bmp,splash-time=5000
 @end example
 
 Note: The legacy format '-boot @var{drives}' is still supported but its
@@ -370,7 +370,7 @@ For example, the following command-line sets the guest startup RAM size to
 memory the guest can reach to 4GB:
 
 @example
-qemu-system-x86_64 -m 1G,slots=3,maxmem=4G
+@value{qemu_system} -m 1G,slots=3,maxmem=4G
 @end example
 
 If @var{slots} and @var{maxmem} are not specified, memory hotplug won't
@@ -439,13 +439,13 @@ DEF("audiodev", HAS_ARG, QEMU_OPTION_audiodev,
     "                in|out.format= sample format to use with fixed settings\n"
     "                valid values: s8, s16, s32, u8, u16, u32\n"
     "                in|out.voices= number of voices to use\n"
-    "                in|out.buffer-len= length of buffer in microseconds\n"
+    "                in|out.buffer-length= length of buffer in microseconds\n"
     "-audiodev none,id=id,[,prop[=value][,...]]\n"
     "                dummy driver that discards all output\n"
 #ifdef CONFIG_AUDIO_ALSA
     "-audiodev alsa,id=id[,prop[=value][,...]]\n"
     "                in|out.dev= name of the audio device to use\n"
-    "                in|out.period-len= length of period in microseconds\n"
+    "                in|out.period-length= length of period in microseconds\n"
     "                in|out.try-poll= attempt to use poll mode\n"
     "                threshold= threshold (in microseconds) when playback starts\n"
 #endif
@@ -524,7 +524,7 @@ Valid values are: @code{s8}, @code{s16}, @code{s32}, @code{u8},
 @item in|out.voices=@var{voices}
 Specify the number of @var{voices} to use.  Default is 1.
 
-@item in|out.buffer=@var{usecs}
+@item in|out.buffer-length=@var{usecs}
 Sets the size of the buffer in microseconds.
 
 @end table
@@ -545,7 +545,7 @@ ALSA specific options are:
 Specify the ALSA @var{device} to use for input and/or output.  Default
 is @code{default}.
 
-@item in|out.period-len=@var{usecs}
+@item in|out.period-length=@var{usecs}
 Sets the period length in microseconds.
 
 @item in|out.try-poll=on|off
@@ -666,15 +666,15 @@ STEXI
 @item -soundhw @var{card1}[,@var{card2},...] or -soundhw all
 @findex -soundhw
 Enable audio and selected sound hardware. Use 'help' to print all
-available sound hardware.
+available sound hardware. For example:
 
 @example
-qemu-system-i386 -soundhw sb16,adlib disk.img
-qemu-system-i386 -soundhw es1370 disk.img
-qemu-system-i386 -soundhw ac97 disk.img
-qemu-system-i386 -soundhw hda disk.img
-qemu-system-i386 -soundhw all disk.img
-qemu-system-i386 -soundhw help
+@value{qemu_system_x86} -soundhw sb16,adlib disk.img
+@value{qemu_system_x86} -soundhw es1370 disk.img
+@value{qemu_system_x86} -soundhw ac97 disk.img
+@value{qemu_system_x86} -soundhw hda disk.img
+@value{qemu_system_x86} -soundhw all disk.img
+@value{qemu_system_x86} -soundhw help
 @end example
 
 Note that Linux's i810_audio OSS kernel (for AC97) module might
@@ -701,7 +701,7 @@ possible drivers and properties, use @code{-device help} and
 @code{-device @var{driver},help}.
 
 Some drivers are:
-@item -device ipmi-bmc-sim,id=@var{id}[,slave_addr=@var{val}][,sdrfile=@var{file}][,furareasize=@var{val}][,furdatafile=@var{file}]
+@item -device ipmi-bmc-sim,id=@var{id}[,slave_addr=@var{val}][,sdrfile=@var{file}][,furareasize=@var{val}][,furdatafile=@var{file}][,guid=@var{uuid}]
 
 Add an IPMI BMC.  This is a simulation of a hardware management
 interface processor that normally sits on a system.  It provides
@@ -714,8 +714,8 @@ controllers.  If you don't know what this means, it is safe to ignore
 it.
 
 @table @option
-@item bmc=@var{id}
-The BMC to connect to, one of ipmi-bmc-sim or ipmi-bmc-extern above.
+@item id=@var{id}
+The BMC id for interfaces to use this device.
 @item slave_addr=@var{val}
 Define slave address to use for the BMC.  The default is 0x20.
 @item sdrfile=@var{file}
@@ -724,6 +724,10 @@ file containing raw Sensor Data Records (SDR) data. The default is none.
 size of a Field Replaceable Unit (FRU) area.  The default is 1024.
 @item frudatafile=@var{file}
 file containing raw Field Replaceable Unit (FRU) inventory data. The default is none.
+@item guid=@var{uuid}
+value for the GUID for the BMC, in standard UUID format.  If this is set,
+get "Get GUID" command to the BMC will return it.  Otherwise "Get GUID"
+will return an error.
 @end table
 
 @item -device ipmi-bmc-extern,id=@var{id},chardev=@var{id}[,slave_addr=@var{val}]
@@ -1149,50 +1153,50 @@ is off.
 
 Instead of @option{-cdrom} you can use:
 @example
-qemu-system-i386 -drive file=file,index=2,media=cdrom
+@value{qemu_system} -drive file=file,index=2,media=cdrom
 @end example
 
 Instead of @option{-hda}, @option{-hdb}, @option{-hdc}, @option{-hdd}, you can
 use:
 @example
-qemu-system-i386 -drive file=file,index=0,media=disk
-qemu-system-i386 -drive file=file,index=1,media=disk
-qemu-system-i386 -drive file=file,index=2,media=disk
-qemu-system-i386 -drive file=file,index=3,media=disk
+@value{qemu_system} -drive file=file,index=0,media=disk
+@value{qemu_system} -drive file=file,index=1,media=disk
+@value{qemu_system} -drive file=file,index=2,media=disk
+@value{qemu_system} -drive file=file,index=3,media=disk
 @end example
 
 You can open an image using pre-opened file descriptors from an fd set:
 @example
-qemu-system-i386
--add-fd fd=3,set=2,opaque="rdwr:/path/to/file"
--add-fd fd=4,set=2,opaque="rdonly:/path/to/file"
--drive file=/dev/fdset/2,index=0,media=disk
+@value{qemu_system} \
+ -add-fd fd=3,set=2,opaque="rdwr:/path/to/file" \
+ -add-fd fd=4,set=2,opaque="rdonly:/path/to/file" \
+ -drive file=/dev/fdset/2,index=0,media=disk
 @end example
 
 You can connect a CDROM to the slave of ide0:
 @example
-qemu-system-i386 -drive file=file,if=ide,index=1,media=cdrom
+@value{qemu_system_x86} -drive file=file,if=ide,index=1,media=cdrom
 @end example
 
 If you don't specify the "file=" argument, you define an empty drive:
 @example
-qemu-system-i386 -drive if=ide,index=1,media=cdrom
+@value{qemu_system_x86} -drive if=ide,index=1,media=cdrom
 @end example
 
 Instead of @option{-fda}, @option{-fdb}, you can use:
 @example
-qemu-system-i386 -drive file=file,index=0,if=floppy
-qemu-system-i386 -drive file=file,index=1,if=floppy
+@value{qemu_system_x86} -drive file=file,index=0,if=floppy
+@value{qemu_system_x86} -drive file=file,index=1,if=floppy
 @end example
 
 By default, @var{interface} is "ide" and @var{index} is automatically
 incremented:
 @example
-qemu-system-i386 -drive file=a -drive file=b"
+@value{qemu_system_x86} -drive file=a -drive file=b"
 @end example
 is interpreted like:
 @example
-qemu-system-i386 -hda a -hdb b
+@value{qemu_system_x86} -hda a -hdb b
 @end example
 ETEXI
 
@@ -1335,7 +1339,7 @@ ETEXI
 
 DEF("virtfs", HAS_ARG, QEMU_OPTION_virtfs,
     "-virtfs local,path=path,mount_tag=tag,security_model=mapped-xattr|mapped-file|passthrough|none\n"
-    "        [,id=id][,writeout=immediate][,readonly][,fmode=fmode][,dmode=dmode]\n"
+    "        [,id=id][,writeout=immediate][,readonly][,fmode=fmode][,dmode=dmode][,multidevs=remap|forbid|warn]\n"
     "-virtfs proxy,mount_tag=tag,socket=socket[,id=id][,writeout=immediate][,readonly]\n"
     "-virtfs proxy,mount_tag=tag,sock_fd=sock_fd[,id=id][,writeout=immediate][,readonly]\n"
     "-virtfs synth,mount_tag=tag[,id=id][,readonly]\n",
@@ -1343,7 +1347,7 @@ DEF("virtfs", HAS_ARG, QEMU_OPTION_virtfs,
 
 STEXI
 
-@item -virtfs local,path=@var{path},mount_tag=@var{mount_tag} ,security_model=@var{security_model}[,writeout=@var{writeout}][,readonly] [,fmode=@var{fmode}][,dmode=@var{dmode}]
+@item -virtfs local,path=@var{path},mount_tag=@var{mount_tag} ,security_model=@var{security_model}[,writeout=@var{writeout}][,readonly] [,fmode=@var{fmode}][,dmode=@var{dmode}][,multidevs=@var{multidevs}]
 @itemx -virtfs proxy,socket=@var{socket},mount_tag=@var{mount_tag} [,writeout=@var{writeout}][,readonly]
 @itemx -virtfs proxy,sock_fd=@var{sock_fd},mount_tag=@var{mount_tag} [,writeout=@var{writeout}][,readonly]
 @itemx -virtfs synth,mount_tag=@var{mount_tag}
@@ -1399,6 +1403,28 @@ Specifies the default mode for newly created directories on the host. Works
 only with security models "mapped-xattr" and "mapped-file".
 @item mount_tag=@var{mount_tag}
 Specifies the tag name to be used by the guest to mount this export point.
+@item multidevs=@var{multidevs}
+Specifies how to deal with multiple devices being shared with a 9p export.
+Supported behaviours are either "remap", "forbid" or "warn". The latter is
+the default behaviour on which virtfs 9p expects only one device to be
+shared with the same export, and if more than one device is shared and
+accessed via the same 9p export then only a warning message is logged
+(once) by qemu on host side. In order to avoid file ID collisions on guest
+you should either create a separate virtfs export for each device to be
+shared with guests (recommended way) or you might use "remap" instead which
+allows you to share multiple devices with only one export instead, which is
+achieved by remapping the original inode numbers from host to guest in a
+way that would prevent such collisions. Remapping inodes in such use cases
+is required because the original device IDs from host are never passed and
+exposed on guest. Instead all files of an export shared with virtfs always
+share the same device id on guest. So two files with identical inode
+numbers but from actually different devices on host would otherwise cause a
+file ID collision and hence potential misbehaviours on guest. "forbid" on
+the other hand assumes like "warn" that only one device is shared by the
+same export, however it will not only log a warning message but also
+deny access to additional devices on guest. Note though that "forbid" does
+currently not block all possible file access operations (e.g. readdir()
+would still return entries from other devices).
 @end table
 ETEXI
 
@@ -1436,12 +1462,15 @@ STEXI
 ETEXI
 
 DEF("usb", 0, QEMU_OPTION_usb,
-    "-usb            enable the USB driver (if it is not used by default yet)\n",
+    "-usb            enable on-board USB host controller (if not enabled by default)\n",
     QEMU_ARCH_ALL)
 STEXI
 @item -usb
 @findex -usb
-Enable the USB driver (if it is not used by default yet).
+Enable USB emulation on machine types with an on-board USB host controller (if
+not enabled by default).  Note that on-board USB host controllers may not
+support USB 3.0.  In this case @option{-device qemu-xhci} can be used instead
+on machines with PCI.
 ETEXI
 
 DEF("usbdevice", HAS_ARG, QEMU_OPTION_usbdevice,
@@ -1978,6 +2007,12 @@ can help the device and guest to keep up and not lose events in case
 events are arriving in bulk.  Possible causes for the latter are flaky
 network connections, or scripts for automated testing.
 
+@item audiodev=@var{audiodev}
+
+Use the specified @var{audiodev} when the VNC client requests audio
+transmission. When not using an -audiodev argument, this option must
+be omitted, otherwise is must be present and specify a valid audiodev.
+
 @end table
 ETEXI
 
@@ -2263,8 +2298,8 @@ The following two example do exactly the same, to show how @option{-nic} can
 be used to shorten the command line length (note that the e1000 is the default
 on i386, so the @option{model=e1000} parameter could even be omitted here, too):
 @example
-qemu-system-i386 -netdev user,id=n1,ipv6=off -device e1000,netdev=n1,mac=52:54:98:76:54:32
-qemu-system-i386 -nic user,ipv6=off,model=e1000,mac=52:54:98:76:54:32
+@value{qemu_system} -netdev user,id=n1,ipv6=off -device e1000,netdev=n1,mac=52:54:98:76:54:32
+@value{qemu_system} -nic user,ipv6=off,model=e1000,mac=52:54:98:76:54:32
 @end example
 
 @item -nic none
@@ -2335,7 +2370,7 @@ can not be resolved.
 
 Example:
 @example
-qemu-system-i386 -nic user,dnssearch=mgmt.example.org,dnssearch=example.org
+@value{qemu_system} -nic user,dnssearch=mgmt.example.org,dnssearch=example.org
 @end example
 
 @item domainname=@var{domain}
@@ -2359,7 +2394,7 @@ a guest from a local directory.
 
 Example (using pxelinux):
 @example
-qemu-system-i386 -hda linux.img -boot n -device e1000,netdev=n1 \
+@value{qemu_system} -hda linux.img -boot n -device e1000,netdev=n1 \
     -netdev user,id=n1,tftp=/path/to/tftp/files,bootfile=/pxelinux.0
 @end example
 
@@ -2393,7 +2428,7 @@ screen 0, use the following:
 
 @example
 # on the host
-qemu-system-i386 -nic user,hostfwd=tcp:127.0.0.1:6001-:6000
+@value{qemu_system} -nic user,hostfwd=tcp:127.0.0.1:6001-:6000
 # this host xterm should open in the guest X11 server
 xterm -display :1
 @end example
@@ -2403,7 +2438,7 @@ the guest, use the following:
 
 @example
 # on the host
-qemu-system-i386 -nic user,hostfwd=tcp::5555-:23
+@value{qemu_system} -nic user,hostfwd=tcp::5555-:23
 telnet localhost 5555
 @end example
 
@@ -2422,7 +2457,7 @@ lifetime, like in the following example:
 @example
 # open 10.10.1.1:4321 on bootup, connect 10.0.2.100:1234 to it whenever
 # the guest accesses it
-qemu-system-i386 -nic user,guestfwd=tcp:10.0.2.100:1234-tcp:10.10.1.1:4321
+@value{qemu_system} -nic user,guestfwd=tcp:10.0.2.100:1234-tcp:10.10.1.1:4321
 @end example
 
 Or you can execute a command on every TCP connection established by the guest,
@@ -2431,7 +2466,7 @@ so that QEMU behaves similar to an inetd process for that virtual server:
 @example
 # call "netcat 10.10.1.1 4321" on every TCP connection to 10.0.2.100:1234
 # and connect the TCP stream to its stdin/stdout
-qemu-system-i386 -nic  'user,id=n1,guestfwd=tcp:10.0.2.100:1234-cmd:netcat 10.10.1.1 4321'
+@value{qemu_system} -nic  'user,id=n1,guestfwd=tcp:10.0.2.100:1234-cmd:netcat 10.10.1.1 4321'
 @end example
 
 @end table
@@ -2458,13 +2493,13 @@ Examples:
 
 @example
 #launch a QEMU instance with the default network script
-qemu-system-i386 linux.img -nic tap
+@value{qemu_system} linux.img -nic tap
 @end example
 
 @example
 #launch a QEMU instance with two NICs, each one connected
 #to a TAP device
-qemu-system-i386 linux.img \
+@value{qemu_system} linux.img \
         -netdev tap,id=nd0,ifname=tap0 -device e1000,netdev=nd0 \
         -netdev tap,id=nd1,ifname=tap1 -device rtl8139,netdev=nd1
 @end example
@@ -2472,7 +2507,7 @@ qemu-system-i386 linux.img \
 @example
 #launch a QEMU instance with the default network helper to
 #connect a TAP device to bridge br0
-qemu-system-i386 linux.img -device virtio-net-pci,netdev=n1 \
+@value{qemu_system} linux.img -device virtio-net-pci,netdev=n1 \
         -netdev tap,id=n1,"helper=/path/to/qemu-bridge-helper"
 @end example
 
@@ -2489,13 +2524,13 @@ Examples:
 @example
 #launch a QEMU instance with the default network helper to
 #connect a TAP device to bridge br0
-qemu-system-i386 linux.img -netdev bridge,id=n1 -device virtio-net,netdev=n1
+@value{qemu_system} linux.img -netdev bridge,id=n1 -device virtio-net,netdev=n1
 @end example
 
 @example
 #launch a QEMU instance with the default network helper to
 #connect a TAP device to bridge qemubr0
-qemu-system-i386 linux.img -netdev bridge,br=qemubr0,id=n1 -device virtio-net,netdev=n1
+@value{qemu_system} linux.img -netdev bridge,br=qemubr0,id=n1 -device virtio-net,netdev=n1
 @end example
 
 @item -netdev socket,id=@var{id}[,fd=@var{h}][,listen=[@var{host}]:@var{port}][,connect=@var{host}:@var{port}]
@@ -2510,11 +2545,11 @@ specifies an already opened TCP socket.
 Example:
 @example
 # launch a first QEMU instance
-qemu-system-i386 linux.img \
+@value{qemu_system} linux.img \
                  -device e1000,netdev=n1,mac=52:54:00:12:34:56 \
                  -netdev socket,id=n1,listen=:1234
 # connect the network of this instance to the network of the first instance
-qemu-system-i386 linux.img \
+@value{qemu_system} linux.img \
                  -device e1000,netdev=n2,mac=52:54:00:12:34:57 \
                  -netdev socket,id=n2,connect=127.0.0.1:1234
 @end example
@@ -2539,15 +2574,15 @@ Use @option{fd=h} to specify an already opened UDP multicast socket.
 Example:
 @example
 # launch one QEMU instance
-qemu-system-i386 linux.img \
+@value{qemu_system} linux.img \
                  -device e1000,netdev=n1,mac=52:54:00:12:34:56 \
                  -netdev socket,id=n1,mcast=230.0.0.1:1234
 # launch another QEMU instance on same "bus"
-qemu-system-i386 linux.img \
+@value{qemu_system} linux.img \
                  -device e1000,netdev=n2,mac=52:54:00:12:34:57 \
                  -netdev socket,id=n2,mcast=230.0.0.1:1234
 # launch yet another QEMU instance on same "bus"
-qemu-system-i386 linux.img \
+@value{qemu_system} linux.img \
                  -device e1000,netdev=n3,mac=52:54:00:12:34:58 \
                  -netdev socket,id=n3,mcast=230.0.0.1:1234
 @end example
@@ -2555,7 +2590,7 @@ qemu-system-i386 linux.img \
 Example (User Mode Linux compat.):
 @example
 # launch QEMU instance (note mcast address selected is UML's default)
-qemu-system-i386 linux.img \
+@value{qemu_system} linux.img \
                  -device e1000,netdev=n1,mac=52:54:00:12:34:56 \
                  -netdev socket,id=n1,mcast=239.192.168.1:1102
 # launch UML
@@ -2564,7 +2599,7 @@ qemu-system-i386 linux.img \
 
 Example (send packets from host's 1.2.3.4):
 @example
-qemu-system-i386 linux.img \
+@value{qemu_system} linux.img \
                  -device e1000,netdev=n1,mac=52:54:00:12:34:56 \
                  -netdev socket,id=n1,mcast=239.192.168.1:1102,localaddr=1.2.3.4
 @end example
@@ -2624,7 +2659,7 @@ brctl addif br-lan vmtunnel0
 # on 4.3.2.1
 # launch QEMU instance - if your network has reorder or is very lossy add ,pincounter
 
-qemu-system-i386 linux.img -device e1000,netdev=n1 \
+@value{qemu_system} linux.img -device e1000,netdev=n1 \
     -netdev l2tpv3,id=n1,src=4.2.3.1,dst=1.2.3.4,udp,srcport=16384,dstport=16384,rxsession=0xffffffff,txsession=0xffffffff,counter
 
 @end example
@@ -2641,7 +2676,7 @@ Example:
 # launch vde switch
 vde_switch -F -sock /tmp/myswitch
 # launch QEMU instance
-qemu-system-i386 linux.img -nic vde,sock=/tmp/myswitch
+@value{qemu_system} linux.img -nic vde,sock=/tmp/myswitch
 @end example
 
 @item -netdev vhost-user,chardev=@var{id}[,vhostforce=on|off][,queues=n]
@@ -3098,7 +3133,7 @@ and communicate.  Requires the Linux @code{vhci} driver installed.  Can
 be used as following:
 
 @example
-qemu-system-i386 [...OPTIONS...] -bt hci,vlan=5 -bt vhci,vlan=5
+@value{qemu_system} [...OPTIONS...] -bt hci,vlan=5 -bt vhci,vlan=5
 @end example
 
 @item -bt device:@var{dev}[,vlan=@var{n}]
@@ -3592,7 +3627,7 @@ connections will likely be TCP-based, but also UDP, pseudo TTY, or even
 stdio are reasonable use case. The latter is allowing to start QEMU from
 within gdb and establish the connection via a pipe:
 @example
-(gdb) target remote | exec qemu-system-i386 -gdb stdio ...
+(gdb) target remote | exec @value{qemu_system} -gdb stdio ...
 @end example
 ETEXI
 
@@ -4147,7 +4182,7 @@ STEXI
 Enable FIPS 140-2 compliance mode.
 ETEXI
 
-HXCOMM Deprecated by -machine accel=tcg property
+HXCOMM Deprecated by -accel tcg
 DEF("no-kvm", 0, QEMU_OPTION_no_kvm, "", QEMU_ARCH_I386)
 
 DEF("msg", HAS_ARG, QEMU_OPTION_msg,
@@ -4322,6 +4357,13 @@ Please refer to @option{memory-backend-file} for a description of the
 other options.
 
 The @option{share} boolean option is @var{on} by default with memfd.
+
+@item -object rng-builtin,id=@var{id}
+
+Creates a random number generator backend which obtains entropy from
+QEMU builtin functions. The @option{id} parameter is a unique ID that
+will be used to reference this entropy backend from the @option{virtio-rng}
+device. By default, the @option{virtio-rng} device uses this RNG backend.
 
 @item -object rng-random,id=@var{id},filename=@var{/dev/random}
 
@@ -4562,7 +4604,7 @@ which specify the queue number of cryptodev backend, the default of
 
 @example
 
- # qemu-system-x86_64 \
+ # @value{qemu_system} \
    [...] \
        -object cryptodev-backend-builtin,id=cryptodev0 \
        -device virtio-crypto-pci,id=crypto0,cryptodev=cryptodev0 \
@@ -4582,7 +4624,7 @@ of cryptodev backend for multiqueue vhost-user, the default of @var{queues} is 1
 
 @example
 
- # qemu-system-x86_64 \
+ # @value{qemu_system} \
    [...] \
        -chardev socket,id=chardev0,path=/path/to/socket \
        -object cryptodev-vhost-user,id=cryptodev0,chardev=chardev0 \
@@ -4618,14 +4660,14 @@ The simplest (insecure) usage is to provide the secret inline
 
 @example
 
- # $QEMU -object secret,id=sec0,data=letmein,format=raw
+ # @value{qemu_system} -object secret,id=sec0,data=letmein,format=raw
 
 @end example
 
 The simplest secure usage is to provide the secret via a file
 
  # printf "letmein" > mypasswd.txt
- # $QEMU -object secret,id=sec0,file=mypasswd.txt,format=raw
+ # @value{qemu_system} -object secret,id=sec0,file=mypasswd.txt,format=raw
 
 For greater security, AES-256-CBC should be used. To illustrate usage,
 consider the openssl command line tool which can encrypt the data. Note
@@ -4661,7 +4703,7 @@ and specify that to be used to decrypt the user password. Pass the
 contents of @code{iv.b64} to the second secret
 
 @example
- # $QEMU \
+ # @value{qemu_system} \
      -object secret,id=secmaster0,format=base64,file=key.b64 \
      -object secret,id=sec0,keyid=secmaster0,format=base64,\
          data=$SECRET,iv=$(<iv.b64)
@@ -4704,7 +4746,7 @@ negotiate keys used for attestation. The file must be encoded in base64.
 
 e.g to launch a SEV guest
 @example
- # $QEMU \
+ # @value{qemu_system_x86} \
      ......
      -object sev-guest,id=sev0,cbitpos=47,reduced-phys-bits=5 \
      -machine ...,memory-encryption=sev0
@@ -4726,7 +4768,7 @@ any commas in the distinguished name.
 An example authorization object to validate a x509 distinguished name
 would look like:
 @example
- # $QEMU \
+ # @value{qemu_system} \
      ...
      -object 'authz-simple,id=auth0,identity=CN=laptop.example.com,,O=Example Org,,L=London,,ST=London,,C=GB' \
      ...
@@ -4775,7 +4817,7 @@ a TLS x509 distinguished name, or a SASL username.
 An example authorization object to validate a SASL username
 would look like:
 @example
- # $QEMU \
+ # @value{qemu_system} \
      ...
      -object authz-simple,id=auth0,filename=/etc/qemu/vnc-sasl.acl,refresh=yes
      ...
@@ -4793,7 +4835,7 @@ An example authorization object to validate a TLS x509 distinguished
 name would look like:
 
 @example
- # $QEMU \
+ # @value{qemu_system} \
      ...
      -object authz-pam,id=auth0,service=qemu-vnc
      ...

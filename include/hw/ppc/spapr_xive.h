@@ -10,6 +10,7 @@
 #ifndef PPC_SPAPR_XIVE_H
 #define PPC_SPAPR_XIVE_H
 
+#include "hw/ppc/spapr_irq.h"
 #include "hw/ppc/xive.h"
 
 #define TYPE_SPAPR_XIVE "spapr-xive"
@@ -53,8 +54,8 @@ typedef struct SpaprXive {
  */
 #define SPAPR_XIVE_BLOCK_ID 0x0
 
-bool spapr_xive_irq_claim(SpaprXive *xive, uint32_t lisn, bool lsi);
-bool spapr_xive_irq_free(SpaprXive *xive, uint32_t lisn);
+int spapr_xive_irq_claim(SpaprXive *xive, int lisn, bool lsi, Error **errp);
+void spapr_xive_irq_free(SpaprXive *xive, int lisn);
 void spapr_xive_pic_print_info(SpaprXive *xive, Monitor *mon);
 int spapr_xive_post_load(SpaprXive *xive, int version_id);
 

@@ -16,9 +16,13 @@
 #include "qemu/iov.h"
 #include "qemu/module.h"
 #include "qemu/error-report.h"
+#include "qemu/main-loop.h"
 #include "trace.h"
 #include "hw/block/block.h"
+#include "hw/qdev-properties.h"
 #include "sysemu/blockdev.h"
+#include "sysemu/sysemu.h"
+#include "sysemu/runstate.h"
 #include "hw/virtio/virtio-blk.h"
 #include "dataplane/virtio-blk.h"
 #include "scsi/constants.h"
@@ -26,6 +30,7 @@
 # include <scsi/sg.h>
 #endif
 #include "hw/virtio/virtio-bus.h"
+#include "migration/qemu-file-types.h"
 #include "hw/virtio/virtio-access.h"
 
 /* Config size before the discard support (hide associated config fields) */
@@ -1082,11 +1087,24 @@ static int virtio_blk_load_device(VirtIODevice *vdev, QEMUFile *f,
     return 0;
 }
 
+static void virtio_resize_cb(void *opaque)
+{
+    VirtIODevice *vdev = opaque;
+
+    assert(qemu_get_current_aio_context() == qemu_get_aio_context());
+    virtio_notify_config(vdev);
+}
+
 static void virtio_blk_resize(void *opaque)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(opaque);
 
-    virtio_notify_config(vdev);
+    /*
+     * virtio_notify_config() needs to acquire the global mutex,
+     * so it can't be called from an iothread. Instead, schedule
+     * it to be run in the main context BH.
+     */
+    aio_bh_schedule_oneshot(qemu_get_aio_context(), virtio_resize_cb, vdev);
 }
 
 static const BlockDevOps virtio_block_ops = {

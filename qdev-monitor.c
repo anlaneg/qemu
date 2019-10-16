@@ -18,8 +18,8 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/qdev.h"
 #include "hw/sysbus.h"
+#include "monitor/hmp.h"
 #include "monitor/monitor.h"
 #include "monitor/qdev.h"
 #include "sysemu/arch_init.h"
@@ -33,6 +33,7 @@
 #include "qemu/option.h"
 #include "qemu/qemu-print.h"
 #include "sysemu/block-backend.h"
+#include "sysemu/sysemu.h"
 #include "migration/misc.h"
 
 /*
@@ -614,6 +615,13 @@ DeviceState *qdev_device_add(QemuOpts *opts, Error **errp)
     /* create device */
     dev = DEVICE(object_new(driver));
 
+    /* Check whether the hotplug is allowed by the machine */
+    if (qdev_hotplug && !qdev_hotplug_allowed(dev, &err)) {
+        /* Error must be set in the machine hook */
+        assert(err);
+        goto err_del_dev;
+    }
+
     if (bus) {
         qdev_set_parent_bus(dev, bus);
     } else if (qdev_hotplug && !qdev_get_machine_hotplug_handler(dev)) {
@@ -842,6 +850,23 @@ void qmp_device_del(const char *id, Error **errp)
     if (dev != NULL) {
         qdev_unplug(dev, errp);
     }
+}
+
+void hmp_device_add(Monitor *mon, const QDict *qdict)
+{
+    Error *err = NULL;
+
+    qmp_device_add((QDict *)qdict, NULL, &err);
+    hmp_handle_error(mon, &err);
+}
+
+void hmp_device_del(Monitor *mon, const QDict *qdict)
+{
+    const char *id = qdict_get_str(qdict, "id");
+    Error *err = NULL;
+
+    qmp_device_del(id, &err);
+    hmp_handle_error(mon, &err);
 }
 
 BlockBackend *blk_by_qdev_id(const char *id, Error **errp)

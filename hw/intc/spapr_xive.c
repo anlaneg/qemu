@@ -14,6 +14,8 @@
 #include "qemu/error-report.h"
 #include "target/ppc/cpu.h"
 #include "sysemu/cpus.h"
+#include "sysemu/reset.h"
+#include "migration/vmstate.h"
 #include "monitor/monitor.h"
 #include "hw/ppc/fdt.h"
 #include "hw/ppc/spapr.h"
@@ -21,6 +23,7 @@
 #include "hw/ppc/spapr_xive.h"
 #include "hw/ppc/xive.h"
 #include "hw/ppc/xive_regs.h"
+#include "hw/qdev-properties.h"
 
 /*
  * XIVE Virtualization Controller BAR and Thread Managment BAR that we
@@ -143,7 +146,6 @@ static void spapr_xive_end_pic_print_info(SpaprXive *xive, XiveEND *end,
                    priority, qindex, qentries, qaddr_base, qgen);
 
     xive_end_queue_pic_print_info(end, 6, mon);
-    monitor_printf(mon, "]");
 }
 
 void spapr_xive_pic_print_info(SpaprXive *xive, Monitor *mon)
@@ -526,40 +528,37 @@ static void spapr_xive_register_types(void)
 
 type_init(spapr_xive_register_types)
 
-bool spapr_xive_irq_claim(SpaprXive *xive, uint32_t lisn, bool lsi)
+int spapr_xive_irq_claim(SpaprXive *xive, int lisn, bool lsi, Error **errp)
 {
     XiveSource *xsrc = &xive->source;
 
-    if (lisn >= xive->nr_irqs) {
-        return false;
+    assert(lisn < xive->nr_irqs);
+
+    if (xive_eas_is_valid(&xive->eat[lisn])) {
+        error_setg(errp, "IRQ %d is not free", lisn);
+        return -EBUSY;
     }
 
-    xive->eat[lisn].w |= cpu_to_be64(EAS_VALID);
+    /*
+     * Set default values when allocating an IRQ number
+     */
+    xive->eat[lisn].w |= cpu_to_be64(EAS_VALID | EAS_MASKED);
     if (lsi) {
         xive_source_irq_set_lsi(xsrc, lisn);
     }
 
     if (kvm_irqchip_in_kernel()) {
-        Error *local_err = NULL;
-
-        kvmppc_xive_source_reset_one(xsrc, lisn, &local_err);
-        if (local_err) {
-            error_report_err(local_err);
-            return false;
-        }
+        return kvmppc_xive_source_reset_one(xsrc, lisn, errp);
     }
 
-    return true;
+    return 0;
 }
 
-bool spapr_xive_irq_free(SpaprXive *xive, uint32_t lisn)
+void spapr_xive_irq_free(SpaprXive *xive, int lisn)
 {
-    if (lisn >= xive->nr_irqs) {
-        return false;
-    }
+    assert(lisn < xive->nr_irqs);
 
     xive->eat[lisn].w &= cpu_to_be64(~EAS_VALID);
-    return true;
 }
 
 /*

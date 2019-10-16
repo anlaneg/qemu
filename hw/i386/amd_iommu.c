@@ -19,10 +19,12 @@
  *
  * Cache implementation inspired by hw/i386/intel_iommu.c
  */
+
 #include "qemu/osdep.h"
 #include "hw/i386/pc.h"
 #include "hw/pci/msi.h"
 #include "hw/pci/pci_bus.h"
+#include "migration/vmstate.h"
 #include "amd_iommu.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
@@ -1464,18 +1466,21 @@ static const MemoryRegionOps mmio_mem_ops = {
     }
 };
 
-static void amdvi_iommu_notify_flag_changed(IOMMUMemoryRegion *iommu,
-                                            IOMMUNotifierFlag old,
-                                            IOMMUNotifierFlag new)
+static int amdvi_iommu_notify_flag_changed(IOMMUMemoryRegion *iommu,
+                                           IOMMUNotifierFlag old,
+                                           IOMMUNotifierFlag new,
+                                           Error **errp)
 {
     AMDVIAddressSpace *as = container_of(iommu, AMDVIAddressSpace, iommu);
 
     if (new & IOMMU_NOTIFIER_MAP) {
-        error_report("device %02x.%02x.%x requires iommu notifier which is not "
-                     "currently supported", as->bus_num, PCI_SLOT(as->devfn),
-                     PCI_FUNC(as->devfn));
-        exit(1);
+        error_setg(errp,
+                   "device %02x.%02x.%x requires iommu notifier which is not "
+                   "currently supported", as->bus_num, PCI_SLOT(as->devfn),
+                   PCI_FUNC(as->devfn));
+        return -EINVAL;
     }
+    return 0;
 }
 
 static void amdvi_init(AMDVIState *s)

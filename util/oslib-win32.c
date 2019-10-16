@@ -562,12 +562,6 @@ void os_mem_prealloc(int fd, char *area, size_t memory, int smp_cpus,
     }
 }
 
-uint64_t qemu_get_pmem_size(const char *filename, Error **errp)
-{
-    error_setg(errp, "pmem support not available");
-    return 0;
-}
-
 char *qemu_get_pid_name(pid_t pid)
 {
     /* XXX Implement me */
@@ -591,7 +585,11 @@ int qemu_connect_wrap(int sockfd, const struct sockaddr *addr,
     int ret;
     ret = connect(sockfd, addr, addrlen);
     if (ret < 0) {
-        errno = socket_error();
+        if (WSAGetLastError() == WSAEWOULDBLOCK) {
+            errno = EINPROGRESS;
+        } else {
+            errno = socket_error();
+        }
     }
     return ret;
 }
