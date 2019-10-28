@@ -45,7 +45,7 @@
 #include "hw/acpi/vmgenid.h"
 #include "hw/boards.h"
 #include "sysemu/tpm_backend.h"
-#include "hw/timer/mc146818rtc_regs.h"
+#include "hw/rtc/mc146818rtc_regs.h"
 #include "migration/vmstate.h"
 #include "hw/mem/memory-device.h"
 #include "sysemu/numa.h"
@@ -1888,7 +1888,12 @@ build_dsdt(GArray *table_data, BIOSLinker *linker,
         build_cpus_aml(dsdt, machine, opts, pm->cpu_hp_io_base,
                        "\\_SB.PCI0", "\\_GPE._E02");
     }
-    build_memory_hotplug_aml(dsdt, nr_mem, "\\_SB.PCI0", "\\_GPE._E03");
+
+    if (pcms->memhp_io_base && nr_mem) {
+        build_memory_hotplug_aml(dsdt, nr_mem, "\\_SB.PCI0",
+                                 "\\_GPE._E03", AML_SYSTEM_IO,
+                                 pcms->memhp_io_base);
+    }
 
     scope =  aml_scope("_GPE");
     {
