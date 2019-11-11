@@ -63,7 +63,7 @@ static ModuleTypeList *find_type(module_init_type type)
 }
 
 //注册模块回调（将fn,注册到type列表中）
-void register_module_init(void (*fn)(void), module_init_type type)
+void register_module_init(void (*fn/*要注册的回调*/)(void), module_init_type type/*模块类型*/)
 {
     ModuleEntry *e;
     ModuleTypeList *l;
@@ -91,7 +91,7 @@ void register_dso_module_init(void (*fn)(void), module_init_type type)
     QTAILQ_INSERT_TAIL(&dso_init_list, e, node);
 }
 
-//调用指定type的所有init函数
+//调用指定type的所有init函数（这些init函数由module_init宏完成注册）
 void module_call_init(module_init_type type)
 {
     ModuleTypeList *l;

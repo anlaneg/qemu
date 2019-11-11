@@ -190,6 +190,7 @@ static void tap_send(void *opaque)
     while (true) {
         uint8_t *buf = s->buf;
 
+        //自tap口中读取报文
         size = tap_read_packet(s->fd, s->buf, sizeof(s->buf));
         if (size <= 0) {
             break;
@@ -284,6 +285,7 @@ static int tap_set_vnet_be(NetClientState *nc, bool is_be)
     return tap_fd_set_vnet_be(s->fd, is_be);
 }
 
+//使tap打开相应的offload功能
 static void tap_set_offload(NetClientState *nc, int csum, int tso4,
                      int tso6, int ecn, int ufo)
 {
@@ -482,10 +484,12 @@ static int net_bridge_run_helper(const char *helper, const char *bridge,
     char **parg;
     int sv[2];
 
+    //清空信号集
     sigemptyset(&mask);
     sigaddset(&mask, SIGCHLD);
     sigprocmask(SIG_BLOCK, &mask, &oldmask);
 
+    //创建unix socket的pair
     if (socketpair(PF_UNIX, SOCK_STREAM, 0, sv) == -1) {
         error_setg_errno(errp, errno, "socketpair() failed");
         return -1;
@@ -498,6 +502,7 @@ static int net_bridge_run_helper(const char *helper, const char *bridge,
         return -1;
     }
     if (pid == 0) {
+        //子进程
         int open_max = sysconf(_SC_OPEN_MAX), i;
         char *fd_buf = NULL;
         char *br_buf = NULL;
@@ -509,11 +514,13 @@ static int net_bridge_run_helper(const char *helper, const char *bridge,
             }
         }
 
+        //构造fd参数
         fd_buf = g_strdup_printf("%s%d", "--fd=", sv[1]);
 
         if (strrchr(helper, ' ') || strrchr(helper, '\t')) {
             /* assume helper is a command */
 
+            //构造桥名称参数
             if (strstr(helper, "--br=") == NULL) {
                 br_buf = g_strdup_printf("%s%s", "--br=", bridge);
             }
@@ -527,6 +534,7 @@ static int net_bridge_run_helper(const char *helper, const char *bridge,
             *parg++ = helper_cmd;
             *parg++ = NULL;
 
+            //执行helper命令
             execv("/bin/sh", args);
             g_free(helper_cmd);
         } else {
@@ -548,11 +556,13 @@ static int net_bridge_run_helper(const char *helper, const char *bridge,
         _exit(1);
 
     } else {
+        //父进程自pair中读取
         int fd;
         int saved_errno;
 
         close(sv[1]);
 
+        //获取helper打开的fd
         do {
             fd = recv_fd(sv[0]);
         } while (fd == -1 && errno == EINTR);
@@ -560,9 +570,11 @@ static int net_bridge_run_helper(const char *helper, const char *bridge,
 
         close(sv[0]);
 
+        //等待子进程退出
         while (waitpid(pid, &status, 0) != pid) {
             /* loop */
         }
+        //还原信号mask
         sigprocmask(SIG_SETMASK, &oldmask, NULL);
         if (fd < 0) {
             error_setg_errno(errp, saved_errno,
@@ -573,6 +585,7 @@ static int net_bridge_run_helper(const char *helper, const char *bridge,
             error_setg(errp, "bridge helper failed");
             return -1;
         }
+        //返回helper产生的fd
         return fd;
     }
 }
@@ -588,9 +601,11 @@ int net_init_bridge(const Netdev *netdev, const char *name,
     assert(netdev->type == NET_CLIENT_DRIVER_BRIDGE);
     bridge = &netdev->u.bridge;
 
+    //桥的helper命令行
     helper = bridge->has_helper ? bridge->helper : DEFAULT_BRIDGE_HELPER;
     br     = bridge->has_br     ? bridge->br     : DEFAULT_BRIDGE_INTERFACE;
 
+    //运行bridge的命令，创建tap口，并加入到桥$br中，返回tap对应的fd,准备加入事件
     fd = net_bridge_run_helper(helper, br, errp);
     if (fd == -1) {
         return -1;

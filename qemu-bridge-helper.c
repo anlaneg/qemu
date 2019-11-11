@@ -262,8 +262,10 @@ int main(int argc, char **argv)
         if (strcmp(argv[index], "--use-vnet") == 0) {
             use_vnet = 1;
         } else if (strncmp(argv[index], "--br=", 5) == 0) {
+            //桥名称
             bridge = &argv[index][5];
         } else if (strncmp(argv[index], "--fd=", 5) == 0) {
+            //指定的fd
             unixfd = atoi(&argv[index][5]);
         } else {
             usage();
@@ -275,6 +277,8 @@ int main(int argc, char **argv)
         usage();
         return EXIT_FAILURE;
     }
+
+    //桥名称必须小于IFNAMSIZ
     if (strlen(bridge) >= IFNAMSIZ) {
         fprintf(stderr, "name `%s' too long: %zu\n", bridge, strlen(bridge));
         return EXIT_FAILURE;
@@ -323,6 +327,7 @@ int main(int argc, char **argv)
     }
 
     /* open a socket to use to control the network interfaces */
+    //
     ctlfd = socket(AF_INET, SOCK_STREAM, 0);
     if (ctlfd == -1) {
         fprintf(stderr, "failed to open control socket: %s\n", strerror(errno));
@@ -331,6 +336,7 @@ int main(int argc, char **argv)
     }
 
     /* open the tap device */
+    //找开tun设备
     fd = open("/dev/net/tun", O_RDWR);
     if (fd == -1) {
         fprintf(stderr, "failed to open /dev/net/tun: %s\n", strerror(errno));
@@ -340,6 +346,7 @@ int main(int argc, char **argv)
 
     /* request a tap device, disable PI, and add vnet header support if
      * requested and it's available. */
+    //接口名格式
     prep_ifreq(&ifr, "tap%d");
     ifr.ifr_flags = IFF_TAP|IFF_NO_PI;
     if (use_vnet && has_vnet_hdr(fd)) {
@@ -381,6 +388,7 @@ int main(int argc, char **argv)
      * the bridge.  Set MAC address to a high value so that it doesn't
      * affect the MAC address of the bridge.
      */
+    //设置按口ifr的mac地址
     if (ioctl(ctlfd, SIOCGIFHWADDR, &ifr) < 0) {
         fprintf(stderr, "failed to get MAC address of device `%s': %s\n",
                 iface, strerror(errno));

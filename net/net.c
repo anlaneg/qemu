@@ -650,6 +650,7 @@ static ssize_t qemu_send_packet_async_with_flags(NetClientState *sender,
         return ret;
     }
 
+    //获取对端的队列
     queue = sender->peer->incoming_queue;
 
     return qemu_net_queue_send(queue, sender, flags, buf, size, sent_cb);
@@ -948,6 +949,7 @@ static int (* const net_client_init_fun[NET_CLIENT_DRIVER__MAX])(
 #ifdef CONFIG_SLIRP
         [NET_CLIENT_DRIVER_USER]      = net_init_slirp,
 #endif
+        //tap口对应的初始化
         [NET_CLIENT_DRIVER_TAP]       = net_init_tap,
         [NET_CLIENT_DRIVER_SOCKET]    = net_init_socket,
 #ifdef CONFIG_VDE
@@ -1115,6 +1117,7 @@ static int net_client_init(QemuOpts *opts, bool is_netdev, Error **errp)
     const char *type = qemu_opt_get(opts, "type");
 
     if (is_netdev && type && is_help_option(type)) {
+        //帮助选项，显示支持的netdevs 后端
         show_netdevs();
         exit(0);
     } else {

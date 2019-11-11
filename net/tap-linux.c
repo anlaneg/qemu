@@ -241,15 +241,16 @@ void tap_fd_set_offload(int fd, int csum, int tso4,
 
     /* Check if our kernel supports TUNSETOFFLOAD */
     if (ioctl(fd, TUNSETOFFLOAD, 0) != 0 && errno == EINVAL) {
+        //kernel不支持TUNSETOFFLOAD，退出
         return;
     }
 
     if (csum) {
-        offload |= TUN_F_CSUM;
+        offload |= TUN_F_CSUM;//要求offload checksum
         if (tso4)
-            offload |= TUN_F_TSO4;
+            offload |= TUN_F_TSO4;//要求offload tso4
         if (tso6)
-            offload |= TUN_F_TSO6;
+            offload |= TUN_F_TSO6;//要求offload tso6
         if ((tso4 || tso6) && ecn)
             offload |= TUN_F_TSO_ECN;
         if (ufo)
@@ -257,6 +258,7 @@ void tap_fd_set_offload(int fd, int csum, int tso4,
     }
 
     if (ioctl(fd, TUNSETOFFLOAD, offload) != 0) {
+        //如果失败，取消掉UFO的offload再试一次
         offload &= ~TUN_F_UFO;
         if (ioctl(fd, TUNSETOFFLOAD, offload) != 0) {
             fprintf(stderr, "TUNSETOFFLOAD ioctl() failed: %s\n",

@@ -2944,7 +2944,8 @@ int main(int argc, char **argv, char **envp)
     qemu_add_opts(&qemu_icount_opts);
     qemu_add_opts(&qemu_semihosting_config_opts);
     qemu_add_opts(&qemu_fw_cfg_opts);
-    module_call_init(MODULE_INIT_OPTS);//加载其它模块引入的opts注册
+    //加载其它模块引入的opts注册
+    module_call_init(MODULE_INIT_OPTS);
 
     runstate_init();
     precopy_infrastructure_init();//初始化通知链（作用？）

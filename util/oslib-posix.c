@@ -240,6 +240,7 @@ void qemu_set_block(int fd)
     assert(f != -1);
 }
 
+//将fd置为非阻塞
 void qemu_set_nonblock(int fd)
 {
     int f;
