@@ -34,6 +34,7 @@ void notifier_remove(Notifier *notifier)
     QLIST_REMOVE(notifier, node);
 }
 
+//调用list上所有的notify,触发所有回调
 void notifier_list_notify(NotifierList *list, void *data)
 {
     Notifier *notifier, *next;
@@ -44,6 +45,7 @@ void notifier_list_notify(NotifierList *list, void *data)
     }
 }
 
+//检查Notify list是否为空
 bool notifier_list_empty(NotifierList *list)
 {
     return QLIST_EMPTY(&list->notifiers);

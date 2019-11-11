@@ -471,6 +471,7 @@ void qemu_event_wait(QemuEvent *ev)
     }
 }
 
+//用于注册thread_exit时需要调用的回调
 static __thread NotifierList thread_exit;
 
 /*
@@ -490,6 +491,7 @@ void qemu_thread_atexit_remove(Notifier *notifier)
     notifier_remove(notifier);
 }
 
+//触发thread_exit上注册的所有notify回调
 static void qemu_thread_atexit_notify(void *arg)
 {
     /*
@@ -500,11 +502,12 @@ static void qemu_thread_atexit_notify(void *arg)
 }
 
 typedef struct {
-    void *(*start_routine)(void *);
-    void *arg;
-    char *name;
+    void *(*start_routine)(void *);/*线程函数入口*/
+    void *arg;/*线程函数参数*/
+    char *name;/*qemu线程名称*/
 } QemuThreadArgs;
 
+/*qemu包装的线程入口函数*/
 static void *qemu_thread_start(void *args)
 {
     QemuThreadArgs *qemu_thread_args = args;
@@ -518,7 +521,7 @@ static void *qemu_thread_start(void *args)
      */
     if (name_threads && qemu_thread_args->name) {
 # if defined(CONFIG_PTHREAD_SETNAME_NP_W_TID)
-    	//设置线程名称
+    	    //设置线程名称
         pthread_setname_np(pthread_self(), qemu_thread_args->name);
 # elif defined(CONFIG_PTHREAD_SETNAME_NP_WO_TID)
         pthread_setname_np(qemu_thread_args->name);
@@ -527,17 +530,20 @@ static void *qemu_thread_start(void *args)
 #endif
     g_free(qemu_thread_args->name);
     g_free(qemu_thread_args);
-    //运行线程函数
+
+    //注册qemu_thread_atexit_notify在thread退出时执行
     pthread_cleanup_push(qemu_thread_atexit_notify, NULL);
+    //运行线程函数
     r = start_routine(arg);
+    /*参数为1，执行qemu_thread_atexit_notify*/
     pthread_cleanup_pop(1);
     return r;
 }
 
-//qemu创建线程并运行
-void qemu_thread_create(QemuThread *thread, const char *name,
+//qemu创建线程并运行start_routine函数
+void qemu_thread_create(QemuThread *thread, const char *name/*线程名称*/,
                        void *(*start_routine)(void*),
-                       void *arg, int mode)
+                       void *arg/*线程参数*/, int mode)
 {
     sigset_t set, oldset;
     int err;

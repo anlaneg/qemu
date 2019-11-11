@@ -282,7 +282,7 @@ int qemu_lock_fd_test(int fd, int64_t start, int64_t len, bool exclusive)
 /*
  * Opens a file with FD_CLOEXEC set
  */
-int qemu_open(const char *name, int flags, ...)
+int qemu_open(const char *name/*要打开的文件*/, int flags, ...)
 {
     int ret;
     int mode = 0;
@@ -291,6 +291,7 @@ int qemu_open(const char *name, int flags, ...)
     const char *fdset_id_str;
 
     /* Attempt dup of fd from fd set */
+    //如果文件名称以'/dev/fdset/'开头
     if (strstart(name, "/dev/fdset/", &fdset_id_str)) {
         int64_t fdset_id;
         int fd, dupfd;
@@ -323,6 +324,7 @@ int qemu_open(const char *name, int flags, ...)
     }
 #endif
 
+    //如果为create,则提取mode参数
     if (flags & O_CREAT) {
         va_list ap;
 
@@ -332,6 +334,7 @@ int qemu_open(const char *name, int flags, ...)
     }
 
 #ifdef O_CLOEXEC
+    //打开指定文件
     ret = open(name, flags | O_CLOEXEC, mode);
 #else
     ret = open(name, flags, mode);

@@ -76,7 +76,7 @@ struct KVMState
 {
     AccelState parent_obj;
 
-    int nr_slots;
+    int nr_slots;//memory slots的数目
     int fd;
     int vmfd;
     int coalesced_mmio;
@@ -1850,6 +1850,7 @@ static int kvm_init(MachineState *ms)
 #endif
     QLIST_INIT(&s->kvm_parked_vcpus);
     s->vmfd = -1;
+    /*打开设备/dev/kvm*/
     s->fd = qemu_open("/dev/kvm", O_RDWR);
     if (s->fd == -1) {
         fprintf(stderr, "Could not access KVM kernel module: %m\n");
@@ -1857,8 +1858,10 @@ static int kvm_init(MachineState *ms)
         goto err;
     }
 
+    /*获得kvm api版本*/
     ret = kvm_ioctl(s, KVM_GET_API_VERSION, 0);
     if (ret < KVM_API_VERSION) {
+    		//不支持小于此version的kvm
         if (ret >= 0) {
             ret = -EINVAL;
         }
@@ -1867,16 +1870,19 @@ static int kvm_init(MachineState *ms)
     }
 
     if (ret > KVM_API_VERSION) {
+    		//不支持大于此version的kvm
         ret = -EINVAL;
         fprintf(stderr, "kvm version not supported\n");
         goto err;
     }
 
+    //x86情况下，此值为1
     kvm_immediate_exit = kvm_check_extension(s, KVM_CAP_IMMEDIATE_EXIT);
     s->nr_slots = kvm_check_extension(s, KVM_CAP_NR_MEMSLOTS);
 
     /* If unspecified, use the default value */
     if (!s->nr_slots) {
+    		//如果未指定，则使用默认值32
         s->nr_slots = 32;
     }
 
@@ -1896,6 +1902,7 @@ static int kvm_init(MachineState *ms)
     }
 
     do {
+    		//执行vm创建
         ret = kvm_ioctl(s, KVM_CREATE_VM, type);
     } while (ret == -EINTR);
 
@@ -2405,6 +2412,7 @@ int kvm_cpu_exec(CPUState *cpu)
     return ret;
 }
 
+/*针对kvm的fd，执行ioctl*/
 int kvm_ioctl(KVMState *s, int type, ...)
 {
     int ret;
@@ -2926,7 +2934,7 @@ static void kvm_accel_class_init(ObjectClass *oc, void *data)
 {
     AccelClass *ac = ACCEL_CLASS(oc);
     ac->name = "KVM";
-    ac->init_machine = kvm_init;
+    ac->init_machine = kvm_init;/*kvm初始化*/
     ac->has_memory = kvm_accel_has_memory;
     ac->allowed = &kvm_allowed;
 }
