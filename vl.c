@@ -4184,6 +4184,7 @@ int main(int argc, char **argv, char **envp)
                       fsdev_init_func, NULL, &error_fatal);
 #endif
 
+    //遍历所有device,并调用help_func
     if (qemu_opts_foreach(qemu_find_opts("device"),
                           device_help_func, NULL, NULL)) {
         exit(0);
@@ -4207,6 +4208,7 @@ int main(int argc, char **argv, char **envp)
      * Note: uses machine properties such as kernel-irqchip, must run
      * after machine_set_property().
      */
+    //配置例如kvm式加速器
     configure_accelerator(current_machine, argv[0]);
 
     /*

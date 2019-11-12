@@ -16,6 +16,7 @@
  */
 static inline bool is_help_option(const char *s)
 {
+	//是否为帮助option
     return !strcmp(s, "?") || !strcmp(s, "help");
 }
 

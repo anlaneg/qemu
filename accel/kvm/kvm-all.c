@@ -77,8 +77,8 @@ struct KVMState
     AccelState parent_obj;
 
     int nr_slots;//memory slots的数目
-    int fd;
-    int vmfd;
+    int fd;/* /dev/kvm对应的fd */
+    int vmfd;/*vm对应的fd*/
     int coalesced_mmio;
     int coalesced_pio;
     struct kvm_coalesced_mmio_ring *coalesced_mmio_ring;
@@ -1907,6 +1907,7 @@ static int kvm_init(MachineState *ms)
     } while (ret == -EINTR);
 
     if (ret < 0) {
+    		//创建vm失败
         fprintf(stderr, "ioctl(KVM_CREATE_VM) failed: %d %s\n", -ret,
                 strerror(-ret));
 
@@ -2939,6 +2940,7 @@ static void kvm_accel_class_init(ObjectClass *oc, void *data)
     ac->allowed = &kvm_allowed;
 }
 
+//kvm的accel类型
 static const TypeInfo kvm_accel_type = {
     .name = TYPE_KVM_ACCEL,
     .parent = TYPE_ACCEL,

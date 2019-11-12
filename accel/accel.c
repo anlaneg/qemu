@@ -46,6 +46,7 @@ static const TypeInfo accel_type = {
 /* Lookup AccelClass from opt_name. Returns NULL if not found */
 static AccelClass *accel_find(const char *opt_name)
 {
+	//取accelClass名称，并实例化其对象
     char *class_name = g_strdup_printf(ACCEL_CLASS_NAME("%s"), opt_name);
     AccelClass *ac = ACCEL_CLASS(object_class_by_name(class_name));
     g_free(class_name);
@@ -60,6 +61,7 @@ static int accel_init_machine(AccelClass *acc, MachineState *ms)
     int ret;
     ms->accelerator = accel;
     *(acc->allowed) = true;
+    //初始化instance
     ret = acc->init_machine(ms);
     if (ret < 0) {
         ms->accelerator = NULL;
@@ -80,14 +82,17 @@ void configure_accelerator(MachineState *ms, const char *progname)
     bool init_failed = false;
     AccelClass *acc = NULL;
 
+    //取machine中的accel，例如kvm
     accel = qemu_opt_get(qemu_get_machine_opts(), "accel");
     if (accel == NULL) {
         /* Select the default accelerator */
+    		//如果未配置accel,则检查程序结尾，如果以kvm结尾，则使用kvm及tcg
         int pnlen = strlen(progname);
         if (pnlen >= 3 && g_str_equal(&progname[pnlen - 3], "kvm")) {
             /* If the program name ends with "kvm", we prefer KVM */
             accel = "kvm:tcg";
         } else {
+        	//按不同配置，优先使用kvm
 #if defined(CONFIG_TCG)
             accel = "tcg";
 #elif defined(CONFIG_KVM)
@@ -100,11 +105,13 @@ void configure_accelerator(MachineState *ms, const char *progname)
         }
     }
 
+    //将accel按':'号分割，并遍历accel_list（取首个可成功初始化machie的accel)
     accel_list = g_strsplit(accel, ":", 0);
 
-    for (tmp = accel_list; !accel_initialised && tmp && *tmp; tmp++) {
-        acc = accel_find(*tmp);
+    for (tmp = accel_list; !accel_initialised/*如果machine已初始化成功，则跳出*/ && tmp && *tmp; tmp++) {
+        acc = accel_find(*tmp);//针对一种accel，用其初始化machie
         if (!acc) {
+        		//如果不存在，则尝试下一个
             continue;
         }
         ret = accel_init_machine(acc, ms);
@@ -113,7 +120,7 @@ void configure_accelerator(MachineState *ms, const char *progname)
             error_report("failed to initialize %s: %s",
                          acc->name, strerror(-ret));
         } else {
-            accel_initialised = true;
+            accel_initialised = true;/*machine初始化成功*/
         }
     }
     g_strfreev(accel_list);
