@@ -426,6 +426,7 @@ static void launch_script(const char *setup_script, const char *ifname,
         *parg++ = (char *)setup_script;
         *parg++ = (char *)ifname;
         *parg = NULL;
+        //执行脚本
         execv(setup_script, args);
         _exit(1);
     } else {
@@ -622,8 +623,8 @@ int net_init_bridge(const Netdev *netdev, const char *name,
 }
 
 static int net_tap_init(const NetdevTapOptions *tap, int *vnet_hdr,
-                        const char *setup_script, char *ifname,
-                        size_t ifname_sz, int mq_required, Error **errp)
+                        const char *setup_script/*启动脚本*/, char *ifname/*接口名称*/,
+                        size_t ifname_sz/*接口名称长度*/, int mq_required, Error **errp)
 {
     Error *err = NULL;
     int fd, vnet_hdr_required;
@@ -636,15 +637,18 @@ static int net_tap_init(const NetdevTapOptions *tap, int *vnet_hdr,
         vnet_hdr_required = 0;
     }
 
+    //打开tap设备
     TFR(fd = tap_open(ifname, ifname_sz, vnet_hdr, vnet_hdr_required,
                       mq_required, errp));
     if (fd < 0) {
         return -1;
     }
 
+    //如有必要，运行setup脚本
     if (setup_script &&
         setup_script[0] != '\0' &&
         strcmp(setup_script, "no") != 0) {
+        //装载运行脚本
         launch_script(setup_script, ifname, fd, &err);
         if (err) {
             error_propagate(errp, err);
