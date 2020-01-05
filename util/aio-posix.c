@@ -240,6 +240,7 @@ void aio_set_fd_handler(AioContext *ctx,
 
     qemu_lockcnt_lock(&ctx->list_lock);
 
+    /*通过fd找到aioHandlerr*/
     node = find_aio_handler(ctx, fd);
 
     /* Are we deleting the fd handler? */
@@ -272,6 +273,8 @@ void aio_set_fd_handler(AioContext *ctx,
         } else {
             new_node->pfd = node->pfd;
         }
+
+        /*添加此事件到poll*/
         g_source_add_poll(&ctx->source, &new_node->pfd);
 
         new_node->pfd.events = (io_read ? G_IO_IN | G_IO_HUP | G_IO_ERR : 0);

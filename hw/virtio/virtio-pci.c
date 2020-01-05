@@ -559,8 +559,8 @@ void virtio_address_space_write(VirtIOPCIProxy *proxy, hwaddr addr,
 }
 
 static void
-virtio_address_space_read(VirtIOPCIProxy *proxy, hwaddr addr,
-                          uint8_t *buf, int len)
+virtio_address_space_read(VirtIOPCIProxy *proxy, hwaddr addr/*要访问的地址*/,
+                          uint8_t *buf/*出参，读取到的内容*/, int len/*要访问的长度*/)
 {
     uint64_t val;
     MemoryRegion *mr;
@@ -570,6 +570,7 @@ virtio_address_space_read(VirtIOPCIProxy *proxy, hwaddr addr,
      */
     addr &= ~(len - 1);
 
+    //取对应的memory region
     mr = virtio_address_space_lookup(proxy, &addr, len);
     if (!mr) {
         return;
@@ -578,8 +579,10 @@ virtio_address_space_read(VirtIOPCIProxy *proxy, hwaddr addr,
     /* Make sure caller aligned buf properly */
     assert(!(((uintptr_t)buf) & (len - 1)));
 
+    //完成内存region的访问
     memory_region_dispatch_read(mr, addr, &val, size_memop(len) | MO_LE,
                                 MEMTXATTRS_UNSPECIFIED);
+    //按读取的长度，填充buf
     switch (len) {
     case 1:
         pci_set_byte(buf, val);
@@ -1328,6 +1331,7 @@ static void virtio_pci_notify_write(void *opaque, hwaddr addr,
     unsigned queue = addr / virtio_pci_queue_mem_mult(proxy);
 
     if (queue < VIRTIO_QUEUE_MAX) {
+        //知会queue队列
         virtio_queue_notify(vdev, queue);
     }
 }
@@ -1464,6 +1468,7 @@ static void virtio_pci_modern_regions_init(VirtIOPCIProxy *proxy)
                           "virtio-pci-device",
                           proxy->device.size);
 
+    /*注册pci-notify的处理ops*/
     memory_region_init_io(&proxy->notify.mr, OBJECT(proxy),
                           &notify_ops,
                           virtio_bus_get_device(&proxy->bus),

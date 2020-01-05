@@ -2558,6 +2558,7 @@ void virtio_queue_host_notifier_read(EventNotifier *n)
     }
 }
 
+//取主机端notifier
 EventNotifier *virtio_queue_get_host_notifier(VirtQueue *vq)
 {
     return &vq->host_notifier;
@@ -2708,6 +2709,8 @@ static int virtio_device_start_ioeventfd_impl(VirtIODevice *vdev)
             err = r;
             goto assign_error;
         }
+
+        /*为此vq注册读事件处理函数*/
         event_notifier_set_handler(&vq->host_notifier,
                                    virtio_queue_host_notifier_read);
     }

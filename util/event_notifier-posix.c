@@ -97,6 +97,7 @@ int event_notifier_set(EventNotifier *e)
     ssize_t ret;
 
     do {
+        //向wfd中写数据
         ret = write(e->wfd, &value, sizeof(value));
     } while (ret < 0 && errno == EINTR);
 

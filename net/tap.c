@@ -103,6 +103,7 @@ static ssize_t tap_write_packet(TAPState *s, const struct iovec *iov, int iovcnt
     ssize_t len;
 
     do {
+        //向tap口发送报文
         len = writev(s->fd, iov, iovcnt);
     } while (len == -1 && errno == EINTR);
 
@@ -153,6 +154,7 @@ static ssize_t tap_receive_raw(NetClientState *nc, const uint8_t *buf, size_t si
     return tap_write_packet(s, iov, iovcnt);
 }
 
+//将收到的buffer通过tap发送出去
 static ssize_t tap_receive(NetClientState *nc, const uint8_t *buf, size_t size)
 {
     TAPState *s = DO_UPCAST(TAPState, nc, nc);

@@ -179,7 +179,7 @@ struct MemoryRegionOps {
         /* If true, unaligned accesses are supported.  Otherwise unaligned
          * accesses throw machine checks.
          */
-         bool unaligned;
+         bool unaligned;//是否支持不对齐访问
         /*
          * If present, and returns #false, the transaction is not accepted
          * by the device (and results in machine dependent behaviour such
@@ -194,11 +194,11 @@ struct MemoryRegionOps {
         /* If nonzero, specifies the minimum size implemented.  Smaller sizes
          * will be rounded upwards and a partial result will be returned.
          */
-        unsigned min_access_size;
+        unsigned min_access_size;//一次读取的最小字节数
         /* If nonzero, specifies the maximum size implemented.  Larger sizes
          * will be done as a series of accesses with smaller sizes.
          */
-        unsigned max_access_size;
+        unsigned max_access_size;//一次读取的最大字节数
         /* If true, unaligned accesses are supported.  Otherwise all accesses
          * are converted to (possibly multiple) naturally aligned accesses.
          */
@@ -379,6 +379,7 @@ struct MemoryRegion {
     RAMBlock *ram_block;
     Object *owner;
 
+    //内存region对应的ops
     const MemoryRegionOps *ops;
     void *opaque;
     MemoryRegion *container;

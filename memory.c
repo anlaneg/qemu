@@ -342,6 +342,7 @@ static void flatview_simplify(FlatView *view)
     }
 }
 
+//查看内存区域是否为大端顺序
 static bool memory_region_big_endian(MemoryRegion *mr)
 {
 #ifdef TARGET_WORDS_BIGENDIAN
@@ -351,7 +352,8 @@ static bool memory_region_big_endian(MemoryRegion *mr)
 #endif
 }
 
-static void adjust_endianness(MemoryRegion *mr, uint64_t *data, MemOp op)
+//实现字节序统一
+static void adjust_endianness(MemoryRegion *mr, uint64_t *data/*入参，出参*/, MemOp op)
 {
     if ((op & MO_BSWAP) != devend_memop(mr->ops->endianness)) {
         switch (op & MO_SIZE) {
@@ -373,11 +375,12 @@ static void adjust_endianness(MemoryRegion *mr, uint64_t *data, MemOp op)
 }
 
 static inline void memory_region_shift_read_access(uint64_t *value,
-                                                   signed shift,
+                                                   signed shift/*左移的位数（>0),右移的位数(<0)*/,
                                                    uint64_t mask,
                                                    uint64_t tmp)
 {
     if (shift >= 0) {
+        //加上掩码，左移后给value
         *value |= (tmp & mask) << shift;
     } else {
         *value |= (tmp & mask) >> -shift;
@@ -421,16 +424,18 @@ static int get_cpu_index(void)
     return -1;
 }
 
+//对指定内存区域执行hw地址addr读访问
 static MemTxResult  memory_region_read_accessor(MemoryRegion *mr,
-                                                hwaddr addr,
-                                                uint64_t *value,
-                                                unsigned size,
-                                                signed shift,
-                                                uint64_t mask,
+                                                hwaddr addr/*要访问的地址*/,
+                                                uint64_t *value/*出参，读取到的值*/,
+                                                unsigned size/*要访问的字节数*/,
+                                                signed shift/*左移，右移位数*/,
+                                                uint64_t mask/*掩码情况*/,
                                                 MemTxAttrs attrs)
 {
     uint64_t tmp;
 
+    /*通过read回调，完成addr地址读取*/
     tmp = mr->ops->read(mr->opaque, addr, size);
     if (mr->subpage) {
         trace_memory_region_subpage_read(get_cpu_index(), mr, addr, tmp, size);
@@ -503,11 +508,12 @@ static MemTxResult memory_region_write_with_attrs_accessor(MemoryRegion *mr,
     return mr->ops->write_with_attrs(mr->opaque, addr, tmp, size, attrs);
 }
 
-static MemTxResult access_with_adjusted_size(hwaddr addr,
-                                      uint64_t *value,
-                                      unsigned size,
-                                      unsigned access_size_min,
-                                      unsigned access_size_max,
+/*读取mr中指定addr地址，并value返回读取到的值*/
+static MemTxResult access_with_adjusted_size(hwaddr addr/*要读取的物理地址*/,
+                                      uint64_t *value/*出参，读取到的值*/,
+                                      unsigned size/*要读取的长度*/,
+                                      unsigned access_size_min/*每次访问的小size*/,
+                                      unsigned access_size_max/*每次访问的最大size*/,
                                       MemTxResult (*access_fn)
                                                   (MemoryRegion *mr,
                                                    hwaddr addr,
@@ -516,7 +522,7 @@ static MemTxResult access_with_adjusted_size(hwaddr addr,
                                                    signed shift,
                                                    uint64_t mask,
                                                    MemTxAttrs attrs),
-                                      MemoryRegion *mr,
+                                      MemoryRegion *mr/*地址所属的memory region*/,
                                       MemTxAttrs attrs)
 {
     uint64_t access_mask;
@@ -532,12 +538,14 @@ static MemTxResult access_with_adjusted_size(hwaddr addr,
     }
 
     /* FIXME: support unaligned access? */
+    /*确定一定访问的大小*/
     access_size = MAX(MIN(size, access_size_max), access_size_min);
     access_mask = MAKE_64BIT_MASK(0, access_size * 8);
     if (memory_region_big_endian(mr)) {
+        //通过access_fn获取区间[addr，addr+size]范围内内存中记录的数据
         for (i = 0; i < size; i += access_size) {
             r |= access_fn(mr, addr + i, value, access_size,
-                        (size - access_size - i) * 8, access_mask, attrs);
+                        (size - access_size - i) * 8/*大端，低地址存低位*/, access_mask, attrs);
         }
     } else {
         for (i = 0; i < size; i += access_size) {
@@ -1354,21 +1362,24 @@ static const MemoryRegionOps ram_device_mem_ops = {
 
 bool memory_region_access_valid(MemoryRegion *mr,
                                 hwaddr addr,
-                                unsigned size,
-                                bool is_write,
+                                unsigned size/*要访问的长度*/,
+                                bool is_write/*是否写操作*/,
                                 MemTxAttrs attrs)
 {
     int access_size_min, access_size_max;
     int access_size, i;
 
+    //要求对齐访问，但访问时未对齐
     if (!mr->ops->valid.unaligned && (addr & (size - 1))) {
         return false;
     }
 
+    //无accepts回调，放通
     if (!mr->ops->valid.accepts) {
         return true;
     }
 
+    //执行accepts检查
     access_size_min = mr->ops->valid.min_access_size;
     if (!mr->ops->valid.min_access_size) {
         access_size_min = 1;
@@ -1391,9 +1402,9 @@ bool memory_region_access_valid(MemoryRegion *mr,
 }
 
 static MemTxResult memory_region_dispatch_read1(MemoryRegion *mr,
-                                                hwaddr addr,
-                                                uint64_t *pval,
-                                                unsigned size,
+                                                hwaddr addr/*要读取的位置*/,
+                                                uint64_t *pval/*出参，读取到的内容*/,
+                                                unsigned size/*读取的字节数*/,
                                                 MemTxAttrs attrs)
 {
     *pval = 0;
@@ -1402,31 +1413,33 @@ static MemTxResult memory_region_dispatch_read1(MemoryRegion *mr,
         return access_with_adjusted_size(addr, pval, size,
                                          mr->ops->impl.min_access_size,
                                          mr->ops->impl.max_access_size,
-                                         memory_region_read_accessor,
+                                         memory_region_read_accessor,//通过read读取
                                          mr, attrs);
     } else {
         return access_with_adjusted_size(addr, pval, size,
                                          mr->ops->impl.min_access_size,
                                          mr->ops->impl.max_access_size,
-                                         memory_region_read_with_attrs_accessor,
+                                         memory_region_read_with_attrs_accessor,//含属性read
                                          mr, attrs);
     }
 }
 
 MemTxResult memory_region_dispatch_read(MemoryRegion *mr,
-                                        hwaddr addr,
-                                        uint64_t *pval,
-                                        MemOp op,
+                                        hwaddr addr/*要访问的内存*/,
+                                        uint64_t *pval/*出参*/,
+                                        MemOp op/*要访问的大小*/,
                                         MemTxAttrs attrs)
 {
     unsigned size = memop_size(op);
     MemTxResult r;
 
+    //检查是否容许访问
     if (!memory_region_access_valid(mr, addr, size, false, attrs)) {
         *pval = unassigned_mem_read(mr, addr, size);
         return MEMTX_DECODE_ERROR;
     }
 
+    //完成内容读取
     r = memory_region_dispatch_read1(mr, addr, pval, size, attrs);
     adjust_endianness(mr, pval, op);
     return r;
