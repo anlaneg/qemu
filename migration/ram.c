@@ -358,21 +358,25 @@ static RAMState *ram_state;
 
 static NotifierWithReturnList precopy_notifier_list;
 
+//通知链初始化
 void precopy_infrastructure_init(void)
 {
     notifier_with_return_list_init(&precopy_notifier_list);
 }
 
+//添加notifier
 void precopy_add_notifier(NotifierWithReturn *n)
 {
     notifier_with_return_list_add(&precopy_notifier_list, n);
 }
 
+//移除notifier
 void precopy_remove_notifier(NotifierWithReturn *n)
 {
     notifier_with_return_remove(n);
 }
 
+//构造precopyNotifyData,并触发通知链上的元素
 int precopy_notify(PrecopyNotifyReason reason, Error **errp)
 {
     PrecopyNotifyData pnd;

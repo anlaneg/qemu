@@ -352,14 +352,14 @@ typedef void (ObjectPropertyRelease)(Object *obj,
 
 typedef struct ObjectProperty
 {
-    gchar *name;
-    gchar *type;
-    gchar *description;
-    ObjectPropertyAccessor *get;
-    ObjectPropertyAccessor *set;
+    gchar *name;//属性名称
+    gchar *type;//属性类型
+    gchar *description;//属性描述信息
+    ObjectPropertyAccessor *get;//属性值get函数
+    ObjectPropertyAccessor *set;//属性值set函数
     ObjectPropertyResolve *resolve;
     ObjectPropertyRelease *release;//属性值释放函数
-    void *opaque;
+    void *opaque;/*属性访问函数的参数*/
 } ObjectProperty;
 
 /**
@@ -398,7 +398,7 @@ struct ObjectClass
 
     ObjectUnparent *unparent;
 
-    GHashTable *properties;//属性表
+    GHashTable *properties;//对象属性表
 };
 
 /**
@@ -418,7 +418,7 @@ struct Object
     /*< private >*/
     ObjectClass *class;//对象所属的class
     ObjectFree *free;//对象内存释放函数
-    GHashTable *properties;//对象的属性表
+    GHashTable *properties;//对象的属性表（以属性名索引）
     uint32_t ref;//对象的引用计数
     Object *parent;//如果此值不为NULL,则此对象已被接管
 };
@@ -466,23 +466,25 @@ struct Object
  *   should point to a static array that's terminated with a zero filled
  *   element. 本类型的一组接口，此指定应指向一个以0结尾的静态数组
  */
+//定义类型的元数据（类型信息）
 struct TypeInfo
 {
     const char *name;//类型名称
-    const char *parent;//父类型名称
+    const char *parent;//对应的父类型名称
 
-    size_t instance_size;//类型大小
-    void (*instance_init)(Object *obj);
-    void (*instance_post_init)(Object *obj);
-    void (*instance_finalize)(Object *obj);
+    size_t instance_size;//类型对象大小
+    void (*instance_init)(Object *obj);//实例的构造函数
+    void (*instance_post_init)(Object *obj);//实例的构造函数，在instance_init之后调用
+    void (*instance_finalize)(Object *obj);//对象的析构函数
 
     bool abstract;//是否抽象类型
     size_t class_size;//类元数据大小
 
-    //构造函数
+    //本类型元数据的构造函数
     void (*class_init)(ObjectClass *klass, void *data);
+    //在本类型构造函数完成后调用，依注释是为了消除memcopy对类型的影响
     void (*class_base_init)(ObjectClass *klass, void *data);
-    //class_init,class_base_init,class_finalize的函数参数
+    //用于回调instance_init,instance_post_init,instance_finalize回调的参数
     void *class_data;
 
     //类型的接口信息
@@ -524,6 +526,7 @@ struct TypeInfo
  * generated.
  */
 #define OBJECT_CHECK(type, obj, name) \
+    /*检查obj是否为type类型的obj,是否为name的子类型*/\
     ((type *)object_dynamic_cast_assert(OBJECT(obj), (name), \
                                         __FILE__, __LINE__, __func__))
 
@@ -571,12 +574,13 @@ struct InterfaceInfo {
  * The class for all interfaces.  Subclasses of this class should only add
  * virtual methods.
  */
+//interfaceClass是所有interface的Class
 struct InterfaceClass
 {
     ObjectClass parent_class;
     /*< private >*/
     ObjectClass *concrete_class;
-    Type interface_type;
+    Type interface_type;//interface对应的Type
 };
 
 #define TYPE_INTERFACE "interface"

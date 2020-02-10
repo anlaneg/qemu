@@ -353,8 +353,11 @@ static VncDisplay *vnc_display_find(const char *id)
     VncDisplay *vd;
 
     if (id == NULL) {
+        //id为空，取链表上首个元素
         return QTAILQ_FIRST(&vnc_displays);
     }
+
+    //有id,返回此id对应的元素
     QTAILQ_FOREACH(vd, &vnc_displays, next) {
         if (strcmp(id, vd->id) == 0) {
             return vd;
@@ -3176,9 +3179,12 @@ void vnc_display_init(const char *id, Error **errp)
 {
     VncDisplay *vd;
 
+    //找到对应的vd,直接返回
     if (vnc_display_find(id) != NULL) {
         return;
     }
+
+    //创建对应id的vd
     vd = g_malloc0(sizeof(*vd));
 
     vd->id = strdup(id);
@@ -3203,6 +3209,7 @@ void vnc_display_init(const char *id, Error **errp)
     vd->connections_limit = 32;
 
     qemu_mutex_init(&vd->mutex);
+    /*启动vnc工作线程*/
     vnc_start_worker_thread();
 
     vd->dcl.ops = &dcl_ops;
@@ -4113,6 +4120,7 @@ QemuOpts *vnc_parse(const char *str, Error **errp)
 int vnc_init_func(void *opaque, QemuOpts *opts, Error **errp)
 {
     Error *local_err = NULL;
+    //vnc配置的id号
     char *id = (char *)qemu_opts_id(opts);
 
     assert(id);

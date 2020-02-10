@@ -51,21 +51,25 @@ struct PostcopyDiscardState {
 
 static NotifierWithReturnList postcopy_notifier_list;
 
+//通知链初始化
 void postcopy_infrastructure_init(void)
 {
     notifier_with_return_list_init(&postcopy_notifier_list);
 }
 
+//添加notifier
 void postcopy_add_notifier(NotifierWithReturn *nn)
 {
     notifier_with_return_list_add(&postcopy_notifier_list, nn);
 }
 
+//移除notifier
 void postcopy_remove_notifier(NotifierWithReturn *n)
 {
     notifier_with_return_remove(n);
 }
 
+//触发通知
 int postcopy_notify(enum PostcopyNotifyReason reason, Error **errp)
 {
     struct PostcopyNotifyData pnd;

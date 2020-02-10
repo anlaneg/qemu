@@ -29,8 +29,8 @@
 static inline PCIDevice *pcie_dev_find_by_mmcfg_addr(PCIBus *s,
                                                      uint32_t mmcfg_addr)
 {
-    return pci_find_device(s, PCIE_MMCFG_BUS(mmcfg_addr),
-                           PCIE_MMCFG_DEVFN(mmcfg_addr));
+    return pci_find_device(s, PCIE_MMCFG_BUS(mmcfg_addr)/*取bus number*/,
+                           PCIE_MMCFG_DEVFN(mmcfg_addr)/*自地址中取devfn*/);
 }
 
 static void pcie_mmcfg_data_write(void *opaque, hwaddr mmcfg_addr,
@@ -61,8 +61,10 @@ static uint64_t pcie_mmcfg_data_read(void *opaque,
     uint32_t limit;
 
     if (!pci_dev) {
+        /*设备不存在，按pci规范，返回全F*/
         return ~0x0;
     }
+    /*格式化为地址在pcie配置空间的偏移量*/
     addr = PCIE_MMCFG_CONFOFFSET(mmcfg_addr);
     limit = pci_config_size(pci_dev);
     return pci_host_config_read_common(pci_dev, addr, limit, len);
@@ -79,6 +81,7 @@ static void pcie_host_init(Object *obj)
     PCIExpressHost *e = PCIE_HOST_BRIDGE(obj);
 
     e->base_addr = PCIE_BASE_ADDR_UNMAPPED;
+    //注册pcie memory config的操作集
     memory_region_init_io(&e->mmio, OBJECT(e), &pcie_mmcfg_ops, e, "pcie-mmcfg-mmio",
                           PCIE_MMCFG_SIZE_MAX);
 }

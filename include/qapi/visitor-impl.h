@@ -111,7 +111,7 @@ struct Visitor
     void (*optional)(Visitor *v, const char *name, bool *present);//检查某个选项是否存在
 
     /* Must be set */
-    VisitorType type;
+    VisitorType type;//vistor类型
 
     /* Must be set for output visitors, optional otherwise. */
     void (*complete)(Visitor *v, void *opaque);

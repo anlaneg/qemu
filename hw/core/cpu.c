@@ -438,6 +438,7 @@ static void cpu_class_init(ObjectClass *klass, void *data)
     dc->user_creatable = false;
 }
 
+//所有cpu对应的基类
 static const TypeInfo cpu_type_info = {
     .name = TYPE_CPU,
     .parent = TYPE_DEVICE,

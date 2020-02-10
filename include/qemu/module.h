@@ -51,11 +51,13 @@ typedef enum {
     MODULE_INIT_MAX
 } module_init_type;
 
+//block 类型modules 注册
 #define block_init(function) module_init(function, MODULE_INIT_BLOCK)
-//选项注册
+//模块选项注册
 #define opts_init(function) module_init(function, MODULE_INIT_OPTS)
-//类型注册
+//类型modules注册
 #define type_init(function) module_init(function, MODULE_INIT_QOM)
+//trace类型模块注册
 #define trace_init(function) module_init(function, MODULE_INIT_TRACE)
 #define xen_backend_init(function) module_init(function, \
                                                MODULE_INIT_XEN_BACKEND)

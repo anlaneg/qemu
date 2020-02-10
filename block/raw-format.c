@@ -548,6 +548,7 @@ static const char *const raw_strong_runtime_opts[] = {
     NULL
 };
 
+//raw格式的block驱动
 BlockDriver bdrv_raw = {
     .format_name          = "raw",
     .instance_size        = sizeof(BDRVRawState),

@@ -203,7 +203,8 @@ static int drive_index_to_unit_id(BlockInterfaceType type, int index)
 
 QemuOpts *drive_def(const char *optstr)
 {
-    return qemu_opts_parse_noisily(qemu_find_opts("drive"), optstr, false);
+    /*通过drive group解析此字符串*/
+    return qemu_opts_parse_noisily(qemu_find_opts("drive")/*取drive group*/, optstr, false);
 }
 
 QemuOpts *drive_add(BlockInterfaceType type, int index, const char *file,
@@ -216,12 +217,15 @@ QemuOpts *drive_add(BlockInterfaceType type, int index, const char *file,
         return NULL;
     }
     if (type != IF_DEFAULT) {
+        /*添加if参数及其值*/
         qemu_opt_set(opts, "if", if_name[type], &error_abort);
     }
     if (index >= 0) {
+        //添加index参数
         qemu_opt_set_number(opts, "index", index, &error_abort);
     }
     if (file)
+        //添加file参数
         qemu_opt_set(opts, "file", file, &error_abort);
     return opts;
 }

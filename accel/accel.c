@@ -61,7 +61,7 @@ static int accel_init_machine(AccelClass *acc, MachineState *ms)
     int ret;
     ms->accelerator = accel;
     *(acc->allowed) = true;
-    //初始化instance
+    //创建并初始化 vm instance
     ret = acc->init_machine(ms);
     if (ret < 0) {
         ms->accelerator = NULL;
@@ -111,7 +111,7 @@ void configure_accelerator(MachineState *ms, const char *progname)
     for (tmp = accel_list; !accel_initialised/*如果machine已初始化成功，则跳出*/ && tmp && *tmp; tmp++) {
         acc = accel_find(*tmp);//针对一种accel，用其初始化machie
         if (!acc) {
-        		//如果不存在，则尝试下一个
+        	//如果不存在，则尝试下一个
             continue;
         }
         ret = accel_init_machine(acc, ms);

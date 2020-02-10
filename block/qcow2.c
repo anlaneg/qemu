@@ -5426,6 +5426,7 @@ BlockDriver bdrv_qcow2 = {
             qcow2_co_remove_persistent_dirty_bitmap,
 };
 
+//注册qcow2格式的block驱动
 static void bdrv_qcow2_init(void)
 {
     bdrv_register(&bdrv_qcow2);

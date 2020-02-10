@@ -1055,6 +1055,7 @@ static BlockDriver bdrv_vdi = {
     .bdrv_co_check = vdi_co_check,
 };
 
+//注册vdi格式的block驱动
 static void bdrv_vdi_init(void)
 {
     logout("\n");

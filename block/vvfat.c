@@ -3284,6 +3284,7 @@ static BlockDriver bdrv_vvfat = {
     .strong_runtime_opts    = vvfat_strong_runtime_opts,
 };
 
+//注册vvfat格式的block驱动
 static void bdrv_vvfat_init(void)
 {
     bdrv_register(&bdrv_vvfat);

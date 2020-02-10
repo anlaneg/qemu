@@ -108,9 +108,9 @@ typedef struct VirtioPCIClass {
 } VirtioPCIClass;
 
 typedef struct VirtIOPCIRegion {
-    MemoryRegion mr;
-    uint32_t offset;
-    uint32_t size;
+    MemoryRegion mr;//所属的mr
+    uint32_t offset;//pci内存区间起始地址
+    uint32_t size;//内存区域的大小
     uint32_t type;
 } VirtIOPCIRegion;
 

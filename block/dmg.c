@@ -755,6 +755,7 @@ static BlockDriver bdrv_dmg = {
     .bdrv_close     = dmg_close,
 };
 
+//注册dmg格式的block驱动
 static void bdrv_dmg_init(void)
 {
     bdrv_register(&bdrv_dmg);

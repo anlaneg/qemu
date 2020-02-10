@@ -1205,6 +1205,7 @@ static BlockDriver bdrv_qcow = {
     .strong_runtime_opts    = qcow_strong_runtime_opts,
 };
 
+//注册qcow格式的块设备驱动
 static void bdrv_qcow_init(void)
 {
     bdrv_register(&bdrv_qcow);

@@ -77,10 +77,10 @@ struct KVMState
     AccelState parent_obj;
 
     int nr_slots;//memory slots的数目
-    int fd;/* /dev/kvm对应的fd */
+    int fd;/* kvm_dev对应的fd */
     int vmfd;/*vm对应的fd*/
-    int coalesced_mmio;
-    int coalesced_pio;
+    int coalesced_mmio;//返回mmio_page_offset情况
+    int coalesced_pio;//是否支持pio
     struct kvm_coalesced_mmio_ring *coalesced_mmio_ring;
     bool coalesced_flush_in_progress;
     int vcpu_events;
@@ -831,12 +831,14 @@ static MemoryListener kvm_coalesced_pio_listener = {
     .coalesced_io_del = kvm_coalesce_pio_del,
 };
 
+//检查extension扩展的支持情况
 int kvm_check_extension(KVMState *s, unsigned int extension)
 {
     int ret;
 
     ret = kvm_ioctl(s, KVM_CHECK_EXTENSION, extension);
     if (ret < 0) {
+        //不支持
         ret = 0;
     }
 
@@ -981,10 +983,12 @@ kvm_check_extension_list(KVMState *s, const KVMCapabilityInfo *list)
 {
     while (list->name) {
         if (!kvm_check_extension(s, list->value)) {
+            /*返回不支持扩展*/
             return list;
         }
         list++;
     }
+    /*全部支持*/
     return NULL;
 }
 
@@ -1812,6 +1816,7 @@ bool kvm_vcpu_id_is_valid(int vcpu_id)
     return vcpu_id >= 0 && vcpu_id < kvm_max_vcpu_id(s);
 }
 
+//kvm初始化
 static int kvm_init(MachineState *ms)
 {
     MachineClass *mc = MACHINE_GET_CLASS(ms);
@@ -1861,7 +1866,7 @@ static int kvm_init(MachineState *ms)
     /*获得kvm api版本*/
     ret = kvm_ioctl(s, KVM_GET_API_VERSION, 0);
     if (ret < KVM_API_VERSION) {
-    		//不支持小于此version的kvm
+    	//不支持小于此version的kvm
         if (ret >= 0) {
             ret = -EINVAL;
         }
@@ -1870,7 +1875,7 @@ static int kvm_init(MachineState *ms)
     }
 
     if (ret > KVM_API_VERSION) {
-    		//不支持大于此version的kvm
+    	//不支持大于此version的kvm
         ret = -EINVAL;
         fprintf(stderr, "kvm version not supported\n");
         goto err;
@@ -1882,7 +1887,7 @@ static int kvm_init(MachineState *ms)
 
     /* If unspecified, use the default value */
     if (!s->nr_slots) {
-    		//如果未指定，则使用默认值32
+    	//如果未指定，则使用默认值32
         s->nr_slots = 32;
     }
 
@@ -1902,12 +1907,12 @@ static int kvm_init(MachineState *ms)
     }
 
     do {
-    		//执行vm创建
+    	//执行vm创建
         ret = kvm_ioctl(s, KVM_CREATE_VM, type);
     } while (ret == -EINTR);
 
     if (ret < 0) {
-    		//创建vm失败
+    	//创建vm失败
         fprintf(stderr, "ioctl(KVM_CREATE_VM) failed: %d %s\n", -ret,
                 strerror(-ret));
 
@@ -1927,6 +1932,7 @@ static int kvm_init(MachineState *ms)
         goto err;
     }
 
+    /*记录vm对应的fd*/
     s->vmfd = ret;
 
     /* check the vcpu limits */
@@ -1951,10 +1957,12 @@ static int kvm_init(MachineState *ms)
 
     missing_cap = kvm_check_extension_list(s, kvm_required_capabilites);
     if (!missing_cap) {
+        /*kvm_required_capabilites列出的功能均支持，查看arch指定折cap是否支持*/
         missing_cap =
             kvm_check_extension_list(s, kvm_arch_required_capabilities);
     }
     if (missing_cap) {
+        /*存在水支持的扩展，报错*/
         ret = -EINVAL;
         fprintf(stderr, "kvm does not support %s\n%s",
                 missing_cap->name, upgrade_note);
@@ -2034,6 +2042,7 @@ static int kvm_init(MachineState *ms)
         kvm_state->memcrypt_encrypt_data = sev_encrypt_data;
     }
 
+    //各体系结构自已的init
     ret = kvm_arch_init(ms, s);
     if (ret < 0) {
         goto err;
@@ -2432,6 +2441,7 @@ int kvm_ioctl(KVMState *s, int type, ...)
     return ret;
 }
 
+//通过ioctl与vm通信
 int kvm_vm_ioctl(KVMState *s, int type, ...)
 {
     int ret;
@@ -2935,7 +2945,7 @@ static void kvm_accel_class_init(ObjectClass *oc, void *data)
 {
     AccelClass *ac = ACCEL_CLASS(oc);
     ac->name = "KVM";
-    ac->init_machine = kvm_init;/*kvm初始化*/
+    ac->init_machine = kvm_init;/*vm创建，初始化*/
     ac->has_memory = kvm_accel_has_memory;
     ac->allowed = &kvm_allowed;
 }

@@ -1102,6 +1102,7 @@ void machine_run_board_init(MachineState *machine)
 {
     MachineClass *machine_class = MACHINE_GET_CLASS(machine);
 
+    //如果board支持numa,则配置numa
     if (machine_class->numa_mem_supported) {
         numa_complete_configuration(machine);
         if (machine->numa_state->num_nodes) {
@@ -1116,6 +1117,7 @@ void machine_run_board_init(MachineState *machine)
         ObjectClass *class = object_class_by_name(machine->cpu_type);
         int i;
 
+        //检查指定的cpu是否被当前machine支持
         for (i = 0; machine_class->valid_cpu_types[i]; i++) {
             if (object_class_dynamic_cast(class,
                                           machine_class->valid_cpu_types[i])) {
@@ -1126,6 +1128,7 @@ void machine_run_board_init(MachineState *machine)
             }
         }
 
+        //指定的cpu不是borad的有效类型，退出
         if (!machine_class->valid_cpu_types[i]) {
             /* The user specified CPU is not valid */
             error_report("Invalid CPU type: %s", machine->cpu_type);
@@ -1140,9 +1143,11 @@ void machine_run_board_init(MachineState *machine)
         }
     }
 
+    //执行board初始化
     machine_class->init(machine);
 }
 
+//定义“machine"类型，它是所有machine类型的子类
 static const TypeInfo machine_info = {
     .name = TYPE_MACHINE,
     .parent = TYPE_OBJECT,

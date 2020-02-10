@@ -25,7 +25,7 @@ void qmp_register_command(QmpCommandList *cmds, const char *name,
     cmd->fn = fn;
     cmd->enabled = true;
     cmd->options = options;
-    //将其加入到cmds中
+    //将cmd加入到cmdlist中
     QTAILQ_INSERT_TAIL(cmds, cmd, node);
 }
 

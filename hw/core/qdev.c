@@ -790,6 +790,7 @@ GSList *qdev_build_hotpluggable_device_list(Object *peripheral)
     return list;
 }
 
+//自device中获取realized属性（bool类型）
 static bool device_get_realized(Object *obj, Error **errp)
 {
     DeviceState *dev = DEVICE(obj);
@@ -810,6 +811,7 @@ static bool check_only_migratable(Object *obj, Error **err)
     return true;
 }
 
+//向device object的realized属性设置值
 static void device_set_realized(Object *obj, bool value, Error **errp)
 {
     DeviceState *dev = DEVICE(obj);
@@ -973,6 +975,7 @@ static void device_initfn(Object *obj)
     dev->instance_id_alias = -1;
     dev->realized = false;
 
+    //向device object添加bool类型的属性realized
     object_property_add_bool(obj, "realized",
                              device_get_realized, device_set_realized, NULL);
     object_property_add_bool(obj, "hotpluggable",

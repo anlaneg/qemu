@@ -305,6 +305,7 @@ void os_setup_post(void)
     int fd = 0;
 
     if (daemonize) {
+        //如果进入后台，则切工作目录，并打开/dev/null准备执行0,1的重定向
         if (chdir("/")) {
             error_report("not able to chdir to /: %s", strerror(errno));
             exit(1);
@@ -326,6 +327,7 @@ void os_setup_post(void)
         dup2(fd, 1);
         /* In case -D is given do not redirect stderr to /dev/null */
         if (!qemu_logfile) {
+            //没有配置log文件，则stderr也重定向到/dev/null
             dup2(fd, 2);
         }
 

@@ -100,6 +100,7 @@ static QemuOptsList qemu_virtfs_opts = {
 
 static void fsdev_register_config(void)
 {
+    //注册两个选项group
     qemu_add_opts(&qemu_fsdev_opts);
     qemu_add_opts(&qemu_virtfs_opts);
 }

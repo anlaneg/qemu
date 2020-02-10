@@ -180,9 +180,9 @@ struct MachineClass {
     /*< public >*/
 
     const char *family; /* NULL iff @name identifies a standalone machtype */
-    char *name;//名称
-    const char *alias;//别名
-    const char *desc;
+    char *name;//机器名称
+    const char *alias;//机器别名
+    const char *desc;//机器描述信息
     const char *deprecation_reason;
 
     void (*init)(MachineState *state);

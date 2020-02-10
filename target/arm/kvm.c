@@ -59,28 +59,35 @@ void kvm_arm_init_serror_injection(CPUState *cs)
 
 bool kvm_arm_create_scratch_host_vcpu(const uint32_t *cpus_to_try,
                                       int *fdarray,
-                                      struct kvm_vcpu_init *init)
+                                      struct kvm_vcpu_init *init/*vcpu初始化参数*/)
 {
     int ret, kvmfd = -1, vmfd = -1, cpufd = -1;
 
+    //打开kvm
     kvmfd = qemu_open("/dev/kvm", O_RDWR);
     if (kvmfd < 0) {
         goto err;
     }
+
+    //创建vm,打开vm对应的fd
     vmfd = ioctl(kvmfd, KVM_CREATE_VM, 0);
     if (vmfd < 0) {
         goto err;
     }
+
+    //针对此vm,创建vcpu,打开vcpu对应的fd
     cpufd = ioctl(vmfd, KVM_CREATE_VCPU, 0);
     if (cpufd < 0) {
         goto err;
     }
 
     if (!init) {
+        /*不需要初始化vcpu,完成*/
         /* Caller doesn't want the VCPU to be initialized, so skip it */
         goto finish;
     }
 
+    //尝试arm独有的ioctl调用
     ret = ioctl(vmfd, KVM_ARM_PREFERRED_TARGET, init);
     if (ret >= 0) {
         ret = ioctl(cpufd, KVM_ARM_VCPU_INIT, init);

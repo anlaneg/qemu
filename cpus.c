@@ -2045,6 +2045,7 @@ static void qemu_hax_start_vcpu(CPUState *cpu)
 #endif
 }
 
+//启动单个vcpu的独立线程
 static void qemu_kvm_start_vcpu(CPUState *cpu)
 {
     char thread_name[VCPU_THREAD_NAME_SIZE];
@@ -2052,7 +2053,7 @@ static void qemu_kvm_start_vcpu(CPUState *cpu)
     cpu->thread = g_malloc0(sizeof(QemuThread));
     cpu->halt_cond = g_malloc0(sizeof(QemuCond));
     qemu_cond_init(cpu->halt_cond);
-    //设置线程名称
+    //设置vcpu线程名称
     snprintf(thread_name, VCPU_THREAD_NAME_SIZE, "CPU %d/KVM",
              cpu->cpu_index);
     //创建线程运行kvm cpu thread
@@ -2125,6 +2126,7 @@ void qemu_init_vcpu(CPUState *cpu)
     }
 
     if (kvm_enabled()) {
+        //qemu kvm开启vcpu
         qemu_kvm_start_vcpu(cpu);
     } else if (hax_enabled()) {
         qemu_hax_start_vcpu(cpu);

@@ -1517,6 +1517,7 @@ void pc_cpus_init(PCMachineState *pcms)
     pcms->apic_id_limit = x86_cpu_apic_id_from_index(pcms,
                                                      ms->smp.max_cpus - 1) + 1;
     possible_cpus = mc->possible_cpu_arch_ids(ms);
+    //针对每个cpu,创建new_cpu
     for (i = 0; i < ms->smp.cpus; i++) {
         pc_new_cpu(pcms, possible_cpus->cpus[i].arch_id, &error_fatal);
     }

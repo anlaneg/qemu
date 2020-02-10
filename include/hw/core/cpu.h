@@ -362,7 +362,7 @@ struct CPUState {
 #ifdef _WIN32
     HANDLE hThread;
 #endif
-    int thread_id;
+    int thread_id;//对应的线程id号
     bool running, has_waiter;
     struct QemuCond *halt_cond;
     bool thread_kicked;

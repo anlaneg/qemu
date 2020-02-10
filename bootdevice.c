@@ -87,13 +87,17 @@ void validate_bootdevices(const char *devices, Error **errp)
          * features.
          */
         if (*p < 'a' || *p > 'p') {
+            //不合法的启动顺序
             error_setg(errp, "Invalid boot device '%c'", *p);
             return;
         }
         if (bitmap & (1 << (*p - 'a'))) {
+            /*检查是否已标记此boot顺序*/
             error_setg(errp, "Boot device '%c' was given twice", *p);
             return;
         }
+
+        /*标记此启动bit*/
         bitmap |= 1 << (*p - 'a');
     }
 }

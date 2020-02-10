@@ -28,8 +28,8 @@ typedef enum QmpCommandOptions
 
 typedef struct QmpCommand
 {
-    const char *name;
-    QmpCommandFunc *fn;
+    const char *name;//命令名称
+    QmpCommandFunc *fn;//命令处理函数
     QmpCommandOptions options;
     QTAILQ_ENTRY(QmpCommand) node;
     bool enabled;

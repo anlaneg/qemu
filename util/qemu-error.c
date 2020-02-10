@@ -123,6 +123,7 @@ void loc_set_none(void)
  */
 void loc_set_cmdline(char **argv, int idx, int cnt)
 {
+    //记录当前解析命令行位置
     cur_loc->kind = LOC_CMDLINE;
     cur_loc->num = cnt;
     cur_loc->ptr = argv + idx;

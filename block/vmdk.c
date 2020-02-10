@@ -3062,6 +3062,7 @@ static BlockDriver bdrv_vmdk = {
     .create_opts                  = &vmdk_create_opts,
 };
 
+//注册vmdk格式的block驱动
 static void bdrv_vmdk_init(void)
 {
     bdrv_register(&bdrv_vmdk);

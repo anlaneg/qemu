@@ -528,7 +528,7 @@ static QemuOptsList qemu_fw_cfg_opts = {
  *
  * Returns: machine options (never null).
  */
-//取machine的opts
+//取machine对应的QemuOpts
 QemuOpts *qemu_get_machine_opts(void)
 {
     return qemu_find_opts_singleton("machine");
@@ -576,6 +576,7 @@ typedef struct {
     RunState to;
 } RunStateTransition;
 
+//定义可以相互转换的状态
 static const RunStateTransition runstate_transitions_def[] = {
     /*     from      ->     to      */
     { RUN_STATE_PRECONFIG, RUN_STATE_PRELAUNCH },
@@ -672,7 +673,7 @@ static const RunStateTransition runstate_transitions_def[] = {
     { RUN_STATE__MAX, RUN_STATE__MAX },
 };
 
-//标记自from可以到达b状态（如果为False，则不能转换）
+//标记自state可以到达state状态（如果为False，则不能转换）
 static bool runstate_valid_transitions[RUN_STATE__MAX][RUN_STATE__MAX];
 
 //检查state状态是否为当前状态
@@ -1318,6 +1319,7 @@ static int usb_parse(const char *cmdline)
 
 MachineState *current_machine;
 
+//遍历machines链表，查找名称为name的machineClass
 static MachineClass *find_machine(const char *name, GSList *machines)
 {
     GSList *el;
@@ -1863,6 +1865,7 @@ typedef struct QEMUOption {
     uint32_t arch_mask;//那个体系结构有此参数
 } QEMUOption;
 
+//qemu当前支持的选项
 static const QEMUOption qemu_options[] = {
     { "h", 0, QEMU_OPTION_h, QEMU_ARCH_ALL },
 #define QEMU_OPTIONS_GENERATE_OPTIONS //通过这个宏可以控制生成的样式
@@ -2489,6 +2492,7 @@ static MachineClass *machine_parse(const char *name, GSList *machines)
     GSList *el;
 
     if (is_help_option(name)) {
+        //显示machine的帮助信息
         printf("Supported machines are:\n");
         machines = g_slist_sort(machines, machine_class_cmp);
         for (el = machines; el; el = el->next) {
@@ -2568,7 +2572,7 @@ static void qemu_run_machine_init_done_notifiers(void)
 //-netdev type=vhost-user,id=mynet1,chardev=char1,vhostforce
 //-device virtio-net-pci,mac=00:00:00:00:00:01,netdev=mynet1
 static const QEMUOption *lookup_opt(int argc, char **argv,
-                                    const char **poptarg, int *poptind)
+                                    const char **poptarg/*出参，选项的参数*/, int *poptind/*入出参，下次optindex*/)
 {
     const QEMUOption *popt;
     int optind = *poptind;
@@ -2583,13 +2587,13 @@ static const QEMUOption *lookup_opt(int argc, char **argv,
         r++;
     popt = qemu_options;//qemu选项
     for(;;) {
-    		//最后一项为NULL,错误的选项（或者没有找到与参数相匹配的选项）
+    	//最后一项为NULL,错误的选项（或者没有找到与参数相匹配的选项）
         if (!popt->name) {
             error_report("invalid option");
             exit(1);
         }
 
-        //找一个与参数相匹配的选项
+        //找一个与参数相匹配的选项(跳过‘-’）
         if (!strcmp(popt->name, r + 1))
             break;
         popt++;
@@ -2615,9 +2619,14 @@ static const QEMUOption *lookup_opt(int argc, char **argv,
     return popt;
 }
 
+//选出系统指定的machine
 static MachineClass *select_machine(void)
 {
+    //取“machine”类型的所有子类（不含抽象类型）
+    //即当前系统支持的所有machines类型
     GSList *machines = object_class_get_list(TYPE_MACHINE, false);
+
+    //选出链表上第一个有is_default标记的machines
     MachineClass *machine_class = find_default_machine(machines);
     const char *optarg;
     QemuOpts *opts;
@@ -2625,16 +2634,18 @@ static MachineClass *select_machine(void)
 
     loc_push_none(&loc);
 
+    //取machine选项组
     opts = qemu_get_machine_opts();
     qemu_opts_loc_restore(opts);
 
-    //取opts中的type取值
+    //取machine选项组中的type取值，匹配它指定的machine类型
     optarg = qemu_opt_get(opts, "type");
     if (optarg) {
         machine_class = machine_parse(optarg, machines);
     }
 
     if (!machine_class) {
+        /*必须能选出默认的machine*/
         error_report("No machine specified, and there is no default");
         error_printf("Use -machine help to list supported machines\n");
         exit(1);
@@ -2759,7 +2770,7 @@ static void set_memory_options(uint64_t *ram_slots, ram_addr_t *maxram_size,
     qemu_opts_loc_restore(opts);
 
     sz = 0;
-    mem_str = qemu_opt_get(opts, "size");//取内存大小
+    mem_str = qemu_opt_get(opts, "size");//取设置的内存大小
     if (mem_str) {
         if (!*mem_str) {
             error_report("missing 'size' option value");
@@ -2845,6 +2856,7 @@ static int qemu_read_default_config_file(void)
 {
     int ret;
 
+    //读取qemu.conf，例如/usr/local/etc/qemu/qemu.conf
     ret = qemu_read_config_file(CONFIG_QEMU_CONFDIR "/qemu.conf");
     if (ret < 0 && ret != -ENOENT) {
         return ret;
@@ -2855,6 +2867,7 @@ static int qemu_read_default_config_file(void)
 
 static void user_register_global_props(void)
 {
+    //取global选项组中的driver,value,property
     qemu_opts_foreach(qemu_find_opts("global"),
                       global_init_func, NULL, NULL);
 }
@@ -2899,6 +2912,7 @@ int main(int argc, char **argv, char **envp)
     os_set_line_buffering();
 
     error_init(argv[0]);
+    //见trace_init宏定义的所有module初始化函数
     module_call_init(MODULE_INIT_TRACE);
 
     qemu_init_cpu_list();
@@ -2910,9 +2924,11 @@ int main(int argc, char **argv, char **envp)
     atexit(qemu_run_exit_notifiers);
     qemu_init_exec_dir(argv[0]);
 
-    module_call_init(MODULE_INIT_QOM);//系统类型注册
+    //type注册，将type名称与TypeImpl映射情况加入到
+    //type_table_get 表中
+    module_call_init(MODULE_INIT_QOM);
 
-    //qemu选项注册
+    //qemu group_list选项注册
     qemu_add_opts(&qemu_drive_opts);
     qemu_add_drive_opts(&qemu_legacy_drive_opts);
     qemu_add_drive_opts(&qemu_common_drive_opts);
@@ -2944,12 +2960,18 @@ int main(int argc, char **argv, char **envp)
     qemu_add_opts(&qemu_icount_opts);
     qemu_add_opts(&qemu_semihosting_config_opts);
     qemu_add_opts(&qemu_fw_cfg_opts);
-    //加载其它模块引入的opts注册
+
+    //加载其它模块引入的opts
     module_call_init(MODULE_INIT_OPTS);
 
+    //指定状态转换规则
     runstate_init();
+
+    //初始化通知链
     precopy_infrastructure_init();//初始化通知链（作用？）
     postcopy_infrastructure_init();
+
+    //？？？
     monitor_init_globals();
 
     if (qcrypto_init(&err) < 0) {
@@ -2965,8 +2987,7 @@ int main(int argc, char **argv, char **envp)
 
     nb_nics = 0;
 
-    //实际上调用在
-    //module_call_init(MODULE_INIT_BLOCK)
+    //block模块注册(注册不同格式的块设备/qemu/block目录）
     bdrv_init_with_whitelist();
 
     autostart = 1;
@@ -2975,7 +2996,7 @@ int main(int argc, char **argv, char **envp)
     //首次处理参数，主要目的，分辨出用户是否配置了userconfig=false
     optind = 1;
     while (optind < argc) {
-    		//跳过非选项
+    	//跳过非选项
         if (argv[optind][0] != '-') {
             /* disk image */
             optind++;
@@ -2986,6 +3007,7 @@ int main(int argc, char **argv, char **envp)
             popt = lookup_opt(argc, argv, &optarg, &optind);
             switch (popt->index) {
             case QEMU_OPTION_nouserconfig:
+                /*配置了禁止读取config*/
                 userconfig = false;
                 break;
             }
@@ -3000,7 +3022,7 @@ int main(int argc, char **argv, char **envp)
     }
 
     /* second pass of option parsing */
-    //第二遍解析参数，解析命令行参数，将其保存在相应optgroup的head指针下
+    //第二遍解析参数，解析命令行参数，将解析结果qemuOpts保存到相应optgroup的head指针下
     optind = 1;
     for(;;) {
         if (optind >= argc)
@@ -3028,6 +3050,7 @@ int main(int argc, char **argv, char **envp)
             case QEMU_OPTION_hdb:
             case QEMU_OPTION_hdc:
             case QEMU_OPTION_hdd:
+                /*drive参数解析*/
                 drive_add(IF_DEFAULT, popt->index - QEMU_OPTION_hda, optarg,
                           HD_OPTS);
                 break;
@@ -3891,6 +3914,7 @@ int main(int argc, char **argv, char **envp)
 
     configure_rtc(qemu_find_opts_singleton("rtc"));
 
+    //选出指定的machine
     machine_class = select_machine();
     object_set_machine_compat_props(machine_class->compat_props);
 
@@ -3937,8 +3961,10 @@ int main(int argc, char **argv, char **envp)
     if (machine_help_func(qemu_get_machine_opts(), current_machine)) {
         exit(0);
     }
+    //在root object中添加machine对象
     object_property_add_child(object_get_root(), "machine",
                               OBJECT(current_machine), &error_abort);
+    //创建在current_machine中创建unattached,并在其中添加sysbus名称的object
     object_property_add_child(container_get(OBJECT(current_machine),
                                             "/unattached"),
                               "sysbus", OBJECT(sysbus_get_default()),
@@ -4049,6 +4075,7 @@ int main(int argc, char **argv, char **envp)
                                machine_class->default_machine_opts, 0);
     }
 
+    //针对所有device/global配置，如果指定了driver选项，则更新default_list
     qemu_opts_foreach(qemu_find_opts("device"),
                       default_driver_check, NULL, NULL);
     qemu_opts_foreach(qemu_find_opts("global"),
@@ -4208,7 +4235,7 @@ int main(int argc, char **argv, char **envp)
      * Note: uses machine properties such as kernel-irqchip, must run
      * after machine_set_property().
      */
-    //配置例如kvm式加速器
+    //配置加速器，例如kvm式加速器
     configure_accelerator(current_machine, argv[0]);
 
     /*
@@ -4252,6 +4279,7 @@ int main(int argc, char **argv, char **envp)
     if (opts) {
         boot_order = qemu_opt_get(opts, "order");
         if (boot_order) {
+            //启动顺序校验
             validate_bootdevices(boot_order, &error_fatal);
         }
 
@@ -4388,6 +4416,7 @@ int main(int argc, char **argv, char **envp)
     audio_init_audiodevs();
 
     /* from here on runstate is RUN_STATE_PRELAUNCH */
+    //执行主板的初始化
     machine_run_board_init(current_machine);
 
     realtime_init();
@@ -4453,6 +4482,7 @@ int main(int argc, char **argv, char **envp)
 #endif
 
     if (using_spice) {
+        //spice方式显示初始化
         qemu_spice_display_init();
     }
 
@@ -4514,6 +4544,7 @@ int main(int argc, char **argv, char **envp)
     os_setup_post();
 
     main_loop();
+    //执行vm实例销毁
 
     gdbserver_cleanup();
 

@@ -1992,6 +1992,7 @@ static bool pci_root_bus_in_range(PCIBus *bus, int bus_num)
     return false;
 }
 
+//给定bus_num在bus上录找num与之匹配的bus
 static PCIBus *pci_find_bus_nr(PCIBus *bus, int bus_num)
 {
     PCIBus *sec;
@@ -2000,6 +2001,7 @@ static PCIBus *pci_find_bus_nr(PCIBus *bus, int bus_num)
         return NULL;
     }
 
+    //检查此bus是否恰好是要查找的bus
     if (pci_bus_num(bus) == bus_num) {
         return bus;
     }
@@ -2059,7 +2061,7 @@ void pci_for_each_bus_depth_first(PCIBus *bus,
     }
 }
 
-
+//在bus上查找(bus_num,devfn)上查找device
 PCIDevice *pci_find_device(PCIBus *bus, int bus_num, uint8_t devfn)
 {
     bus = pci_find_bus_nr(bus, bus_num);
@@ -2067,6 +2069,7 @@ PCIDevice *pci_find_device(PCIBus *bus, int bus_num, uint8_t devfn)
     if (!bus)
         return NULL;
 
+    //通过device+function查找对应折pciDevice
     return bus->devices[devfn];
 }
 

@@ -3259,8 +3259,10 @@ static const TypeInfo iommu_memory_region_info = {
 
 static void memory_register_types(void)
 {
+    //静态注册两个memory类型
     type_register_static(&memory_region_info);
     type_register_static(&iommu_memory_region_info);
 }
 
+//memory类型初始化
 type_init(memory_register_types)

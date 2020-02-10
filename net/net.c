@@ -1600,7 +1600,7 @@ int net_init_clients(Error **errp)
     return 0;
 }
 
-//解析参数，将其加入到opts_list中
+//解析参数optarg，将其加入到opts_list中
 int net_client_parse(QemuOptsList *opts_list, const char *optarg)
 {
     if (!qemu_opts_parse_noisily(opts_list, optarg, true)) {

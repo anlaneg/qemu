@@ -299,6 +299,7 @@ static BlockDriver bdrv_cloop = {
     .bdrv_close     = cloop_close,
 };
 
+//注册cloop格式的block驱动
 static void bdrv_cloop_init(void)
 {
     bdrv_register(&bdrv_cloop);

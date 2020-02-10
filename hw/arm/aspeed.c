@@ -485,6 +485,7 @@ static void aspeed_machine_types(void)
 {
     int i;
 
+    //定义aspeed machine类型
     type_register_static(&aspeed_machine_type);
     for (i = 0; i < ARRAY_SIZE(aspeed_boards); ++i) {
         TypeInfo ti = {

@@ -68,6 +68,7 @@ static const int ide_irq[MAX_IDE_BUS] = { 14, 15 };
 #endif
 
 /* PC hardware initialisation */
+//pc硬件初始化
 static void pc_init1(MachineState *machine,
                      const char *host_type, const char *pci_type)
 {
@@ -407,17 +408,19 @@ static void pc_xen_hvm_init(MachineState *machine)
 }
 #endif
 
-#define DEFINE_I440FX_MACHINE(suffix, name, compatfn, optionfn) \
+#define DEFINE_I440FX_MACHINE(suffix, name, compatfn/*此pc类型的初始化函数*/, optionfn/*选项func*/) \
+    /*定义此pc类型的初始化函数*/\
     static void pc_init_##suffix(MachineState *machine) \
     { \
         void (*compat)(MachineState *m) = (compatfn); \
         if (compat) { \
             compat(machine); \
         } \
+        /*初始化pc硬件*/\
         pc_init1(machine, TYPE_I440FX_PCI_HOST_BRIDGE, \
                  TYPE_I440FX_PCI_DEVICE); \
     } \
-    DEFINE_PC_MACHINE(suffix, name, pc_init_##suffix, optionfn)
+    DEFINE_PC_MACHINE(suffix, name/*pc机名称*/, pc_init_##suffix, optionfn)
 
 static void pc_i440fx_machine_options(MachineClass *m)
 {

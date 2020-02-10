@@ -3336,6 +3336,7 @@ static void max_x86_cpu_initfn(Object *obj)
     object_property_set_bool(OBJECT(cpu), true, "pmu", &error_abort);
 }
 
+//定义max-x86 cpu对应的类型
 static const TypeInfo max_x86_cpu_type_info = {
     .name = X86_CPU_TYPE_NAME("max"),
     .parent = TYPE_X86_CPU,
@@ -3360,6 +3361,7 @@ static void host_x86_cpu_class_init(ObjectClass *oc, void *data)
 #endif
 }
 
+//定义host-x86_64-cpu对应的类型
 static const TypeInfo host_x86_cpu_type_info = {
     .name = X86_CPU_TYPE_NAME("host"),
     .parent = X86_CPU_TYPE_NAME("max"),
@@ -5534,6 +5536,7 @@ static void x86_cpu_filter_features(X86CPU *cpu, bool verbose)
     }
 }
 
+//x86_cpu实现回调
 static void x86_cpu_realizefn(DeviceState *dev, Error **errp)
 {
     CPUState *cs = CPU(dev);
@@ -5737,6 +5740,7 @@ static void x86_cpu_realizefn(DeviceState *dev, Error **errp)
     }
 #endif
 
+    //qemu初始化vcpu
     qemu_init_vcpu(cs);
 
     /*
@@ -6339,6 +6343,7 @@ static void x86_cpu_common_class_init(ObjectClass *oc, void *data)
     dc->user_creatable = true;
 }
 
+//x86 cpu对应的基类
 static const TypeInfo x86_cpu_type_info = {
     .name = TYPE_X86_CPU,
     .parent = TYPE_CPU,

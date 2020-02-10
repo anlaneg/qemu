@@ -1253,6 +1253,7 @@ static BlockDriver bdrv_vpc = {
     .strong_runtime_opts    = vpc_strong_runtime_opts,
 };
 
+//注册vpc格式的block驱动
 static void bdrv_vpc_init(void)
 {
     bdrv_register(&bdrv_vpc);

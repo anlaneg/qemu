@@ -100,7 +100,7 @@ CPUTailQ cpus = QTAILQ_HEAD_INITIALIZER(cpus);
 
 /* current CPU in the current thread. It is only valid inside
    cpu_exec() */
-__thread CPUState *current_cpu;
+__thread CPUState *current_cpu;//per thead变量，记录当前cpu状态
 /* 0 = Do not count executed instructions.
    1 = Precise instruction counting.
    2 = Adaptive rate instruction counting.  */

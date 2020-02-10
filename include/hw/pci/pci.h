@@ -759,6 +759,7 @@ static inline int pci_is_express_downstream_port(const PCIDevice *d)
     return type == PCI_EXP_TYPE_DOWNSTREAM || type == PCI_EXP_TYPE_ROOT_PORT;
 }
 
+//获取pci协议或pcie协议对应的配置空间大小
 static inline uint32_t pci_config_size(const PCIDevice *d)
 {
     return pci_is_express(d) ? PCIE_CONFIG_SPACE_SIZE : PCI_CONFIG_SPACE_SIZE;

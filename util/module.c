@@ -45,6 +45,7 @@ static void init_lists(void)
         return;
     }
 
+    //初始化为空链表
     for (i = 0; i < MODULE_INIT_MAX; i++) {
         QTAILQ_INIT(&init_type_list[i]);
     }
@@ -72,6 +73,7 @@ void register_module_init(void (*fn/*要注册的回调*/)(void), module_init_ty
     e->init = fn;
     e->type = type;
 
+    //找type对应的list并加入链上
     l = find_type(type);
 
     QTAILQ_INSERT_TAIL(l, e, node);
@@ -97,6 +99,7 @@ void module_call_init(module_init_type type)
     ModuleTypeList *l;
     ModuleEntry *e;
 
+    //查找指定type，获得list,针对每个list成员执行init函数
     l = find_type(type);
 
     QTAILQ_FOREACH(e, l, node) {

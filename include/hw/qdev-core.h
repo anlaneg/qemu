@@ -266,6 +266,7 @@ compat_props_add(GPtrArray *arr,
                  GlobalProperty props[], size_t nelem)
 {
     int i;
+    //将nelem个props[i]元素存放到arr中
     for (i = 0; i < nelem; i++) {
         g_ptr_array_add(arr, (void *)&props[i]);
     }

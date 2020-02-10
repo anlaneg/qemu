@@ -368,17 +368,22 @@ extern const size_t pc_compat_1_4_len;
     { "athlon-" TYPE_X86_CPU, "model-id", "QEMU Virtual CPU version " v, },
 
 #define DEFINE_PC_MACHINE(suffix, namestr, initfn, optsfn) \
+    /*定义新的pc机类型的构造函数，调用optsfn函数，并将machine的初始化定义为initfn*/\
     static void pc_machine_##suffix##_class_init(ObjectClass *oc, void *data) \
     { \
         MachineClass *mc = MACHINE_CLASS(oc); \
         optsfn(mc); \
         mc->init = initfn; \
     } \
+    /*定义一种新的pc机类型*/\
     static const TypeInfo pc_machine_type_##suffix = { \
         .name       = namestr TYPE_MACHINE_SUFFIX, \
+        /*其父类型为pc类型*/\
         .parent     = TYPE_PC_MACHINE, \
+        /*定义此类型的构造函数*/\
         .class_init = pc_machine_##suffix##_class_init, \
     }; \
+    /*注册此pc类型对应的type*/\
     static void pc_machine_init_##suffix(void) \
     { \
         type_register(&pc_machine_type_##suffix); \

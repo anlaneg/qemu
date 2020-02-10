@@ -501,6 +501,7 @@ static MemoryRegion *virtio_address_space_lookup(VirtIOPCIProxy *proxy,
         if (*off >= reg->offset &&
             *off + len <= reg->offset + reg->size) {
             *off -= reg->offset;
+            //按地址查找到对应的mr
             return &reg->mr;
         }
     }
@@ -570,7 +571,7 @@ virtio_address_space_read(VirtIOPCIProxy *proxy, hwaddr addr/*要访问的地址
      */
     addr &= ~(len - 1);
 
-    //取对应的memory region
+    //查找到addr对应的memory region
     mr = virtio_address_space_lookup(proxy, &addr, len);
     if (!mr) {
         return;
@@ -654,6 +655,7 @@ static uint32_t virtio_read_config(PCIDevice *pci_dev,
         len = le32_to_cpu(cfg->cap.length);
 
         if (len == 1 || len == 2 || len == 4) {
+            //读取proxy对应的off地址的数据，将结果存在cfg->pci_cfg_data中
             assert(len <= sizeof cfg->pci_cfg_data);
             virtio_address_space_read(proxy, off, cfg->pci_cfg_data, len);
         }
@@ -1665,6 +1667,7 @@ static void virtio_pci_device_plugged(DeviceState *d, Error **errp)
     }
 
     proxy->pci_dev.config_write = virtio_write_config;
+    //注册pci_dev配置区间的读函数
     proxy->pci_dev.config_read = virtio_read_config;
 
     if (legacy) {

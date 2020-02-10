@@ -46,6 +46,7 @@ do { printf("pci_host_data: " fmt , ## __VA_ARGS__); } while (0)
 /* the helper function to get a PCIDevice* for a given pci address */
 static inline PCIDevice *pci_dev_find_by_addr(PCIBus *bus, uint32_t addr)
 {
+    //自地址中取bus_num,devfn(具体见以上注释）
     uint8_t bus_num = addr >> 16;
     uint8_t devfn = addr >> 8;
 
@@ -81,6 +82,7 @@ void pci_host_config_write_common(PCIDevice *pci_dev, uint32_t addr,
     pci_dev->config_write(pci_dev, addr, val, MIN(len, limit - addr));
 }
 
+//pci指定地址内容读取
 uint32_t pci_host_config_read_common(PCIDevice *pci_dev, uint32_t addr,
                                      uint32_t limit, uint32_t len)
 {
@@ -99,6 +101,7 @@ uint32_t pci_host_config_read_common(PCIDevice *pci_dev, uint32_t addr,
         return ~0x0;
     }
 
+    //pci设备配置读取
     ret = pci_dev->config_read(pci_dev, addr, MIN(len, limit - addr));
     trace_pci_cfg_read(pci_dev->name, PCI_SLOT(pci_dev->devfn),
                        PCI_FUNC(pci_dev->devfn), addr, ret);
@@ -123,7 +126,10 @@ void pci_data_write(PCIBus *s, uint32_t addr, uint32_t val, int len)
 
 uint32_t pci_data_read(PCIBus *s, uint32_t addr, int len)
 {
+    //取地址对应的pci设备
     PCIDevice *pci_dev = pci_dev_find_by_addr(s, addr);
+
+    //取要读取的实际配置地址
     uint32_t config_addr = addr & (PCI_CONFIG_SPACE_SIZE - 1);
     uint32_t val;
 
@@ -131,6 +137,7 @@ uint32_t pci_data_read(PCIBus *s, uint32_t addr, int len)
         return ~0x0;
     }
 
+    //读取config_addr
     val = pci_host_config_read_common(pci_dev, config_addr,
                                       PCI_CONFIG_SPACE_SIZE, len);
     PCI_DPRINTF("%s: %s: addr=%02"PRIx32" val=%08"PRIx32" len=%d\n",

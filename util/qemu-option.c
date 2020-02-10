@@ -323,7 +323,7 @@ static void qemu_opt_del_all(QemuOpts *opts, const char *name)
     }
 }
 
-//获取opts选项中名称为name的给字符串给值
+//获取opts选项中名称为name的字符串给值
 const char *qemu_opt_get(QemuOpts *opts, const char *name)
 {
     QemuOpt *opt;
@@ -334,7 +334,7 @@ const char *qemu_opt_get(QemuOpts *opts, const char *name)
 
     opt = qemu_opt_find(opts, name);
     if (!opt) {
-    		//如果此选项没有指定，则使用默认值
+    	//如果此选项没有指定，则使用默认值
         const QemuOptDesc *desc = find_desc_by_name(opts->list->desc, name);
         if (desc && desc->def_value_str) {
             return desc->def_value_str;
@@ -568,7 +568,7 @@ int qemu_opt_unset(QemuOpts *opts, const char *name)
 }
 
 //构造QemuOpt将其串在opts链上，prepend用于控制是否串在最前面
-static void opt_set(QemuOpts *opts, const char *name, char *value,
+static void opt_set(QemuOpts *opts, const char *name/*参数名*/, char *value/*参数值*/,
                     bool prepend, bool *invalidp, Error **errp)
 {
     QemuOpt *opt;
@@ -697,12 +697,12 @@ QemuOpts *qemu_opts_find(QemuOptsList *list, const char *id)
 
 //创建一个选项队列头
 QemuOpts *qemu_opts_create(QemuOptsList *list, const char *id,
-                           int fail_if_exists, Error **errp)
+                           int fail_if_exists/*如果id已存在是否报错*/, Error **errp)
 {
     QemuOpts *opts = NULL;
 
     if (id) {
-    		//id格式有误时报错
+    	//id格式有误时报错
         if (!id_wellformed(id)) {
             error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "id",
                        "an identifier");
@@ -714,17 +714,17 @@ QemuOpts *qemu_opts_create(QemuOptsList *list, const char *id,
         //检查是否已存在
         opts = qemu_opts_find(list, id);
         if (opts != NULL) {
-        		//检查是否有必要报错，有则报错
+        	//检查是否有必要报错，有则报错
             if (fail_if_exists && !list->merge_lists) {
                 error_setg(errp, "Duplicate ID '%s' for %s", id, list->name);
                 return NULL;
             } else {
-            		//使用已有的
+            	//使用已有的
                 return opts;
             }
         }
     } else if (list->merge_lists) {
-    		//用NULL查一遍
+    	//list支持merge,用NULL做id查一遍
         opts = qemu_opts_find(list, NULL);
         if (opts) {
             return opts;
@@ -735,9 +735,9 @@ QemuOpts *qemu_opts_create(QemuOptsList *list, const char *id,
     opts = g_malloc0(sizeof(*opts));
     opts->id = g_strdup(id);//填充id
     opts->list = list;//指明自已属于那个list
-    loc_save(&opts->loc);
+    loc_save(&opts->loc);//记录位置信息
     QTAILQ_INIT(&opts->head);
-    QTAILQ_INSERT_TAIL(&list->head, opts, next);//将opts加入链中
+    QTAILQ_INSERT_TAIL(&list->head, opts, next);//将opts加入list链中
     return opts;
 }
 
@@ -937,7 +937,7 @@ void qemu_opts_do_parse(QemuOpts *opts, const char *params,
     opts_do_parse(opts, params, firstname, false, NULL, errp);
 }
 
-//由于list为一组opts,而params为一组配置，将params转换单个的QemuOpts，并串在list上
+//由于list为一组opts,而params为一组配置字符串，利用list将params转换单个的QemuOpts，并返回
 //例如“-chardev socket,id=char1,path=/usr/local/var/run/openvswitch/vhost-user-1”
 static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
                             bool permit_abbrev, bool defaults,
@@ -973,11 +973,12 @@ static QemuOpts *opts_parse(QemuOptsList *list, const char *params,
     opts = qemu_opts_create(list, id, !defaults, &local_err);
     g_free(id);
     if (opts == NULL) {
+        /*记录出错信息*/
         error_propagate(errp, local_err);
         return NULL;
     }
 
-    //解析此id下的其它参数
+    //解析此id对应的其它参数
     opts_do_parse(opts, params, firstname, defaults, invalidp, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
@@ -1009,7 +1010,7 @@ QemuOpts *qemu_opts_parse(QemuOptsList *list, const char *params,
  * QMP context.  Do not use this function there!
  * Return the new QemuOpts on success, null pointer on error.
  */
-//解析参数串，构造opts,并将其串在list上
+//解析参数串，构造opts，并加入到list
 QemuOpts *qemu_opts_parse_noisily(QemuOptsList *list, const char *params,
                                   bool permit_abbrev)
 {
@@ -1017,6 +1018,7 @@ QemuOpts *qemu_opts_parse_noisily(QemuOptsList *list, const char *params,
     QemuOpts *opts;
     bool invalidp = false;
 
+    //解析字符串，生成opts
     opts = opts_parse(list, params, permit_abbrev, false, &invalidp, &err);
     if (err) {
         if (invalidp && has_help_option(params)) {
