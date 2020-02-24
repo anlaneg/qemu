@@ -92,6 +92,7 @@ static const VirtioPCIDeviceTypeInfo virtio_net_pci_info = {
     .class_init    = virtio_net_pci_class_init,
 };
 
+//注册virtio-net-pci类型
 static void virtio_net_pci_register(void)
 {
     virtio_pci_types_register(&virtio_net_pci_info);

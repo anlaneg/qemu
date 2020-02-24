@@ -2841,6 +2841,7 @@ static const TypeInfo virtio_device_info = {
     .class_size = sizeof(VirtioDeviceClass),
 };
 
+//注册virtio-device
 static void virtio_register_types(void)
 {
     type_register_static(&virtio_device_info);

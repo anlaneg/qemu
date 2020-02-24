@@ -1137,6 +1137,7 @@ static int virtio_net_can_receive(NetClientState *nc)
     VirtIONetQueue *q = virtio_net_get_subqueue(nc);
 
     if (!vdev->vm_running) {
+        //设备未在running,直接返回不能收
         return 0;
     }
 
@@ -1294,6 +1295,7 @@ static ssize_t virtio_net_receive_rcu(NetClientState *nc, const uint8_t *buf,
     unsigned mhdr_cnt = 0;
     size_t offset, i, guest_offset;
 
+    //不能收包，直接返回
     if (!virtio_net_can_receive(nc)) {
         return -1;
     }

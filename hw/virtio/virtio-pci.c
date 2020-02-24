@@ -1959,9 +1959,11 @@ static void virtio_pci_non_transitional_instance_init(Object *obj)
     proxy->disable_modern = false;
 }
 
+//virtio_pci类型注册
 void virtio_pci_types_register(const VirtioPCIDeviceTypeInfo *t)
 {
     char *base_name = NULL;
+    //动态定义base类型
     TypeInfo base_type_info = {
         .name          = t->base_name,
         .parent        = t->parent ? t->parent : TYPE_VIRTIO_PCI,
@@ -1971,6 +1973,8 @@ void virtio_pci_types_register(const VirtioPCIDeviceTypeInfo *t)
         .abstract      = true,
         .interfaces    = t->interfaces,
     };
+
+    //定义generic类型
     TypeInfo generic_type_info = {
         .name = t->generic_name,
         .parent = base_type_info.name,
@@ -2000,6 +2004,7 @@ void virtio_pci_types_register(const VirtioPCIDeviceTypeInfo *t)
         base_type_info.class_data = (void *)t;
     }
 
+    //注册base类型及generic类型
     type_register(&base_type_info);
     if (generic_type_info.name) {
         type_register(&generic_type_info);

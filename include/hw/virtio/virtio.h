@@ -103,7 +103,7 @@ struct VirtIODevice
     VirtQueue *vq;//虚队列数组
     MemoryListener listener;
     uint16_t device_id;
-    bool vm_running;
+    bool vm_running;//当前是否running状态
     bool broken; /* device in invalid state, needs reset */
     bool use_started;
     bool started;
