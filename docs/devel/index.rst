@@ -22,3 +22,6 @@ Contents:
    decodetree
    secure-coding-practices
    tcg
+   tcg-plugins
+   bitops
+   reset

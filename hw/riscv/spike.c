@@ -102,8 +102,6 @@ static void create_fdt(SpikeState *s, const struct MemmapEntry *memmap,
         char *intc = g_strdup_printf("/cpus/cpu@%d/interrupt-controller", cpu);
         char *isa = riscv_isa_string(&s->soc.harts[cpu]);
         qemu_fdt_add_subnode(fdt, nodename);
-        qemu_fdt_setprop_cell(fdt, nodename, "clock-frequency",
-                              SPIKE_CLOCK_FREQ);
         qemu_fdt_setprop_string(fdt, nodename, "mmu-type", "riscv,sv48");
         qemu_fdt_setprop_string(fdt, nodename, "riscv,isa", isa);
         qemu_fdt_setprop_string(fdt, nodename, "compatible", "riscv");
@@ -186,7 +184,7 @@ static void spike_board_init(MachineState *machine)
                                 mask_rom);
 
     if (machine->kernel_filename) {
-        riscv_load_kernel(machine->kernel_filename);
+        riscv_load_kernel(machine->kernel_filename, htif_symbol_callback);
     }
 
     /* reset vector */
@@ -275,7 +273,7 @@ static void spike_v1_10_0_board_init(MachineState *machine)
                                 mask_rom);
 
     if (machine->kernel_filename) {
-        riscv_load_kernel(machine->kernel_filename);
+        riscv_load_kernel(machine->kernel_filename, htif_symbol_callback);
     }
 
     /* reset vector */
@@ -361,7 +359,7 @@ static void spike_v1_09_1_board_init(MachineState *machine)
                                 mask_rom);
 
     if (machine->kernel_filename) {
-        riscv_load_kernel(machine->kernel_filename);
+        riscv_load_kernel(machine->kernel_filename, htif_symbol_callback);
     }
 
     /* reset vector */

@@ -220,7 +220,7 @@ static gboolean net_vhost_user_watch(GIOChannel *chan, GIOCondition cond,
     return TRUE;
 }
 
-static void net_vhost_user_event(void *opaque, int event);
+static void net_vhost_user_event(void *opaque, QEMUChrEvent event);
 
 static void chr_closed_bh(void *opaque)
 {
@@ -251,7 +251,7 @@ static void chr_closed_bh(void *opaque)
     }
 }
 
-static void net_vhost_user_event(void *opaque, int event)
+static void net_vhost_user_event(void *opaque, QEMUChrEvent event)
 {
     const char *name = opaque;
     NetClientState *ncs[MAX_QUEUE_NUM];
@@ -297,6 +297,11 @@ static void net_vhost_user_event(void *opaque, int event)
 
             aio_bh_schedule_oneshot(ctx, chr_closed_bh, opaque);
         }
+        break;
+    case CHR_EVENT_BREAK:
+    case CHR_EVENT_MUX_IN:
+    case CHR_EVENT_MUX_OUT:
+        /* Ignore */
         break;
     }
 

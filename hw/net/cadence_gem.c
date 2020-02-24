@@ -271,9 +271,10 @@
 #define PHY_REG_EXT_PHYSPCFC_ST   27
 #define PHY_REG_CABLE_DIAG   28
 
-#define PHY_REG_CONTROL_RST  0x8000
-#define PHY_REG_CONTROL_LOOP 0x4000
-#define PHY_REG_CONTROL_ANEG 0x1000
+#define PHY_REG_CONTROL_RST       0x8000
+#define PHY_REG_CONTROL_LOOP      0x4000
+#define PHY_REG_CONTROL_ANEG      0x1000
+#define PHY_REG_CONTROL_ANRESTART 0x0200
 
 #define PHY_REG_STATUS_LINK     0x0004
 #define PHY_REG_STATUS_ANEGCMPL 0x0020
@@ -1345,7 +1346,7 @@ static void gem_phy_write(CadenceGEMState *s, unsigned reg_num, uint16_t val)
         }
         if (val & PHY_REG_CONTROL_ANEG) {
             /* Complete autonegotiation immediately */
-            val &= ~PHY_REG_CONTROL_ANEG;
+            val &= ~(PHY_REG_CONTROL_ANEG | PHY_REG_CONTROL_ANRESTART);
             s->phy_regs[PHY_REG_STATUS] |= PHY_REG_STATUS_ANEGCMPL;
         }
         if (val & PHY_REG_CONTROL_LOOP) {
@@ -1626,7 +1627,7 @@ static void gem_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = gem_realize;
-    dc->props = gem_properties;
+    device_class_set_props(dc, gem_properties);
     dc->vmsd = &vmstate_cadence_gem;
     dc->reset = gem_reset;
 }

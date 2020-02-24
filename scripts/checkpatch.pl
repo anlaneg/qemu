@@ -1460,6 +1460,12 @@ sub process {
 			}
 		}
 
+# Only allow Python 3 interpreter
+		if ($realline == 1 &&
+			$line =~ /^\+#!\ *\/usr\/bin\/(?:env )?python$/) {
+			ERROR("please use python3 interpreter\n" . $herecurr);
+		}
+
 # Accept git diff extended headers as valid patches
 		if ($line =~ /^(?:rename|copy) (?:from|to) [\w\/\.\-]+\s*$/) {
 			$is_patch = 1;
@@ -1639,7 +1645,7 @@ sub process {
 # Block comment styles
 
 		# Block comments use /* on a line of its own
-		if ($rawline !~ m@^\+.*/\*.*\*/[ \t]*$@ &&	#inline /*...*/
+		if ($rawline !~ m@^\+.*/\*.*\*/[ \t)}]*$@ &&	#inline /*...*/
 		    $rawline =~ m@^\+.*/\*\*?+[ \t]*[^ \t]@) { # /* or /** non-blank
 			WARN("Block comments use a leading /* on a separate line\n" . $herecurr);
 		}
@@ -1822,6 +1828,11 @@ sub process {
 # 'do ... while (0/false)' only makes sense in macros, without trailing ';'
 		if ($line =~ /while\s*\((0|false)\);/) {
 			ERROR("suspicious ; after while (0)\n" . $herecurr);
+		}
+
+# Check superfluous trailing ';'
+		if ($line =~ /;;$/) {
+			ERROR("superfluous trailing semicolon\n" . $herecurr);
 		}
 
 # Check relative indent for conditionals and blocks.
@@ -2914,6 +2925,12 @@ sub process {
 		}
 		if ($line =~ /\bbzero\(/) {
 			ERROR("use memset() instead of bzero()\n" . $herecurr);
+		}
+		if ($line =~ /\bgetpagesize\(\)/) {
+			ERROR("use qemu_real_host_page_size instead of getpagesize()\n" . $herecurr);
+		}
+		if ($line =~ /\bsysconf\(_SC_PAGESIZE\)/) {
+			ERROR("use qemu_real_host_page_size instead of sysconf(_SC_PAGESIZE)\n" . $herecurr);
 		}
 		my $non_exit_glib_asserts = qr{g_assert_cmpstr|
 						g_assert_cmpint|

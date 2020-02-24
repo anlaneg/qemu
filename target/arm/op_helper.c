@@ -295,7 +295,12 @@ void HELPER(wfi)(CPUARMState *env, uint32_t insn_len)
     }
 
     if (target_el) {
-        env->pc -= insn_len;
+        if (env->aarch64) {
+            env->pc -= insn_len;
+        } else {
+            env->regs[15] -= insn_len;
+        }
+
         raise_exception(env, EXCP_UDEF, syn_wfx(1, 0xe, 0, insn_len == 2),
                         target_el);
     }
@@ -382,7 +387,14 @@ void HELPER(exception_bkpt_insn)(CPUARMState *env, uint32_t syndrome)
 
 uint32_t HELPER(cpsr_read)(CPUARMState *env)
 {
-    return cpsr_read(env) & ~(CPSR_EXEC | CPSR_RESERVED);
+    /*
+     * We store the ARMv8 PSTATE.SS bit in env->uncached_cpsr.
+     * This is convenient for populating SPSR_ELx, but must be
+     * hidden from aarch32 mode, where it is not visible.
+     *
+     * TODO: ARMv8.4-DIT -- need to move SS somewhere else.
+     */
+    return cpsr_read(env) & ~(CPSR_EXEC | PSTATE_SS);
 }
 
 void HELPER(cpsr_write)(CPUARMState *env, uint32_t val, uint32_t mask)
@@ -395,11 +407,14 @@ void HELPER(cpsr_write)(CPUARMState *env, uint32_t val, uint32_t mask)
 /* Write the CPSR for a 32-bit exception return */
 void HELPER(cpsr_write_eret)(CPUARMState *env, uint32_t val)
 {
+    uint32_t mask;
+
     qemu_mutex_lock_iothread();
     arm_call_pre_el_change_hook(env_archcpu(env));
     qemu_mutex_unlock_iothread();
 
-    cpsr_write(env, val, CPSR_ERET_MASK, CPSRWriteExceptionReturn);
+    mask = aarch32_cpsr_valid_mask(env->features, &env_archcpu(env)->isar);
+    cpsr_write(env, val, mask, CPSRWriteExceptionReturn);
 
     /* Generated code has already stored the new PC value, but
      * without masking out its low bits, because which bits need
@@ -603,6 +618,27 @@ void HELPER(access_check_cp_reg)(CPUARMState *env, void *rip, uint32_t syndrome,
         raise_exception(env, EXCP_UDEF, syndrome, exception_target_el(env));
     }
 
+    /*
+     * Check for an EL2 trap due to HSTR_EL2. We expect EL0 accesses
+     * to sysregs non accessible at EL0 to have UNDEF-ed already.
+     */
+    if (!is_a64(env) && arm_current_el(env) < 2 && ri->cp == 15 &&
+        (arm_hcr_el2_eff(env) & (HCR_E2H | HCR_TGE)) != (HCR_E2H | HCR_TGE)) {
+        uint32_t mask = 1 << ri->crn;
+
+        if (ri->type & ARM_CP_64BIT) {
+            mask = 1 << ri->crm;
+        }
+
+        /* T4 and T14 are RES0 */
+        mask &= ~((1 << 4) | (1 << 14));
+
+        if (env->cp15.hstr_el2 & mask) {
+            target_el = 2;
+            goto exept;
+        }
+    }
+
     if (!ri->accessfn) {
         return;
     }
@@ -652,6 +688,7 @@ void HELPER(access_check_cp_reg)(CPUARMState *env, void *rip, uint32_t syndrome,
         g_assert_not_reached();
     }
 
+exept:
     raise_exception(env, EXCP_UDEF, syndrome, target_el);
 }
 

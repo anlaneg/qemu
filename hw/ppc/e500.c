@@ -594,6 +594,7 @@ done:
         cpu_physical_memory_write(addr, fdt, fdt_size);
     }
     ret = fdt_size;
+    g_free(fdt);
 
 out:
     g_free(pci_map);
@@ -793,7 +794,6 @@ static DeviceState *ppce500_init_mpic(PPCE500MachineState *pms,
                                       MemoryRegion *ccsr,
                                       IrqLines *irqs)
 {
-    MachineState *machine = MACHINE(pms);
     const PPCE500MachineClass *pmc = PPCE500_MACHINE_GET_CLASS(pms);
     DeviceState *dev = NULL;
     SysBusDevice *s;
@@ -801,10 +801,10 @@ static DeviceState *ppce500_init_mpic(PPCE500MachineState *pms,
     if (kvm_enabled()) {
         Error *err = NULL;
 
-        if (machine_kernel_irqchip_allowed(machine)) {
+        if (kvm_kernel_irqchip_allowed()) {
             dev = ppce500_init_mpic_kvm(pmc, irqs, &err);
         }
-        if (machine_kernel_irqchip_required(machine) && !dev) {
+        if (kvm_kernel_irqchip_required() && !dev) {
             error_reportf_err(err,
                               "kernel_irqchip requested but unavailable: ");
             exit(1);
@@ -1050,7 +1050,7 @@ void ppce500_init(MachineState *machine)
     filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, payload_name);
 
     payload_size = load_elf(filename, NULL, NULL, NULL,
-                            &bios_entry, &loadaddr, NULL,
+                            &bios_entry, &loadaddr, NULL, NULL,
                             1, PPC_ELF_MACHINE, 0, 0);
     if (payload_size < 0) {
         /*

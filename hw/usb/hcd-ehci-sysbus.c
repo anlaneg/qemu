@@ -33,6 +33,8 @@ static const VMStateDescription vmstate_ehci_sysbus = {
 
 static Property ehci_sysbus_properties[] = {
     DEFINE_PROP_UINT32("maxframes", EHCISysBusState, ehci.maxframes, 128),
+    DEFINE_PROP_BOOL("companion-enable", EHCISysBusState, ehci.companion_enable,
+                     false),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -82,7 +84,7 @@ static void ehci_sysbus_class_init(ObjectClass *klass, void *data)
 
     dc->realize = usb_ehci_sysbus_realize;
     dc->vmsd = &vmstate_ehci_sysbus;
-    dc->props = ehci_sysbus_properties;
+    device_class_set_props(dc, ehci_sysbus_properties);
     dc->reset = usb_ehci_sysbus_reset;
     set_bit(DEVICE_CATEGORY_USB, dc->categories);
 }

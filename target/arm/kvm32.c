@@ -16,6 +16,7 @@
 #include "qemu-common.h"
 #include "cpu.h"
 #include "qemu/timer.h"
+#include "sysemu/runstate.h"
 #include "sysemu/kvm.h"
 #include "kvm_arm.h"
 #include "internals.h"
@@ -53,7 +54,11 @@ bool kvm_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
         QEMU_KVM_ARM_TARGET_CORTEX_A15,
         QEMU_KVM_ARM_TARGET_NONE
     };
-    struct kvm_vcpu_init init;
+    /*
+     * target = -1 informs kvm_arm_create_scratch_host_vcpu()
+     * to use the preferred target
+     */
+    struct kvm_vcpu_init init = { .target = -1, };
 
     if (!kvm_arm_create_scratch_host_vcpu(cpus_to_try, fdarray, &init)) {
         return false;
@@ -92,6 +97,9 @@ bool kvm_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
         ahcf->isar.id_isar6 = 0;
     }
 
+    err |= read_sys_reg32(fdarray[2], &ahcf->isar.id_dfr0,
+                          ARM_CP15_REG32(0, 0, 1, 2));
+
     err |= read_sys_reg32(fdarray[2], &ahcf->isar.mvfr0,
                           KVM_REG_ARM | KVM_REG_SIZE_U32 |
                           KVM_REG_ARM_VFP | KVM_REG_ARM_VFP_MVFR0);
@@ -101,6 +109,28 @@ bool kvm_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
     /*
      * FIXME: There is not yet a way to read MVFR2.
      * Fortunately there is not yet anything in there that affects migration.
+     */
+
+    err |= read_sys_reg32(fdarray[2], &ahcf->isar.id_mmfr0,
+                          ARM_CP15_REG32(0, 0, 1, 4));
+    err |= read_sys_reg32(fdarray[2], &ahcf->isar.id_mmfr1,
+                          ARM_CP15_REG32(0, 0, 1, 5));
+    err |= read_sys_reg32(fdarray[2], &ahcf->isar.id_mmfr2,
+                          ARM_CP15_REG32(0, 0, 1, 6));
+    err |= read_sys_reg32(fdarray[2], &ahcf->isar.id_mmfr3,
+                          ARM_CP15_REG32(0, 0, 1, 7));
+    if (read_sys_reg32(fdarray[2], &ahcf->isar.id_mmfr4,
+                       ARM_CP15_REG32(0, 0, 2, 6))) {
+        /*
+         * Older kernels don't support reading ID_MMFR4 (a new in v8
+         * register); assume it's zero.
+         */
+        ahcf->isar.id_mmfr4 = 0;
+    }
+
+    /*
+     * There is no way to read DBGDIDR, because currently 32-bit KVM
+     * doesn't implement debug at all. Leave it at zero.
      */
 
     kvm_arm_destroy_scratch_host_vcpu(fdarray);
@@ -193,6 +223,8 @@ int kvm_arch_init_vcpu(CPUState *cs)
         fprintf(stderr, "KVM is not supported for this guest CPU type\n");
         return -EINVAL;
     }
+
+    qemu_add_vm_change_state_handler(kvm_arm_vm_state_change, cs);
 
     /* Determine init features for this CPU */
     memset(cpu->kvm_init_features, 0, sizeof(cpu->kvm_init_features));

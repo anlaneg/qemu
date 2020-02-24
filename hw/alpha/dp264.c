@@ -19,6 +19,7 @@
 #include "hw/timer/i8254.h"
 #include "hw/isa/superio.h"
 #include "hw/dma/i8257.h"
+#include "net/net.h"
 #include "qemu/cutils.h"
 
 #define MAX_IDE_BUS 2
@@ -114,7 +115,7 @@ static void clipper_init(MachineState *machine)
         exit(1);
     }
     size = load_elf(palcode_filename, NULL, cpu_alpha_superpage_to_phys,
-                    NULL, &palcode_entry, &palcode_low, &palcode_high,
+                    NULL, &palcode_entry, &palcode_low, &palcode_high, NULL,
                     0, EM_ALPHA, 0, 0);
     if (size < 0) {
         error_report("could not load palcode '%s'", palcode_filename);
@@ -133,7 +134,7 @@ static void clipper_init(MachineState *machine)
         uint64_t param_offset;
 
         size = load_elf(kernel_filename, NULL, cpu_alpha_superpage_to_phys,
-                        NULL, &kernel_entry, &kernel_low, &kernel_high,
+                        NULL, &kernel_entry, &kernel_low, &kernel_high, NULL,
                         0, EM_ALPHA, 0, 0);
         if (size < 0) {
             error_report("could not load kernel '%s'", kernel_filename);

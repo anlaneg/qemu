@@ -174,7 +174,7 @@ enum {
 #define QEMU_PCI_CAP_MULTIFUNCTION_BITNR        3
     QEMU_PCI_CAP_MULTIFUNCTION = (1 << QEMU_PCI_CAP_MULTIFUNCTION_BITNR),
 
-    /* command register SERR bit enabled */
+    /* command register SERR bit enabled - unused since QEMU v5.0 */
 #define QEMU_PCI_CAP_SERR_BITNR 4
     QEMU_PCI_CAP_SERR = (1 << QEMU_PCI_CAP_SERR_BITNR),
     /* Standard hot plug controller. */
@@ -265,6 +265,7 @@ typedef struct PCIReqIDCache PCIReqIDCache;
 
 struct PCIDevice {
     DeviceState qdev;
+    bool partially_hotplugged;
 
     /* PCI config space */
     uint8_t *config;
@@ -353,6 +354,9 @@ struct PCIDevice {
     MSIVectorUseNotifier msix_vector_use_notifier;
     MSIVectorReleaseNotifier msix_vector_release_notifier;
     MSIVectorPollNotifier msix_vector_poll_notifier;
+
+    /* ID of standby device in net_failover pair */
+    char *failover_pair_id;
 };
 
 void pci_register_bar(PCIDevice *pci_dev, int region_num,

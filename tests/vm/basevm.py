@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #
 # VM testing base class
 #
@@ -12,7 +11,6 @@
 # the COPYING file in the top-level directory.
 #
 
-from __future__ import print_function
 import os
 import re
 import sys
@@ -21,7 +19,7 @@ import logging
 import time
 import datetime
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'python'))
-from qemu import kvm_available
+from qemu.accel import kvm_available
 from qemu.machine import QEMUMachine
 import subprocess
 import hashlib
@@ -95,19 +93,25 @@ class BaseVM(object):
             logging.info("KVM not available, not using -enable-kvm")
         self._data_args = []
 
-    def _download_with_cache(self, url, sha256sum=None):
+    def _download_with_cache(self, url, sha256sum=None, sha512sum=None):
         def check_sha256sum(fname):
             if not sha256sum:
                 return True
             checksum = subprocess.check_output(["sha256sum", fname]).split()[0]
             return sha256sum == checksum.decode("utf-8")
 
+        def check_sha512sum(fname):
+            if not sha512sum:
+                return True
+            checksum = subprocess.check_output(["sha512sum", fname]).split()[0]
+            return sha512sum == checksum.decode("utf-8")
+
         cache_dir = os.path.expanduser("~/.cache/qemu-vm/download")
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir)
         fname = os.path.join(cache_dir,
                              hashlib.sha1(url.encode("utf-8")).hexdigest())
-        if os.path.exists(fname) and check_sha256sum(fname):
+        if os.path.exists(fname) and check_sha256sum(fname) and check_sha512sum(fname):
             return fname
         logging.debug("Downloading %s to %s...", url, fname)
         subprocess.check_call(["wget", "-c", url, "-O", fname + ".download"],
@@ -145,6 +149,11 @@ class BaseVM(object):
 
     def build_image(self, img):
         raise NotImplementedError
+
+    def exec_qemu_img(self, *args):
+        cmd = [os.environ.get("QEMU_IMG", "qemu-img")]
+        cmd.extend(list(args))
+        subprocess.check_call(cmd)
 
     def add_source_dir(self, src_dir):
         name = "data-" + hashlib.sha1(src_dir.encode("utf-8")).hexdigest()[:5]
@@ -241,6 +250,25 @@ class BaseVM(object):
         if not expectalt is None and expectalt in output:
             return False
         return True
+
+    def console_consume(self):
+        vm = self._guest
+        output = ""
+        vm.console_socket.setblocking(0)
+        while True:
+            try:
+                chars = vm.console_socket.recv(1)
+            except:
+                break
+            output += chars.decode("latin1")
+            if "\r" in output or "\n" in output:
+                lines = re.split("[\r\n]", output)
+                output = lines.pop()
+                if self.debug:
+                    self.console_log("\n".join(lines))
+        if self.debug:
+            self.console_log(output)
+        vm.console_socket.setblocking(1)
 
     def console_send(self, command):
         vm = self._guest
@@ -378,7 +406,7 @@ def main(vmcls):
     exitcode = 0
     if vm.ssh(*cmd) != 0:
         exitcode = 3
-    if exitcode != 0 and args.interactive:
+    if args.interactive:
         vm.ssh()
 
     if not args.snapshot:

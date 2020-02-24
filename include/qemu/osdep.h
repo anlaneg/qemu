@@ -423,9 +423,9 @@ void qemu_anon_ram_free(void *ptr, size_t size);
 #  define QEMU_VMALLOC_ALIGN (256 * 4096)
 #elif defined(__linux__) && defined(__sparc__)
 #include <sys/shm.h>
-#  define QEMU_VMALLOC_ALIGN MAX(getpagesize(), SHMLBA)
+#  define QEMU_VMALLOC_ALIGN MAX(qemu_real_host_page_size, SHMLBA)
 #else
-#  define QEMU_VMALLOC_ALIGN getpagesize()
+#  define QEMU_VMALLOC_ALIGN qemu_real_host_page_size
 #endif
 
 #ifdef CONFIG_POSIX
@@ -462,6 +462,7 @@ int qemu_mprotect_none(void *addr, size_t size);
 
 int qemu_open(const char *name, int flags, ...);
 int qemu_close(int fd);
+int qemu_unlink(const char *name);
 #ifndef _WIN32
 int qemu_dup(int fd);
 #endif

@@ -224,8 +224,7 @@ static void riscv_cpu_dump_state(CPUState *cs, FILE *f, int flags)
 #ifndef CONFIG_USER_ONLY
     qemu_fprintf(f, " %s " TARGET_FMT_lx "\n", "mhartid ", env->mhartid);
     qemu_fprintf(f, " %s " TARGET_FMT_lx "\n", "mstatus ", env->mstatus);
-    qemu_fprintf(f, " %s " TARGET_FMT_lx "\n", "mip     ",
-                 (target_ulong)atomic_read(&env->mip));
+    qemu_fprintf(f, " %s 0x%x\n", "mip     ", env->mip);
     qemu_fprintf(f, " %s " TARGET_FMT_lx "\n", "mie     ", env->mie);
     qemu_fprintf(f, " %s " TARGET_FMT_lx "\n", "mideleg ", env->mideleg);
     qemu_fprintf(f, " %s " TARGET_FMT_lx "\n", "medeleg ", env->medeleg);
@@ -275,7 +274,7 @@ static bool riscv_cpu_has_work(CPUState *cs)
      * Definition of the WFI instruction requires it to ignore the privilege
      * mode and delegation registers, but respect individual enables
      */
-    return (atomic_read(&env->mip) & env->mie) != 0;
+    return (env->mip & env->mie) != 0;
 #else
     return true;
 #endif
@@ -463,8 +462,7 @@ static void riscv_cpu_class_init(ObjectClass *c, void *data)
     device_class_set_parent_realize(dc, riscv_cpu_realize,
                                     &mcc->parent_realize);
 
-    mcc->parent_reset = cc->reset;
-    cc->reset = riscv_cpu_reset;
+    cpu_class_set_parent_reset(cc, riscv_cpu_reset, &mcc->parent_reset);
 
     cc->class_by_name = riscv_cpu_class_by_name;
     cc->has_work = riscv_cpu_has_work;
@@ -484,7 +482,7 @@ static void riscv_cpu_class_init(ObjectClass *c, void *data)
     cc->gdb_stop_before_watchpoint = true;
     cc->disas_set_info = riscv_cpu_disas_set_info;
 #ifndef CONFIG_USER_ONLY
-    cc->do_unassigned_access = riscv_cpu_unassigned_access;
+    cc->do_transaction_failed = riscv_cpu_do_transaction_failed;
     cc->do_unaligned_access = riscv_cpu_do_unaligned_access;
     cc->get_phys_page_debug = riscv_cpu_get_phys_page_debug;
 #endif
@@ -494,7 +492,7 @@ static void riscv_cpu_class_init(ObjectClass *c, void *data)
 #endif
     /* For now, mark unmigratable: */
     cc->vmsd = &vmstate_riscv_cpu;
-    dc->props = riscv_cpu_properties;
+    device_class_set_props(dc, riscv_cpu_properties);
 }
 
 char *riscv_isa_string(RISCVCPU *cpu)

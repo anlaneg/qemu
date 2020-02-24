@@ -473,6 +473,16 @@ union {                                                                 \
         (elm)->field.tqe_circ.tql_prev = NULL;                          \
 } while (/*CONSTCOND*/0)
 
+/* remove @left, @right and all elements in between from @head */
+#define QTAILQ_REMOVE_SEVERAL(head, left, right, field) do {            \
+        if (((right)->field.tqe_next) != NULL)                          \
+            (right)->field.tqe_next->field.tqe_circ.tql_prev =          \
+                (left)->field.tqe_circ.tql_prev;                        \
+        else                                                            \
+            (head)->tqh_circ.tql_prev = (left)->field.tqe_circ.tql_prev; \
+        (left)->field.tqe_circ.tql_prev->tql_next = (right)->field.tqe_next; \
+    } while (/*CONSTCOND*/0)
+
 //遍历tail队列
 #define QTAILQ_FOREACH(var, head, field)                                \
         for ((var) = ((head)->tqh_first);                               \
@@ -551,5 +561,37 @@ union {                                                                 \
         QTAILQ_RAW_TQH_CIRC(head)->tql_prev->tql_next = (elm);                  \
         QTAILQ_RAW_TQH_CIRC(head)->tql_prev = QTAILQ_RAW_TQE_CIRC(elm, entry);  \
 } while (/*CONSTCOND*/0)
+
+#define QLIST_RAW_FIRST(head)                                                  \
+        field_at_offset(head, 0, void *)
+
+#define QLIST_RAW_NEXT(elm, entry)                                             \
+        field_at_offset(elm, entry, void *)
+
+#define QLIST_RAW_PREVIOUS(elm, entry)                                         \
+        field_at_offset(elm, entry + sizeof(void *), void *)
+
+#define QLIST_RAW_FOREACH(elm, head, entry)                                    \
+        for ((elm) = *QLIST_RAW_FIRST(head);                                   \
+             (elm);                                                            \
+             (elm) = *QLIST_RAW_NEXT(elm, entry))
+
+#define QLIST_RAW_INSERT_AFTER(head, prev, elem, entry) do {                   \
+        *QLIST_RAW_NEXT(prev, entry) = elem;                                   \
+        *QLIST_RAW_PREVIOUS(elem, entry) = QLIST_RAW_NEXT(prev, entry);        \
+        *QLIST_RAW_NEXT(elem, entry) = NULL;                                   \
+} while (0)
+
+#define QLIST_RAW_INSERT_HEAD(head, elm, entry) do {                           \
+        void *first = *QLIST_RAW_FIRST(head);                                  \
+        *QLIST_RAW_FIRST(head) = elm;                                          \
+        *QLIST_RAW_PREVIOUS(elm, entry) = QLIST_RAW_FIRST(head);               \
+        if (first) {                                                           \
+            *QLIST_RAW_NEXT(elm, entry) = first;                               \
+            *QLIST_RAW_PREVIOUS(first, entry) = QLIST_RAW_NEXT(elm, entry);    \
+        } else {                                                               \
+            *QLIST_RAW_NEXT(elm, entry) = NULL;                                \
+        }                                                                      \
+} while (0)
 
 #endif /* QEMU_SYS_QUEUE_H */

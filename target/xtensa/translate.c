@@ -33,7 +33,7 @@
 #include "cpu.h"
 #include "exec/exec-all.h"
 #include "disas/disas.h"
-#include "tcg-op.h"
+#include "tcg/tcg-op.h"
 #include "qemu/log.h"
 #include "qemu/qemu-print.h"
 #include "exec/cpu_ldst.h"
@@ -859,7 +859,7 @@ static int arg_copy_compare(const void *a, const void *b)
 static void disas_xtensa_insn(CPUXtensaState *env, DisasContext *dc)
 {
     xtensa_isa isa = dc->config->isa;
-    unsigned char b[MAX_INSN_LENGTH] = {cpu_ldub_code(env, dc->pc)};
+    unsigned char b[MAX_INSN_LENGTH] = {translator_ldub(env, dc->pc)};
     unsigned len = xtensa_op0_insn_len(dc, b[0]);
     xtensa_format fmt;
     int slot, slots;
@@ -883,7 +883,7 @@ static void disas_xtensa_insn(CPUXtensaState *env, DisasContext *dc)
 
     dc->base.pc_next = dc->pc + len;
     for (i = 1; i < len; ++i) {
-        b[i] = cpu_ldub_code(env, dc->pc + i);
+        b[i] = translator_ldub(env, dc->pc + i);
     }
     xtensa_insnbuf_from_chars(isa, dc->insnbuf, b, len);
     fmt = xtensa_format_decode(isa, dc->insnbuf);
@@ -2713,7 +2713,8 @@ static void translate_wsr_ps(DisasContext *dc, const OpcodeArg arg[],
     uint32_t mask = PS_WOE | PS_CALLINC | PS_OWB |
         PS_UM | PS_EXCM | PS_INTLEVEL;
 
-    if (option_enabled(dc, XTENSA_OPTION_MMU)) {
+    if (option_enabled(dc, XTENSA_OPTION_MMU) ||
+        option_enabled(dc, XTENSA_OPTION_MPU)) {
         mask |= PS_RING;
     }
     tcg_gen_andi_i32(cpu_SR[par[0]], arg[0].in, mask);

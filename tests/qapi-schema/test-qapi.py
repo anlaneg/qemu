@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # QAPI parser test harness
 #
@@ -11,7 +11,6 @@
 # See the COPYING file in the top-level directory.
 #
 
-from __future__ import print_function
 
 import argparse
 import difflib
@@ -117,6 +116,8 @@ def test_frontend(fname):
         print('    body=\n%s' % doc.body.text)
         for arg, section in doc.args.items():
             print('    arg=%s\n%s' % (arg, section.text))
+        for feat, section in doc.features.items():
+            print('    feature=%s\n%s' % (feat, section.text))
         for section in doc.sections:
             print('    section=%s\n%s' % (section.name, section.text))
 

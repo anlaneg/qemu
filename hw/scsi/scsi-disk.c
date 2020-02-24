@@ -35,6 +35,7 @@
 #include "hw/block/block.h"
 #include "hw/qdev-properties.h"
 #include "sysemu/dma.h"
+#include "sysemu/sysemu.h"
 #include "qemu/cutils.h"
 #include "trace.h"
 
@@ -2414,6 +2415,16 @@ static void scsi_realize(SCSIDevice *dev, Error **errp)
     blk_set_guest_block_size(s->qdev.conf.blk, s->qdev.blocksize);
 
     blk_iostatus_enable(s->qdev.conf.blk);
+
+    add_boot_device_lchs(&dev->qdev, NULL,
+                         dev->conf.lcyls,
+                         dev->conf.lheads,
+                         dev->conf.lsecs);
+}
+
+static void scsi_unrealize(SCSIDevice *dev, Error **errp)
+{
+    del_boot_device_lchs(&dev->qdev, NULL);
 }
 
 static void scsi_hd_realize(SCSIDevice *dev, Error **errp)
@@ -2469,6 +2480,9 @@ static void scsi_disk_realize(SCSIDevice *dev, Error **errp)
 {
     DriveInfo *dinfo;
     Error *local_err = NULL;
+
+    warn_report("'scsi-disk' is deprecated, "
+                "please use 'scsi-hd' or 'scsi-cd' instead");
 
     if (!dev->conf.blk) {
         scsi_realize(dev, &local_err);
@@ -3018,10 +3032,11 @@ static void scsi_hd_class_initfn(ObjectClass *klass, void *data)
     SCSIDeviceClass *sc = SCSI_DEVICE_CLASS(klass);
 
     sc->realize      = scsi_hd_realize;
+    sc->unrealize    = scsi_unrealize;
     sc->alloc_req    = scsi_new_request;
     sc->unit_attention_reported = scsi_disk_unit_attention_reported;
     dc->desc = "virtual SCSI disk";
-    dc->props = scsi_hd_properties;
+    device_class_set_props(dc, scsi_hd_properties);
     dc->vmsd  = &vmstate_scsi_disk_state;
 }
 
@@ -3052,7 +3067,7 @@ static void scsi_cd_class_initfn(ObjectClass *klass, void *data)
     sc->alloc_req    = scsi_new_request;
     sc->unit_attention_reported = scsi_disk_unit_attention_reported;
     dc->desc = "virtual SCSI CD-ROM";
-    dc->props = scsi_cd_properties;
+    device_class_set_props(dc, scsi_cd_properties);
     dc->vmsd  = &vmstate_scsi_disk_state;
 }
 
@@ -3091,7 +3106,7 @@ static void scsi_block_class_initfn(ObjectClass *klass, void *data)
     sdc->update_sense = scsi_block_update_sense;
     sdc->need_fua_emulation = scsi_block_no_fua;
     dc->desc = "SCSI block device passthrough";
-    dc->props = scsi_block_properties;
+    device_class_set_props(dc, scsi_block_properties);
     dc->vmsd  = &vmstate_scsi_disk_state;
 }
 
@@ -3131,7 +3146,7 @@ static void scsi_disk_class_initfn(ObjectClass *klass, void *data)
     dc->fw_name = "disk";
     dc->desc = "virtual SCSI disk or CD-ROM (legacy)";
     dc->reset = scsi_disk_reset;
-    dc->props = scsi_disk_properties;
+    device_class_set_props(dc, scsi_disk_properties);
     dc->vmsd  = &vmstate_scsi_disk_state;
 }
 

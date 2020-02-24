@@ -175,7 +175,8 @@ static uint64_t sun4u_load_kernel(const char *kernel_filename,
         bswap_needed = 0;
 #endif
         kernel_size = load_elf(kernel_filename, NULL, NULL, NULL, kernel_entry,
-                               kernel_addr, &kernel_top, 1, EM_SPARCV9, 0, 0);
+                               kernel_addr, &kernel_top, NULL, 1, EM_SPARCV9, 0,
+                               0);
         if (kernel_size < 0) {
             *kernel_addr = KERNEL_LOAD_ADDR;
             *kernel_entry = KERNEL_LOAD_ADDR;
@@ -389,7 +390,7 @@ static void ebus_class_init(ObjectClass *klass, void *data)
     k->device_id = PCI_DEVICE_ID_SUN_EBUS;
     k->revision = 0x01;
     k->class_id = PCI_CLASS_BRIDGE_OTHER;
-    dc->props = ebus_properties;
+    device_class_set_props(dc, ebus_properties);
 }
 
 static const TypeInfo ebus_info = {
@@ -439,7 +440,7 @@ static void prom_init(hwaddr addr, const char *bios_name)
     filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
     if (filename) {
         ret = load_elf(filename, NULL, translate_prom_address, &addr,
-                       NULL, NULL, NULL, 1, EM_SPARCV9, 0, 0);
+                       NULL, NULL, NULL, NULL, 1, EM_SPARCV9, 0, 0);
         if (ret < 0 || ret > PROM_SIZE_MAX) {
             ret = load_image_targphys(filename, addr, PROM_SIZE_MAX);
         }
@@ -479,7 +480,7 @@ static void prom_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->props = prom_properties;
+    device_class_set_props(dc, prom_properties);
     dc->realize = prom_realize;
 }
 
@@ -540,7 +541,7 @@ static void ram_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = ram_realize;
-    dc->props = ram_properties;
+    device_class_set_props(dc, ram_properties);
 }
 
 static const TypeInfo ram_info = {

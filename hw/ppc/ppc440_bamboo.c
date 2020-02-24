@@ -71,12 +71,12 @@ static int bamboo_load_device_tree(hwaddr addr,
 
     filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, BINARY_DEVICE_TREE_FILE);
     if (!filename) {
-        goto out;
+        return -1;
     }
     fdt = load_device_tree(filename, &fdt_size);
     g_free(filename);
     if (fdt == NULL) {
-        goto out;
+        return -1;
     }
 
     /* Manipulate device tree in memory. */
@@ -117,10 +117,6 @@ static int bamboo_load_device_tree(hwaddr addr,
     rom_add_blob_fixed(BINARY_DEVICE_TREE_FILE, fdt, fdt_size, addr);
     g_free(fdt);
     return 0;
-
-out:
-
-    return ret;
 }
 
 /* Create reset TLB entries for BookE, spanning the 32bit addr space.  */
@@ -257,7 +253,7 @@ static void bamboo_init(MachineState *machine)
                               NULL, NULL);
         if (success < 0) {
             success = load_elf(kernel_filename, NULL, NULL, NULL, &elf_entry,
-                               &elf_lowaddr, NULL, 1, PPC_ELF_MACHINE,
+                               &elf_lowaddr, NULL, NULL, 1, PPC_ELF_MACHINE,
                                0, 0);
             entry = elf_entry;
             loadaddr = elf_lowaddr;

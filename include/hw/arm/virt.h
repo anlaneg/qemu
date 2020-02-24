@@ -109,6 +109,7 @@ typedef struct {
     bool smbios_old_sys_ver;
     bool no_highmem_ecam;
     bool no_ged;   /* Machines < 4.2 has no support for ACPI GED device */
+    bool kvm_no_adjvtime;
 } VirtMachineClass;
 
 typedef struct {
@@ -136,6 +137,7 @@ typedef struct {
     uint32_t iommu_phandle;
     int psci_conduit;
     hwaddr highest_gpa;
+    DeviceState *gic;
     DeviceState *acpi_dev;
     Notifier powerdown_notifier;
 } VirtMachineState;

@@ -13,8 +13,15 @@ Contents:
    :maxdepth: 2
 
    bitmaps
+   dbus
+   dbus-vmstate
    live-block-operations
    pr-helper
    qemu-ga
+   qemu-img
+   qemu-nbd
+   qemu-trace-stap
    vhost-user
    vhost-user-gpu
+   virtfs-proxy-helper
+   virtiofsd

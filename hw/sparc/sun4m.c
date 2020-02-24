@@ -270,7 +270,7 @@ static unsigned long sun4m_load_kernel(const char *kernel_filename,
 #endif
         kernel_size = load_elf(kernel_filename, NULL,
                                translate_kernel_address, NULL,
-                               NULL, NULL, NULL, 1, EM_SPARC, 0, 0);
+                               NULL, NULL, NULL, NULL, 1, EM_SPARC, 0, 0);
         if (kernel_size < 0)
             kernel_size = load_aout(kernel_filename, KERNEL_LOAD_ADDR,
                                     RAM_size - KERNEL_LOAD_ADDR, bswap_needed,
@@ -721,7 +721,7 @@ static void prom_init(hwaddr addr, const char *bios_name)
     if (filename) {
         ret = load_elf(filename, NULL,
                        translate_prom_address, &addr, NULL,
-                       NULL, NULL, 1, EM_SPARC, 0, 0);
+                       NULL, NULL, NULL, 1, EM_SPARC, 0, 0);
         if (ret < 0 || ret > PROM_SIZE_MAX) {
             ret = load_image_targphys(filename, addr, PROM_SIZE_MAX);
         }
@@ -761,7 +761,7 @@ static void prom_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->props = prom_properties;
+    device_class_set_props(dc, prom_properties);
     dc->realize = prom_realize;
 }
 
@@ -827,7 +827,7 @@ static void ram_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = ram_realize;
-    dc->props = ram_properties;
+    device_class_set_props(dc, ram_properties);
 }
 
 static const TypeInfo ram_info = {

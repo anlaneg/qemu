@@ -32,7 +32,6 @@ typedef enum {
 } VGAInterfaceType;
 
 extern int vga_interface_type;
-#define xenfb_enabled (vga_interface_type == VGA_XENFB)
 
 extern int graphic_width;
 extern int graphic_height;
@@ -42,9 +41,7 @@ extern const char *keyboard_layout;
 extern int win2k_install_hack;
 extern int alt_grab;
 extern int ctrl_grab;
-extern int cursor_hide;
 extern int graphic_rotate;
-extern int no_quit;
 extern int no_shutdown;
 extern int old_param;
 extern int boot_menu;
@@ -103,6 +100,10 @@ void device_add_bootindex_property(Object *obj, int32_t *bootindex,
                                    DeviceState *dev, Error **errp);
 void restore_boot_order(void *opaque);
 void validate_bootdevices(const char *devices, Error **errp);
+void add_boot_device_lchs(DeviceState *dev, const char *suffix,
+                          uint32_t lcyls, uint32_t lheads, uint32_t lsecs);
+void del_boot_device_lchs(DeviceState *dev, const char *suffix);
+char *get_boot_devices_lchs_list(size_t *size);
 
 /* handler to set the boot_device order for a specific type of MachineClass */
 typedef void QEMUBootSetHandler(void *opaque, const char *boot_order,
@@ -124,7 +125,6 @@ extern QemuOptsList qemu_netdev_opts;
 extern QemuOptsList qemu_nic_opts;
 extern QemuOptsList qemu_net_opts;
 extern QemuOptsList qemu_global_opts;
-extern QemuOptsList qemu_mon_opts;
 extern QemuOptsList qemu_semihosting_config_opts;
 
 #endif

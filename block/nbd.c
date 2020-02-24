@@ -70,6 +70,7 @@ typedef struct BDRVNBDState {
     CoMutex send_mutex;
     CoQueue free_sema;
     Coroutine *connection_co;
+    Coroutine *teardown_co;
     QemuCoSleepState *connection_co_sleep_ns_state;
     bool drained;
     bool wait_drained_end;
@@ -203,7 +204,15 @@ static void nbd_teardown_connection(BlockDriverState *bs)
             qemu_co_sleep_wake(s->connection_co_sleep_ns_state);
         }
     }
-    BDRV_POLL_WHILE(bs, s->connection_co);
+    if (qemu_in_coroutine()) {
+        s->teardown_co = qemu_coroutine_self();
+        /* connection_co resumes us when it terminates */
+        qemu_coroutine_yield();
+        s->teardown_co = NULL;
+    } else {
+        BDRV_POLL_WHILE(bs, s->connection_co);
+    }
+    assert(!s->connection_co);
 }
 
 static bool nbd_client_connecting(BDRVNBDState *s)
@@ -395,6 +404,9 @@ static coroutine_fn void nbd_connection_entry(void *opaque)
         s->ioc = NULL;
     }
 
+    if (s->teardown_co) {
+        aio_co_wake(s->teardown_co);
+    }
     aio_wait_kick();
 }
 
@@ -866,6 +878,7 @@ typedef struct NBDReplyChunkIter {
 static void nbd_iter_channel_error(NBDReplyChunkIter *iter,
                                    int ret, Error **local_err)
 {
+    assert(local_err && *local_err);
     assert(ret < 0);
 
     if (!iter->ret) {
@@ -1832,6 +1845,10 @@ static int nbd_process_options(BlockDriverState *bs, QDict *options,
     }
 
     s->export = g_strdup(qemu_opt_get(opts, "export"));
+    if (s->export && strlen(s->export) > NBD_MAX_STRING_SIZE) {
+        error_setg(errp, "export name too long to send to server");
+        goto error;
+    }
 
     s->tlscredsid = g_strdup(qemu_opt_get(opts, "tls-creds"));
     if (s->tlscredsid) {
@@ -1849,6 +1866,11 @@ static int nbd_process_options(BlockDriverState *bs, QDict *options,
     }
 
     s->x_dirty_bitmap = g_strdup(qemu_opt_get(opts, "x-dirty-bitmap"));
+    if (s->x_dirty_bitmap && strlen(s->x_dirty_bitmap) > NBD_MAX_STRING_SIZE) {
+        error_setg(errp, "x-dirty-bitmap query too long to send to server");
+        goto error;
+    }
+
     s->reconnect_delay = qemu_opt_get_number(opts, "reconnect-delay", 0);
 
     ret = 0;
@@ -1859,6 +1881,7 @@ static int nbd_process_options(BlockDriverState *bs, QDict *options,
         qapi_free_SocketAddress(s->saddr);
         g_free(s->export);
         g_free(s->tlscredsid);
+        g_free(s->x_dirty_bitmap);
     }
     qemu_opts_del(opts);
     return ret;

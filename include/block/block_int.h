@@ -94,14 +94,13 @@ struct BlockDriver {
      * must implement them and return -ENOTSUP.
      */
     bool is_filter;
-    /* for snapshots block filter like Quorum can implement the
-     * following recursive callback.
-     * It's purpose is to recurse on the filter children while calling
-     * bdrv_recurse_is_first_non_filter on them.
-     * For a sample implementation look in the future Quorum block filter.
+    /*
+     * Return true if @to_replace can be replaced by a BDS with the
+     * same data as @bs without it affecting @bs's behavior (that is,
+     * without it being visible to @bs's parents).
      */
-    bool (*bdrv_recurse_is_first_non_filter)(BlockDriverState *bs,
-                                             BlockDriverState *candidate);
+    bool (*bdrv_recurse_can_replace)(BlockDriverState *bs,
+                                     BlockDriverState *to_replace);
 
     int (*bdrv_probe)(const uint8_t *buf, int buf_size, const char *filename);
     int (*bdrv_probe_device)(const char *filename);
@@ -334,8 +333,23 @@ struct BlockDriver {
      * bdrv_parse_filename.
      */
     const char *protocol_name;
+
+    /*
+     * Truncate @bs to @offset bytes using the given @prealloc mode
+     * when growing.  Modes other than PREALLOC_MODE_OFF should be
+     * rejected when shrinking @bs.
+     *
+     * If @exact is true, @bs must be resized to exactly @offset.
+     * Otherwise, it is sufficient for @bs (if it is a host block
+     * device and thus there is no way to resize it) to be at least
+     * @offset bytes in length.
+     *
+     * If @exact is true and this function fails but would succeed
+     * with @exact = false, it should return -ENOTSUP.
+     */
     int coroutine_fn (*bdrv_co_truncate)(BlockDriverState *bs, int64_t offset,
-                                         PreallocMode prealloc, Error **errp);
+                                         bool exact, PreallocMode prealloc,
+                                         Error **errp);
 
     int64_t (*bdrv_getlength)(BlockDriverState *bs);
     bool has_variable_length;
@@ -984,6 +998,9 @@ extern unsigned int bdrv_drain_all_count;
 void bdrv_apply_subtree_drain(BdrvChild *child, BlockDriverState *new_parent);
 void bdrv_unapply_subtree_drain(BdrvChild *child, BlockDriverState *old_parent);
 
+bool coroutine_fn bdrv_mark_request_serialising(BdrvTrackedRequest *req, uint64_t align);
+BdrvTrackedRequest *coroutine_fn bdrv_co_get_self_request(BlockDriverState *bs);
+
 int get_tmp_filename(char *filename, int size);
 BlockDriver *bdrv_probe_all(const uint8_t *buf, int buf_size,
                             const char *filename);
@@ -1244,6 +1261,9 @@ void bdrv_format_default_perms(BlockDriverState *bs, BdrvChild *c,
                                BlockReopenQueue *reopen_queue,
                                uint64_t perm, uint64_t shared,
                                uint64_t *nperm, uint64_t *nshared);
+
+bool bdrv_recurse_can_replace(BlockDriverState *bs,
+                              BlockDriverState *to_replace);
 
 /*
  * Default implementation for drivers to pass bdrv_co_block_status() to

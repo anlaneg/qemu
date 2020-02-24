@@ -838,7 +838,7 @@ pvscsi_on_cmd_reset_device(PVSCSIState *s)
 
     if (sdev != NULL) {
         s->resetting++;
-        device_reset(&sdev->qdev);
+        device_legacy_reset(&sdev->qdev);
         s->resetting--;
         return PVSCSI_COMMAND_PROCESSING_SUCCEEDED;
     }
@@ -1292,7 +1292,7 @@ static void pvscsi_class_init(ObjectClass *klass, void *data)
                                     &pvs_k->parent_dc_realize);
     dc->reset = pvscsi_reset;
     dc->vmsd = &vmstate_pvscsi;
-    dc->props = pvscsi_properties;
+    device_class_set_props(dc, pvscsi_properties);
     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
     hc->unplug = pvscsi_hot_unplug;
     hc->plug = pvscsi_hotplug;

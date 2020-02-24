@@ -29,6 +29,7 @@
 #include "qemu/rcu_queue.h"
 #include "qemu/queue.h"
 #include "qemu/thread.h"
+#include "qemu/plugin.h"
 
 typedef int (*WriteCoreDumpFunction)(const void *buf, size_t size,
                                      void *opaque);
@@ -71,10 +72,6 @@ typedef enum MMUAccessType {
 
 typedef struct CPUWatchpoint CPUWatchpoint;
 
-typedef void (*CPUUnassignedAccess)(CPUState *cpu, hwaddr addr,
-                                    bool is_write, bool is_exec, int opaque,
-                                    unsigned size);
-
 struct TranslationBlock;
 
 /**
@@ -86,8 +83,6 @@ struct TranslationBlock;
  * @reset_dump_flags: #CPUDumpFlags to use for reset logging.
  * @has_work: Callback for checking if there is work to do.
  * @do_interrupt: Callback for interrupt handling.
- * @do_unassigned_access: Callback for unassigned access handling.
- * (this is deprecated: new targets should use do_transaction_failed instead)
  * @do_unaligned_access: Callback for unaligned access handling, if
  * the target defines #TARGET_ALIGNED_ONLY.
  * @do_transaction_failed: Callback for handling failed memory transactions
@@ -174,7 +169,6 @@ typedef struct CPUClass {
     int reset_dump_flags;
     bool (*has_work)(CPUState *cpu);
     void (*do_interrupt)(CPUState *cpu);
-    CPUUnassignedAccess do_unassigned_access;
     void (*do_unaligned_access)(CPUState *cpu, vaddr addr,
                                 MMUAccessType access_type,
                                 int mmu_idx, uintptr_t retaddr);
@@ -344,6 +338,7 @@ struct qemu_work_item;
  * @trace_dstate_delayed: Delayed changes to trace_dstate (includes all changes
  *                        to @trace_dstate).
  * @trace_dstate: Dynamic tracing state of events for this vCPU (bitmask).
+ * @plugin_mask: Plugin event bitmap. Modified only via async work.
  * @ignore_memory_transaction_failures: Cached copy of the MachineState
  *    flag of the same name: allows the board to suppress calling of the
  *    CPU do_transaction_failed hook function.
@@ -372,6 +367,7 @@ struct CPUState {
     bool unplug;
     bool crash_occurred;
     bool exit_request;
+    bool in_exclusive_context;
     uint32_t cflags_next_tb;
     /* updates protected by BQL */
     uint32_t interrupt_request;
@@ -412,12 +408,6 @@ struct CPUState {
      * we store some rarely used information in the CPU context.
      */
     uintptr_t mem_io_pc;
-    /*
-     * This is only needed for the legacy cpu_unassigned_access() hook;
-     * when all targets using it have been converted to use
-     * cpu_transaction_failed() instead it can be removed.
-     */
-    MMUAccessType mem_io_access_type;
 
     int kvm_fd;
     struct KVMState *kvm_state;
@@ -426,6 +416,10 @@ struct CPUState {
     /* Used for events with 'vcpu' and *without* the 'disabled' properties */
     DECLARE_BITMAP(trace_dstate_delayed, CPU_TRACE_DSTATE_MAX_EVENTS);
     DECLARE_BITMAP(trace_dstate, CPU_TRACE_DSTATE_MAX_EVENTS);
+
+    DECLARE_BITMAP(plugin_mask, QEMU_PLUGIN_EV_MAX);
+
+    GArray *plugin_mem_cbs;
 
     /* TODO Move common fields from CPUArchState here. */
     int cpu_index;
@@ -784,6 +778,18 @@ void async_run_on_cpu(CPUState *cpu, run_on_cpu_func func, run_on_cpu_data data)
 void async_safe_run_on_cpu(CPUState *cpu, run_on_cpu_func func, run_on_cpu_data data);
 
 /**
+ * cpu_in_exclusive_context()
+ * @cpu: The vCPU to check
+ *
+ * Returns true if @cpu is an exclusive context, for example running
+ * something which has previously been queued via async_safe_run_on_cpu().
+ */
+static inline bool cpu_in_exclusive_context(const CPUState *cpu)
+{
+    return cpu->in_exclusive_context;
+}
+
+/**
  * qemu_get_cpu:
  * @index: The CPUState@cpu_index value of the CPU to obtain.
  *
@@ -877,17 +883,6 @@ void cpu_interrupt(CPUState *cpu, int mask);
 #ifdef NEED_CPU_H
 
 #ifdef CONFIG_SOFTMMU
-static inline void cpu_unassigned_access(CPUState *cpu, hwaddr addr,
-                                         bool is_write, bool is_exec,
-                                         int opaque, unsigned size)
-{
-    CPUClass *cc = CPU_GET_CLASS(cpu);
-
-    if (cc->do_unassigned_access) {
-        cc->do_unassigned_access(cpu, addr, is_write, is_exec, opaque, size);
-    }
-}
-
 static inline void cpu_unaligned_access(CPUState *cpu, vaddr addr,
                                         MMUAccessType access_type,
                                         int mmu_idx, uintptr_t retaddr)
@@ -1139,6 +1134,10 @@ void cpu_exec_unrealizefn(CPUState *cpu);
  * what you are doing!
  */
 bool target_words_bigendian(void);
+
+void cpu_class_set_parent_reset(CPUClass *cc,
+                                void (*child_reset)(CPUState *cpu),
+                                void (**parent_reset)(CPUState *cpu));
 
 #ifdef NEED_CPU_H
 
