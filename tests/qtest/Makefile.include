@@ -18,7 +18,8 @@ check-qtest-pci-$(CONFIG_IVSHMEM_DEVICE) += ivshmem-test
 DBUS_DAEMON := $(shell which dbus-daemon 2>/dev/null)
 ifneq ($(GDBUS_CODEGEN),)
 ifneq ($(DBUS_DAEMON),)
-check-qtest-pci-$(CONFIG_GIO) += dbus-vmstate-test
+# Temporarily disabled due to Patchew failures:
+#check-qtest-pci-$(CONFIG_GIO) += dbus-vmstate-test
 endif
 endif
 
@@ -54,8 +55,8 @@ check-qtest-i386-y += q35-test
 check-qtest-i386-y += vmgenid-test
 check-qtest-i386-$(CONFIG_TPM_CRB) += tpm-crb-swtpm-test
 check-qtest-i386-$(CONFIG_TPM_CRB) += tpm-crb-test
-check-qtest-i386-$(CONFIG_TPM_TIS) += tpm-tis-swtpm-test
-check-qtest-i386-$(CONFIG_TPM_TIS) += tpm-tis-test
+check-qtest-i386-$(CONFIG_TPM_TIS_ISA) += tpm-tis-swtpm-test
+check-qtest-i386-$(CONFIG_TPM_TIS_ISA) += tpm-tis-test
 check-qtest-i386-$(CONFIG_SLIRP) += test-netfilter
 check-qtest-i386-$(CONFIG_POSIX) += test-filter-mirror
 check-qtest-i386-$(CONFIG_RTL8139_PCI) += test-filter-redirector
@@ -130,6 +131,8 @@ check-qtest-arm-y += hexloader-test
 check-qtest-arm-$(CONFIG_PFLASH_CFI02) += pflash-cfi02-test
 
 check-qtest-aarch64-y += arm-cpu-features
+check-qtest-aarch64-$(CONFIG_TPM_TIS_SYSBUS) += tpm-tis-device-test
+check-qtest-aarch64-$(CONFIG_TPM_TIS_SYSBUS) += tpm-tis-device-swtpm-test
 check-qtest-aarch64-y += numa-test
 check-qtest-aarch64-y += boot-serial-test
 check-qtest-aarch64-y += migration-test
@@ -157,52 +160,54 @@ check-qtest-s390x-y += migration-test
 # libqos / qgraph :
 libqgraph-obj-y = tests/qtest/libqos/qgraph.o
 
-libqos-obj-y = $(libqgraph-obj-y) tests/qtest/libqos/pci.o tests/qtest/libqos/fw_cfg.o
-libqos-obj-y += tests/qtest/libqos/malloc.o
-libqos-obj-y += tests/qtest/libqos/libqos.o
-libqos-spapr-obj-y = $(libqos-obj-y) tests/qtest/libqos/malloc-spapr.o
+libqos-core-obj-y = $(libqgraph-obj-y) tests/qtest/libqos/pci.o tests/qtest/libqos/fw_cfg.o
+libqos-core-obj-y += tests/qtest/libqos/malloc.o
+libqos-core-obj-y += tests/qtest/libqos/libqos.o
+libqos-spapr-obj-y = $(libqos-core-obj-y) tests/qtest/libqos/malloc-spapr.o
 libqos-spapr-obj-y += tests/qtest/libqos/libqos-spapr.o
 libqos-spapr-obj-y += tests/qtest/libqos/rtas.o
 libqos-spapr-obj-y += tests/qtest/libqos/pci-spapr.o
-libqos-pc-obj-y = $(libqos-obj-y) tests/qtest/libqos/pci-pc.o
+libqos-pc-obj-y = $(libqos-core-obj-y) tests/qtest/libqos/pci-pc.o
 libqos-pc-obj-y += tests/qtest/libqos/malloc-pc.o tests/qtest/libqos/libqos-pc.o
 libqos-pc-obj-y += tests/qtest/libqos/ahci.o
 libqos-usb-obj-y = $(libqos-spapr-obj-y) $(libqos-pc-obj-y) tests/qtest/libqos/usb.o
 
 # qos devices:
-qos-test-obj-y = tests/qtest/qos-test.o $(libqgraph-obj-y)
-qos-test-obj-y += $(libqos-pc-obj-y) $(libqos-spapr-obj-y)
-qos-test-obj-y += tests/qtest/libqos/e1000e.o
-qos-test-obj-y += tests/qtest/libqos/i2c.o
-qos-test-obj-y += tests/qtest/libqos/i2c-imx.o
-qos-test-obj-y += tests/qtest/libqos/i2c-omap.o
-qos-test-obj-y += tests/qtest/libqos/sdhci.o
-qos-test-obj-y += tests/qtest/libqos/tpci200.o
-qos-test-obj-y += tests/qtest/libqos/virtio.o
-qos-test-obj-$(CONFIG_VIRTFS) += tests/qtest/libqos/virtio-9p.o
-qos-test-obj-y += tests/qtest/libqos/virtio-balloon.o
-qos-test-obj-y += tests/qtest/libqos/virtio-blk.o
-qos-test-obj-y += tests/qtest/libqos/virtio-mmio.o
-qos-test-obj-y += tests/qtest/libqos/virtio-net.o
-qos-test-obj-y += tests/qtest/libqos/virtio-pci.o
-qos-test-obj-y += tests/qtest/libqos/virtio-pci-modern.o
-qos-test-obj-y += tests/qtest/libqos/virtio-rng.o
-qos-test-obj-y += tests/qtest/libqos/virtio-scsi.o
-qos-test-obj-y += tests/qtest/libqos/virtio-serial.o
+libqos-obj-y =  $(libqgraph-obj-y)
+libqos-obj-y += $(libqos-pc-obj-y) $(libqos-spapr-obj-y)
+libqos-obj-y += tests/qtest/libqos/qos_external.o
+libqos-obj-y += tests/qtest/libqos/e1000e.o
+libqos-obj-y += tests/qtest/libqos/i2c.o
+libqos-obj-y += tests/qtest/libqos/i2c-imx.o
+libqos-obj-y += tests/qtest/libqos/i2c-omap.o
+libqos-obj-y += tests/qtest/libqos/sdhci.o
+libqos-obj-y += tests/qtest/libqos/tpci200.o
+libqos-obj-y += tests/qtest/libqos/virtio.o
+libqos-obj-$(CONFIG_VIRTFS) += tests/qtest/libqos/virtio-9p.o
+libqos-obj-y += tests/qtest/libqos/virtio-balloon.o
+libqos-obj-y += tests/qtest/libqos/virtio-blk.o
+libqos-obj-y += tests/qtest/libqos/virtio-mmio.o
+libqos-obj-y += tests/qtest/libqos/virtio-net.o
+libqos-obj-y += tests/qtest/libqos/virtio-pci.o
+libqos-obj-y += tests/qtest/libqos/virtio-pci-modern.o
+libqos-obj-y += tests/qtest/libqos/virtio-rng.o
+libqos-obj-y += tests/qtest/libqos/virtio-scsi.o
+libqos-obj-y += tests/qtest/libqos/virtio-serial.o
 
 # qos machines:
-qos-test-obj-y += tests/qtest/libqos/aarch64-xlnx-zcu102-machine.o
-qos-test-obj-y += tests/qtest/libqos/arm-imx25-pdk-machine.o
-qos-test-obj-y += tests/qtest/libqos/arm-n800-machine.o
-qos-test-obj-y += tests/qtest/libqos/arm-raspi2-machine.o
-qos-test-obj-y += tests/qtest/libqos/arm-sabrelite-machine.o
-qos-test-obj-y += tests/qtest/libqos/arm-smdkc210-machine.o
-qos-test-obj-y += tests/qtest/libqos/arm-virt-machine.o
-qos-test-obj-y += tests/qtest/libqos/arm-xilinx-zynq-a9-machine.o
-qos-test-obj-y += tests/qtest/libqos/ppc64_pseries-machine.o
-qos-test-obj-y += tests/qtest/libqos/x86_64_pc-machine.o
+libqos-obj-y += tests/qtest/libqos/aarch64-xlnx-zcu102-machine.o
+libqos-obj-y += tests/qtest/libqos/arm-imx25-pdk-machine.o
+libqos-obj-y += tests/qtest/libqos/arm-n800-machine.o
+libqos-obj-y += tests/qtest/libqos/arm-raspi2-machine.o
+libqos-obj-y += tests/qtest/libqos/arm-sabrelite-machine.o
+libqos-obj-y += tests/qtest/libqos/arm-smdkc210-machine.o
+libqos-obj-y += tests/qtest/libqos/arm-virt-machine.o
+libqos-obj-y += tests/qtest/libqos/arm-xilinx-zynq-a9-machine.o
+libqos-obj-y += tests/qtest/libqos/ppc64_pseries-machine.o
+libqos-obj-y += tests/qtest/libqos/x86_64_pc-machine.o
 
 # qos tests:
+qos-test-obj-y += tests/qtest/qos-test.o
 qos-test-obj-y += tests/qtest/ac97-test.o
 qos-test-obj-y += tests/qtest/ds1338-test.o
 qos-test-obj-y += tests/qtest/e1000-test.o
@@ -212,6 +217,7 @@ qos-test-obj-y += tests/qtest/es1370-test.o
 qos-test-obj-y += tests/qtest/ipoctal232-test.o
 qos-test-obj-y += tests/qtest/megasas-test.o
 qos-test-obj-y += tests/qtest/ne2000-test.o
+qos-test-obj-y += tests/qtest/tulip-test.o
 qos-test-obj-y += tests/qtest/nvme-test.o
 qos-test-obj-y += tests/qtest/pca9552-test.o
 qos-test-obj-y += tests/qtest/pci-test.o
@@ -234,7 +240,7 @@ check-unit-y += tests/test-qgraph$(EXESUF)
 tests/test-qgraph$(EXESUF): tests/test-qgraph.o $(libqgraph-obj-y)
 
 check-qtest-generic-y += qos-test
-tests/qtest/qos-test$(EXESUF): $(qos-test-obj-y)
+tests/qtest/qos-test$(EXESUF): $(qos-test-obj-y) $(libqos-obj-y)
 
 # QTest dependencies:
 tests/qtest/qmp-test$(EXESUF): tests/qtest/qmp-test.o
@@ -283,7 +289,6 @@ tests/qtest/usb-hcd-ehci-test$(EXESUF): tests/qtest/usb-hcd-ehci-test.o $(libqos
 tests/qtest/usb-hcd-xhci-test$(EXESUF): tests/qtest/usb-hcd-xhci-test.o $(libqos-usb-obj-y)
 tests/qtest/cpu-plug-test$(EXESUF): tests/qtest/cpu-plug-test.o
 tests/qtest/migration-test$(EXESUF): tests/qtest/migration-test.o tests/qtest/migration-helpers.o
-tests/qtest/qemu-iotests/qtest/socket_scm_helper$(EXESUF): tests/qtest/qemu-iotests/qtest/socket_scm_helper.o
 tests/qtest/test-netfilter$(EXESUF): tests/qtest/test-netfilter.o $(qtest-obj-y)
 tests/qtest/test-filter-mirror$(EXESUF): tests/qtest/test-filter-mirror.o $(qtest-obj-y)
 tests/qtest/test-filter-redirector$(EXESUF): tests/qtest/test-filter-redirector.o $(qtest-obj-y)
@@ -300,7 +305,10 @@ tests/qtest/tpm-crb-swtpm-test$(EXESUF): tests/qtest/tpm-crb-swtpm-test.o tests/
 tests/qtest/tpm-crb-test$(EXESUF): tests/qtest/tpm-crb-test.o tests/qtest/tpm-emu.o $(test-io-obj-y)
 tests/qtest/tpm-tis-swtpm-test$(EXESUF): tests/qtest/tpm-tis-swtpm-test.o tests/qtest/tpm-emu.o \
 	tests/qtest/tpm-util.o tests/qtest/tpm-tests.o $(test-io-obj-y)
-tests/qtest/tpm-tis-test$(EXESUF): tests/qtest/tpm-tis-test.o tests/qtest/tpm-emu.o $(test-io-obj-y)
+tests/qtest/tpm-tis-device-swtpm-test$(EXESUF): tests/qtest/tpm-tis-device-swtpm-test.o tests/qtest/tpm-emu.o \
+	tests/qtest/tpm-util.o tests/qtest/tpm-tests.o $(test-io-obj-y)
+tests/qtest/tpm-tis-test$(EXESUF): tests/qtest/tpm-tis-test.o tests/qtest/tpm-tis-util.o tests/qtest/tpm-emu.o $(test-io-obj-y)
+tests/qtest/tpm-tis-device-test$(EXESUF): tests/qtest/tpm-tis-device-test.o tests/qtest/tpm-tis-util.o tests/qtest/tpm-emu.o $(test-io-obj-y)
 
 # QTest rules
 

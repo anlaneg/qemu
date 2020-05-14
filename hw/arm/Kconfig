@@ -5,6 +5,7 @@ config ARM_VIRT
     imply VFIO_AMD_XGBE
     imply VFIO_PLATFORM
     imply VFIO_XGMAC
+    imply TPM_TIS_SYSBUS
     select A15MPCORE
     select ACPI
     select ARM_SMMUV3
@@ -24,6 +25,7 @@ config ARM_VIRT
     select DIMM
     select ACPI_MEMORY_HOTPLUG
     select ACPI_HW_REDUCED
+    select ACPI_NVDIMM
 
 config CHEETAH
     bool
@@ -69,6 +71,7 @@ config INTEGRATOR
     select INTEGRATOR_DEBUG
     select PL011 # UART
     select PL031 # RTC
+    select PL041 # audio
     select PL050 # keyboard/mouse
     select PL110 # pl111 LCD controller
     select PL181 # display
@@ -295,6 +298,18 @@ config ALLWINNER_A10
     select SERIAL
     select UNIMP
 
+config ALLWINNER_H3
+    bool
+    select ALLWINNER_A10_PIT
+    select ALLWINNER_SUN8I_EMAC
+    select SERIAL
+    select ARM_TIMER
+    select ARM_GIC
+    select UNIMP
+    select USB_OHCI
+    select USB_EHCI_SYSBUS
+    select SD
+
 config RASPI
     bool
     select FRAMEBUFFER
@@ -359,6 +374,7 @@ config FSL_IMX6
     select IMX
     select IMX_FEC
     select IMX_I2C
+    select IMX_USBPHY
     select SDHCI
 
 config ASPEED_SOC

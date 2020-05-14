@@ -46,7 +46,7 @@ struct NetPacket {
     unsigned flags;
     int size;//报文大小
     NetPacketSent *sent_cb;
-    uint8_t data[0];//报文内容
+    uint8_t data[];//报文内容
 };
 
 //队列

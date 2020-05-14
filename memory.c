@@ -807,9 +807,18 @@ static void address_space_update_ioeventfds(AddressSpace *as)
     FlatView *view;
     FlatRange *fr;
     unsigned ioeventfd_nb = 0;
-    MemoryRegionIoeventfd *ioeventfds = NULL;
+    unsigned ioeventfd_max;
+    MemoryRegionIoeventfd *ioeventfds;
     AddrRange tmp;
     unsigned i;
+
+    /*
+     * It is likely that the number of ioeventfds hasn't changed much, so use
+     * the previous size as the starting value, with some headroom to avoid
+     * gratuitous reallocations.
+     */
+    ioeventfd_max = QEMU_ALIGN_UP(as->ioeventfd_nb, 4);
+    ioeventfds = g_new(MemoryRegionIoeventfd, ioeventfd_max);
 
     view = address_space_get_flatview(as);
     FOR_EACH_FLAT_RANGE(fr, view) {
@@ -819,8 +828,11 @@ static void address_space_update_ioeventfds(AddressSpace *as)
                                              int128_make64(fr->offset_in_region)));
             if (addrrange_intersects(fr->addr, tmp)) {
                 ++ioeventfd_nb;
-                ioeventfds = g_realloc(ioeventfds,
-                                          ioeventfd_nb * sizeof(*ioeventfds));
+                if (ioeventfd_nb > ioeventfd_max) {
+                    ioeventfd_max = MAX(ioeventfd_max * 2, 4);
+                    ioeventfds = g_realloc(ioeventfds,
+                            ioeventfd_max * sizeof(*ioeventfds));
+                }
                 ioeventfds[ioeventfd_nb-1] = fr->mr->ioeventfds[i];
                 ioeventfds[ioeventfd_nb-1].addr = tmp;
             }
@@ -1172,15 +1184,6 @@ void memory_region_init(MemoryRegion *mr,
     memory_region_do_init(mr, owner, name, size);
 }
 
-static void memory_region_get_addr(Object *obj, Visitor *v, const char *name,
-                                   void *opaque, Error **errp)
-{
-    MemoryRegion *mr = MEMORY_REGION(obj);
-    uint64_t value = mr->addr;
-
-    visit_type_uint64(v, name, &value, errp);
-}
-
 static void memory_region_get_container(Object *obj, Visitor *v,
                                         const char *name, void *opaque,
                                         Error **errp)
@@ -1244,10 +1247,8 @@ static void memory_region_initfn(Object *obj)
                              NULL, NULL, &error_abort);
     op->resolve = memory_region_resolve_container;
 
-    object_property_add(OBJECT(mr), "addr", "uint64",
-                        memory_region_get_addr,
-                        NULL, /* memory_region_set_addr */
-                        NULL, NULL, &error_abort);
+    object_property_add_uint64_ptr(OBJECT(mr), "addr",
+                                   &mr->addr, OBJ_PROP_FLAG_READ, &error_abort);
     object_property_add(OBJECT(mr), "priority", "uint32",
                         memory_region_get_priority,
                         NULL, /* memory_region_set_priority */
@@ -1678,19 +1679,8 @@ void memory_region_init_rom_nomigrate(MemoryRegion *mr,
                                       uint64_t size,
                                       Error **errp)
 {
-    Error *err = NULL;
-    memory_region_init(mr, owner, name, size);
-    mr->ram = true;
+    memory_region_init_ram_shared_nomigrate(mr, owner, name, size, false, errp);
     mr->readonly = true;
-    mr->terminates = true;
-    mr->destructor = memory_region_destructor_ram;
-    mr->ram_block = qemu_ram_alloc(size, false, mr, &err);
-    mr->dirty_log_mask = tcg_enabled() ? (1 << DIRTY_MEMORY_CODE) : 0;
-    if (err) {
-        mr->size = int128_zero();
-        object_unparent(OBJECT(mr));
-        error_propagate(errp, err);
-    }
 }
 
 void memory_region_init_rom_device_nomigrate(MemoryRegion *mr,
@@ -2837,6 +2827,9 @@ void address_space_destroy(AddressSpace *as)
 
 static const char *memory_region_type(MemoryRegion *mr)
 {
+    if (mr->alias) {
+        return memory_region_type(mr->alias);
+    }
     if (memory_region_is_ram_device(mr)) {
         return "ramd";
     } else if (memory_region_is_romd(mr)) {

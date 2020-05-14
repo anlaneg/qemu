@@ -37,13 +37,11 @@ else:
 
 __version__ = '1.0'
 
-# We parse hx files with a state machine which may be in one of three
-# states: reading the C code fragment, inside a texi fragment,
-# or inside a rST fragment.
+# We parse hx files with a state machine which may be in one of two
+# states: reading the C code fragment, or inside a rST fragment.
 class HxState(Enum):
     CTEXT = 1
-    TEXI = 2
-    RST = 3
+    RST = 2
 
 def serror(file, lnum, errtext):
     """Raise an exception giving a user-friendly syntax error message"""
@@ -60,8 +58,9 @@ def parse_defheading(file, lnum, line):
     # empty we ignore the directive -- these are used only to add
     # blank lines in the plain-text content of the --help output.
     #
-    # Return the heading text
-    match = re.match(r'DEFHEADING\((.*)\)', line)
+    # Return the heading text. We strip out any trailing ':' for
+    # consistency with other headings in the rST documentation.
+    match = re.match(r'DEFHEADING\((.*?):?\)', line)
     if match is None:
         serror(file, lnum, "Invalid DEFHEADING line")
     return match.group(1)
@@ -72,8 +71,9 @@ def parse_archheading(file, lnum, line):
     # though note that the 'some string' could be the empty string.
     # As with DEFHEADING, empty string ARCHHEADINGs will be ignored.
     #
-    # Return the heading text
-    match = re.match(r'ARCHHEADING\((.*),.*\)', line)
+    # Return the heading text. We strip out any trailing ':' for
+    # consistency with other headings in the rST documentation.
+    match = re.match(r'ARCHHEADING\((.*?):?,.*\)', line)
     if match is None:
         serror(file, lnum, "Invalid ARCHHEADING line")
     return match.group(1)
@@ -108,31 +108,13 @@ class HxtoolDocDirective(Directive):
 
                 if directive == 'HXCOMM':
                     pass
-                elif directive == 'STEXI':
-                    if state == HxState.RST:
-                        serror(hxfile, lnum, 'expected ERST, found STEXI')
-                    elif state == HxState.TEXI:
-                        serror(hxfile, lnum, 'expected ETEXI, found STEXI')
-                    else:
-                        state = HxState.TEXI
-                elif directive == 'ETEXI':
-                    if state == HxState.RST:
-                        serror(hxfile, lnum, 'expected ERST, found ETEXI')
-                    elif state == HxState.CTEXT:
-                        serror(hxfile, lnum, 'expected STEXI, found ETEXI')
-                    else:
-                        state = HxState.CTEXT
                 elif directive == 'SRST':
                     if state == HxState.RST:
                         serror(hxfile, lnum, 'expected ERST, found SRST')
-                    elif state == HxState.TEXI:
-                        serror(hxfile, lnum, 'expected ETEXI, found SRST')
                     else:
                         state = HxState.RST
                 elif directive == 'ERST':
-                    if state == HxState.TEXI:
-                        serror(hxfile, lnum, 'expected ETEXI, found ERST')
-                    elif state == HxState.CTEXT:
+                    if state == HxState.CTEXT:
                         serror(hxfile, lnum, 'expected SRST, found ERST')
                     else:
                         state = HxState.CTEXT

@@ -1,20 +1,15 @@
 #ifndef HW_PC_H
 #define HW_PC_H
 
-#include "exec/memory.h"
+#include "qemu/notify.h"
+#include "qapi/qapi-types-common.h"
 #include "hw/boards.h"
 #include "hw/block/fdc.h"
 #include "hw/block/flash.h"
-#include "net/net.h"
 #include "hw/i386/x86.h"
 
-#include "qemu/range.h"
-#include "qemu/bitmap.h"
-#include "qemu/module.h"
-#include "hw/pci/pci.h"
-#include "hw/mem/pc-dimm.h"
-#include "hw/mem/nvdimm.h"
 #include "hw/acpi/acpi_dev_interface.h"
+#include "hw/hotplug.h"
 
 #define HPET_INTCAP "hpet-intcap"
 
@@ -134,19 +129,6 @@ typedef struct PCMachineClass {
 
 GSIState *pc_gsi_create(qemu_irq **irqs, bool pci_enabled);
 
-/* vmport.c */
-#define TYPE_VMPORT "vmport"
-typedef uint32_t (VMPortReadFunc)(void *opaque, uint32_t address);
-
-static inline void vmport_init(ISABus *bus)
-{
-    isa_create_simple(bus, TYPE_VMPORT);
-}
-
-void vmport_register(unsigned char command, VMPortReadFunc *func, void *opaque);
-void vmmouse_get_data(uint32_t *data);
-void vmmouse_set_data(const uint32_t *data);
-
 /* pc.c */
 extern int fd_bootchk;
 
@@ -208,6 +190,9 @@ void pc_system_firmware_init(PCMachineState *pcms, MemoryRegion *rom_memory);
 /* acpi-build.c */
 void pc_madt_cpu_entry(AcpiDeviceIf *adev, int uid,
                        const CPUArchIdList *apic_ids, GArray *entry);
+
+extern GlobalProperty pc_compat_5_0[];
+extern const size_t pc_compat_5_0_len;
 
 extern GlobalProperty pc_compat_4_2[];
 extern const size_t pc_compat_4_2_len;

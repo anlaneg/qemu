@@ -51,6 +51,9 @@ class OpenBSDVM(basevm.BaseVM):
         "sdl2",
         "gtk+3",
         "libxkbcommon",
+
+        # libs: migration
+        "zstd",
     ]
 
     BUILD_SCRIPT = """
@@ -79,6 +82,7 @@ class OpenBSDVM(basevm.BaseVM):
         self.boot(img_tmp, extra_args = [
             "-bios", "pc-bios/bios-256k.bin",
             "-machine", "graphics=off",
+            "-device", "VGA",
             "-cdrom", iso
         ])
         self.console_init()

@@ -27,6 +27,7 @@
 #include "sysemu/runstate.h"
 #include "sysemu/cpus.h"
 #include "sysemu/device_tree.h"
+#include "sysemu/hw_accel.h"
 #include "target/ppc/cpu.h"
 #include "qemu/log.h"
 #include "hw/ppc/fdt.h"
@@ -34,6 +35,7 @@
 #include "hw/ppc/pnv.h"
 #include "hw/ppc/pnv_core.h"
 #include "hw/loader.h"
+#include "hw/nmi.h"
 #include "exec/address-spaces.h"
 #include "qapi/visitor.h"
 #include "monitor/monitor.h"
@@ -571,9 +573,28 @@ static void pnv_powerdown_notify(Notifier *n, void *opaque)
 
 static void pnv_reset(MachineState *machine)
 {
+    PnvMachineState *pnv = PNV_MACHINE(machine);
+    IPMIBmc *bmc;
     void *fdt;
 
     qemu_devices_reset();
+
+    /*
+     * The machine should provide by default an internal BMC simulator.
+     * If not, try to use the BMC device that was provided on the command
+     * line.
+     */
+    bmc = pnv_bmc_find(&error_fatal);
+    if (!pnv->bmc) {
+        if (!bmc) {
+            warn_report("machine has no BMC device. Use '-device "
+                        "ipmi-bmc-sim,id=bmc0 -device isa-ipmi-bt,bmc=bmc0,irq=10' "
+                        "to define one");
+        } else {
+            pnv_bmc_set_pnor(bmc, pnv->pnor);
+            pnv->bmc = bmc;
+        }
+    }
 
     fdt = pnv_dt_create(machine);
 
@@ -692,7 +713,6 @@ static void pnv_init(MachineState *machine)
 {
     PnvMachineState *pnv = PNV_MACHINE(machine);
     MachineClass *mc = MACHINE_GET_CLASS(machine);
-    MemoryRegion *ram;
     char *fw_filename;
     long fw_size;
     int i;
@@ -704,11 +724,7 @@ static void pnv_init(MachineState *machine)
     if (machine->ram_size < (1 * GiB)) {
         warn_report("skiboot may not work with < 1GB of RAM");
     }
-
-    ram = g_new(MemoryRegion, 1);
-    memory_region_allocate_system_memory(ram, NULL, "pnv.ram",
-                                         machine->ram_size);
-    memory_region_add_subregion(get_system_memory(), 0, ram);
+    memory_region_add_subregion(get_system_memory(), 0, machine->ram);
 
     /*
      * Create our simple PNOR device
@@ -838,9 +854,6 @@ static void pnv_init(MachineState *machine)
     }
     g_free(chip_typename);
 
-    /* Create the machine BMC simulator */
-    pnv->bmc = pnv_bmc_create(pnv->pnor);
-
     /* Instantiate ISA bus on chip 0 */
     pnv->isa_bus = pnv_isa_create(pnv->chips[0], &error_fatal);
 
@@ -850,8 +863,14 @@ static void pnv_init(MachineState *machine)
     /* Create an RTC ISA device too */
     mc146818_rtc_init(pnv->isa_bus, 2000, NULL);
 
-    /* Create the IPMI BT device for communication with the BMC */
-    pnv_ipmi_bt_init(pnv->isa_bus, pnv->bmc, 10);
+    /*
+     * Create the machine BMC simulator and the IPMI BT device for
+     * communication with the BMC
+     */
+    if (defaults_enabled()) {
+        pnv->bmc = pnv_bmc_create(pnv->pnor);
+        pnv_ipmi_bt_init(pnv->isa_bus, pnv->bmc, 10);
+    }
 
     /*
      * OpenPOWER systems use a IPMI SEL Event message to notify the
@@ -1960,10 +1979,35 @@ static void pnv_machine_set_hb(Object *obj, bool value, Error **errp)
     }
 }
 
+static void pnv_cpu_do_nmi_on_cpu(CPUState *cs, run_on_cpu_data arg)
+{
+    PowerPCCPU *cpu = POWERPC_CPU(cs);
+    CPUPPCState *env = &cpu->env;
+
+    cpu_synchronize_state(cs);
+    ppc_cpu_do_system_reset(cs);
+    /*
+     * SRR1[42:45] is set to 0100 which the ISA defines as implementation
+     * dependent. POWER processors use this for xscom triggered interrupts,
+     * which come from the BMC or NMI IPIs.
+     */
+    env->spr[SPR_SRR1] |= PPC_BIT(43);
+}
+
+static void pnv_nmi(NMIState *n, int cpu_index, Error **errp)
+{
+    CPUState *cs;
+
+    CPU_FOREACH(cs) {
+        async_run_on_cpu(cs, pnv_cpu_do_nmi_on_cpu, RUN_ON_CPU_NULL);
+    }
+}
+
 static void pnv_machine_class_init(ObjectClass *oc, void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
     InterruptStatsProviderClass *ispc = INTERRUPT_STATS_PROVIDER_CLASS(oc);
+    NMIClass *nc = NMI_CLASS(oc);
 
     mc->desc = "IBM PowerNV (Non-Virtualized)";
     mc->init = pnv_init;
@@ -1978,7 +2022,9 @@ static void pnv_machine_class_init(ObjectClass *oc, void *data)
      * enough to fit the maximum initrd size at it's load address
      */
     mc->default_ram_size = INITRD_LOAD_ADDR + INITRD_MAX_SIZE;
+    mc->default_ram_id = "pnv.ram";
     ispc->print_info = pnv_pic_print_info;
+    nc->nmi_monitor_handler = pnv_nmi;
 
     object_class_property_add_bool(oc, "hb-mode",
                                    pnv_machine_get_hb, pnv_machine_set_hb,
@@ -2042,6 +2088,7 @@ static const TypeInfo types[] = {
         .class_size    = sizeof(PnvMachineClass),
         .interfaces = (InterfaceInfo[]) {
             { TYPE_INTERRUPT_STATS_PROVIDER },
+            { TYPE_NMI },
             { },
         },
     },

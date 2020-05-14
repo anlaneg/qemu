@@ -193,7 +193,7 @@ typedef struct VirtioThinintInfo {
 typedef struct VirtioRevInfo {
     uint16_t revision;
     uint16_t length;
-    uint8_t data[0];
+    uint8_t data[];
 } QEMU_PACKED VirtioRevInfo;
 
 /* Specify where the virtqueues for the subchannel are in guest memory. */
@@ -790,7 +790,7 @@ static uint8_t virtio_set_ind_atomic(SubchDev *sch, uint64_t ind_loc,
     hwaddr len = 1;
     uint8_t *ind_addr;
 
-    ind_addr = cpu_physical_memory_map(ind_loc, &len, 1);
+    ind_addr = cpu_physical_memory_map(ind_loc, &len, true);
     if (!ind_addr) {
         error_report("%s(%x.%x.%04x): unable to access indicator",
                      __func__, sch->cssid, sch->ssid, sch->schid);

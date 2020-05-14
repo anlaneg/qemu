@@ -1,10 +1,11 @@
 /*
  * bootloader support
  *
- * Copyright IBM, Corp. 2012
+ * Copyright IBM, Corp. 2012, 2020
  *
  * Authors:
  *  Christian Borntraeger <borntraeger@de.ibm.com>
+ *  Janosch Frank <frankja@linux.ibm.com>
  *
  * This work is licensed under the terms of the GNU GPL, version 2 or (at your
  * option) any later version.  See the COPYING file in the top-level directory.
@@ -27,6 +28,7 @@
 #include "hw/s390x/vfio-ccw.h"
 #include "hw/s390x/css.h"
 #include "hw/s390x/ebcdic.h"
+#include "hw/s390x/pv.h"
 #include "ipl.h"
 #include "qemu/error-report.h"
 #include "qemu/config-file.h"
@@ -179,7 +181,7 @@ static void s390_ipl_realize(DeviceState *dev, Error **errp)
                 /* if not Linux load the address of the (short) IPL PSW */
                 ipl_psw = rom_ptr(4, 4);
                 if (ipl_psw) {
-                    pentry = be32_to_cpu(*ipl_psw) & 0x7fffffffUL;
+                    pentry = be32_to_cpu(*ipl_psw) & PSW_MASK_SHORT_ADDR;
                 } else {
                     error_setg(&err, "Could not get IPL PSW");
                     goto error;
@@ -538,13 +540,57 @@ static bool is_virtio_scsi_device(IplParameterBlock *iplb)
     return is_virtio_ccw_device_of_type(iplb, VIRTIO_ID_SCSI);
 }
 
+static void update_machine_ipl_properties(IplParameterBlock *iplb)
+{
+    Object *machine = qdev_get_machine();
+    Error *err = NULL;
+
+    /* Sync loadparm */
+    if (iplb->flags & DIAG308_FLAGS_LP_VALID) {
+        uint8_t *ebcdic_loadparm = iplb->loadparm;
+        char ascii_loadparm[9];
+        int i;
+
+        for (i = 0; i < 8 && ebcdic_loadparm[i]; i++) {
+            ascii_loadparm[i] = ebcdic2ascii[(uint8_t) ebcdic_loadparm[i]];
+        }
+        ascii_loadparm[i] = 0;
+        object_property_set_str(machine, ascii_loadparm, "loadparm", &err);
+    } else {
+        object_property_set_str(machine, "", "loadparm", &err);
+    }
+    if (err) {
+        warn_report_err(err);
+    }
+}
+
 void s390_ipl_update_diag308(IplParameterBlock *iplb)
 {
     S390IPLState *ipl = get_ipl_device();
 
-    ipl->iplb = *iplb;
-    ipl->iplb_valid = true;
+    /*
+     * The IPLB set and retrieved by subcodes 8/9 is completely
+     * separate from the one managed via subcodes 5/6.
+     */
+    if (iplb->pbt == S390_IPL_TYPE_PV) {
+        ipl->iplb_pv = *iplb;
+        ipl->iplb_valid_pv = true;
+    } else {
+        ipl->iplb = *iplb;
+        ipl->iplb_valid = true;
+    }
     ipl->netboot = is_virtio_net_device(iplb);
+    update_machine_ipl_properties(iplb);
+}
+
+IplParameterBlock *s390_ipl_get_iplb_pv(void)
+{
+    S390IPLState *ipl = get_ipl_device();
+
+    if (!ipl->iplb_valid_pv) {
+        return NULL;
+    }
+    return &ipl->iplb_pv;
 }
 
 IplParameterBlock *s390_ipl_get_iplb(void)
@@ -626,13 +672,45 @@ static void s390_ipl_prepare_qipl(S390CPU *cpu)
     uint8_t *addr;
     uint64_t len = 4096;
 
-    addr = cpu_physical_memory_map(cpu->env.psa, &len, 1);
+    addr = cpu_physical_memory_map(cpu->env.psa, &len, true);
     if (!addr || len < QIPL_ADDRESS + sizeof(QemuIplParameters)) {
         error_report("Cannot set QEMU IPL parameters");
         return;
     }
     memcpy(addr + QIPL_ADDRESS, &ipl->qipl, sizeof(QemuIplParameters));
     cpu_physical_memory_unmap(addr, len, 1, len);
+}
+
+int s390_ipl_prepare_pv_header(void)
+{
+    IplParameterBlock *ipib = s390_ipl_get_iplb_pv();
+    IPLBlockPV *ipib_pv = &ipib->pv;
+    void *hdr = g_malloc(ipib_pv->pv_header_len);
+    int rc;
+
+    cpu_physical_memory_read(ipib_pv->pv_header_addr, hdr,
+                             ipib_pv->pv_header_len);
+    rc = s390_pv_set_sec_parms((uintptr_t)hdr,
+                               ipib_pv->pv_header_len);
+    g_free(hdr);
+    return rc;
+}
+
+int s390_ipl_pv_unpack(void)
+{
+    IplParameterBlock *ipib = s390_ipl_get_iplb_pv();
+    IPLBlockPV *ipib_pv = &ipib->pv;
+    int i, rc = 0;
+
+    for (i = 0; i < ipib_pv->num_comp; i++) {
+        rc = s390_pv_unpack(ipib_pv->components[i].addr,
+                            TARGET_PAGE_ALIGN(ipib_pv->components[i].size),
+                            ipib_pv->components[i].tweak_pref);
+        if (rc) {
+            break;
+        }
+    }
+    return rc;
 }
 
 void s390_ipl_prepare_cpu(S390CPU *cpu)

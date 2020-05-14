@@ -267,15 +267,17 @@ static void bochs_display_realize(PCIDevice *dev, Error **errp)
     Object *obj = OBJECT(dev);
     int ret;
 
-    s->con = graphic_console_init(DEVICE(dev), 0, &bochs_display_gfx_ops, s);
-
     if (s->vgamem < 4 * MiB) {
         error_setg(errp, "bochs-display: video memory too small");
+        return;
     }
     if (s->vgamem > 256 * MiB) {
         error_setg(errp, "bochs-display: video memory too big");
+        return;
     }
     s->vgamem = pow2ceil(s->vgamem);
+
+    s->con = graphic_console_init(DEVICE(dev), 0, &bochs_display_gfx_ops, s);
 
     memory_region_init_ram(&s->vram, obj, "bochs-display-vram", s->vgamem,
                            &error_fatal);
@@ -284,8 +286,8 @@ static void bochs_display_realize(PCIDevice *dev, Error **errp)
     memory_region_init_io(&s->qext, obj, &bochs_display_qext_ops, s,
                           "qemu extended regs", PCI_VGA_QEXT_SIZE);
 
-    memory_region_init(&s->mmio, obj, "bochs-display-mmio",
-                       PCI_VGA_MMIO_SIZE);
+    memory_region_init_io(&s->mmio, obj, &unassigned_io_ops, NULL,
+                          "bochs-display-mmio", PCI_VGA_MMIO_SIZE);
     memory_region_add_subregion(&s->mmio, PCI_VGA_BOCHS_OFFSET, &s->vbe);
     memory_region_add_subregion(&s->mmio, PCI_VGA_QEXT_OFFSET, &s->qext);
 

@@ -33,6 +33,22 @@ static inline SCLPDevice *get_sclp_device(void)
     return sclp;
 }
 
+static inline bool sclp_command_code_valid(uint32_t code)
+{
+    switch (code & SCLP_CMD_CODE_MASK) {
+    case SCLP_CMDW_READ_SCP_INFO:
+    case SCLP_CMDW_READ_SCP_INFO_FORCED:
+    case SCLP_CMDW_READ_CPU_INFO:
+    case SCLP_CMDW_CONFIGURE_IOA:
+    case SCLP_CMDW_DECONFIGURE_IOA:
+    case SCLP_CMD_READ_EVENT_DATA:
+    case SCLP_CMD_WRITE_EVENT_DATA:
+    case SCLP_CMD_WRITE_EVENT_MASK:
+        return true;
+    }
+    return false;
+}
+
 static void prepare_cpu_entries(SCLPDevice *sclp, CPUEntry *entry, int *count)
 {
     MachineState *ms = MACHINE(qdev_get_machine());
@@ -193,6 +209,34 @@ static void sclp_execute(SCLPDevice *sclp, SCCB *sccb, uint32_t code)
     }
 }
 
+/*
+ * We only need the address to have something valid for the
+ * service_interrupt call.
+ */
+#define SCLP_PV_DUMMY_ADDR 0x4000
+int sclp_service_call_protected(CPUS390XState *env, uint64_t sccb,
+                                uint32_t code)
+{
+    SCLPDevice *sclp = get_sclp_device();
+    SCLPDeviceClass *sclp_c = SCLP_GET_CLASS(sclp);
+    SCCB work_sccb;
+    hwaddr sccb_len = sizeof(SCCB);
+
+    s390_cpu_pv_mem_read(env_archcpu(env), 0, &work_sccb, sccb_len);
+
+    if (!sclp_command_code_valid(code)) {
+        work_sccb.h.response_code = cpu_to_be16(SCLP_RC_INVALID_SCLP_COMMAND);
+        goto out_write;
+    }
+
+    sclp_c->execute(sclp, &work_sccb, code);
+out_write:
+    s390_cpu_pv_mem_write(env_archcpu(env), 0, &work_sccb,
+                          be16_to_cpu(work_sccb.h.length));
+    sclp_c->service_interrupt(sclp, SCLP_PV_DUMMY_ADDR);
+    return 0;
+}
+
 int sclp_service_call(CPUS390XState *env, uint64_t sccb, uint32_t code)
 {
     SCLPDevice *sclp = get_sclp_device();
@@ -225,17 +269,7 @@ int sclp_service_call(CPUS390XState *env, uint64_t sccb, uint32_t code)
         return -PGM_SPECIFICATION;
     }
 
-    switch (code & SCLP_CMD_CODE_MASK) {
-    case SCLP_CMDW_READ_SCP_INFO:
-    case SCLP_CMDW_READ_SCP_INFO_FORCED:
-    case SCLP_CMDW_READ_CPU_INFO:
-    case SCLP_CMDW_CONFIGURE_IOA:
-    case SCLP_CMDW_DECONFIGURE_IOA:
-    case SCLP_CMD_READ_EVENT_DATA:
-    case SCLP_CMD_WRITE_EVENT_DATA:
-    case SCLP_CMD_WRITE_EVENT_MASK:
-        break;
-    default:
+    if (!sclp_command_code_valid(code)) {
         work_sccb.h.response_code = cpu_to_be16(SCLP_RC_INVALID_SCLP_COMMAND);
         goto out_write;
     }
@@ -327,27 +361,20 @@ out:
 static void sclp_memory_init(SCLPDevice *sclp)
 {
     MachineState *machine = MACHINE(qdev_get_machine());
+    MachineClass *machine_class = MACHINE_GET_CLASS(qdev_get_machine());
     ram_addr_t initial_mem = machine->ram_size;
     int increment_size = 20;
 
     /* The storage increment size is a multiple of 1M and is a power of 2.
-     * The number of storage increments must be MAX_STORAGE_INCREMENTS or fewer.
+     * For some machine types, the number of storage increments must be
+     * MAX_STORAGE_INCREMENTS or fewer.
      * The variable 'increment_size' is an exponent of 2 that can be
      * used to calculate the size (in bytes) of an increment. */
-    while ((initial_mem >> increment_size) > MAX_STORAGE_INCREMENTS) {
+    while (machine_class->fixup_ram_size != NULL &&
+           (initial_mem >> increment_size) > MAX_STORAGE_INCREMENTS) {
         increment_size++;
     }
     sclp->increment_size = increment_size;
-
-    /* The core memory area needs to be aligned with the increment size.
-     * In effect, this can cause the user-specified memory size to be rounded
-     * down to align with the nearest increment boundary. */
-    initial_mem = initial_mem >> increment_size << increment_size;
-
-    machine->ram_size = initial_mem;
-    machine->maxram_size = initial_mem;
-    /* let's propagate the changed ram size into the global variable. */
-    ram_size = initial_mem;
 }
 
 static void sclp_init(Object *obj)

@@ -411,6 +411,12 @@ static void aspeed_soc_ast2600_realize(DeviceState *dev, Error **errp)
 
     /* SPI */
     for (i = 0; i < sc->spis_num; i++) {
+        object_property_set_link(OBJECT(&s->spi[i]), OBJECT(s->dram_mr),
+                                 "dram", &err);
+        if (err) {
+            error_propagate(errp, err);
+            return;
+        }
         object_property_set_int(OBJECT(&s->spi[i]), 1, "num-cs", &err);
         object_property_set_bool(OBJECT(&s->spi[i]), true, "realized",
                                  &local_err);
@@ -551,9 +557,9 @@ static void aspeed_soc_ast2600_class_init(ObjectClass *oc, void *data)
 
     dc->realize      = aspeed_soc_ast2600_realize;
 
-    sc->name         = "ast2600-a0";
+    sc->name         = "ast2600-a1";
     sc->cpu_type     = ARM_CPU_TYPE_NAME("cortex-a7");
-    sc->silicon_rev  = AST2600_A0_SILICON_REV;
+    sc->silicon_rev  = AST2600_A1_SILICON_REV;
     sc->sram_size    = 0x10000;
     sc->spis_num     = 2;
     sc->ehcis_num    = 2;
@@ -565,7 +571,7 @@ static void aspeed_soc_ast2600_class_init(ObjectClass *oc, void *data)
 }
 
 static const TypeInfo aspeed_soc_ast2600_type_info = {
-    .name           = "ast2600-a0",
+    .name           = "ast2600-a1",
     .parent         = TYPE_ASPEED_SOC,
     .instance_size  = sizeof(AspeedSoCState),
     .instance_init  = aspeed_soc_ast2600_init,

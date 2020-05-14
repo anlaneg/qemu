@@ -447,16 +447,6 @@ void kvm_arm_pmu_set_irq(CPUState *cs, int irq)
     }
 }
 
-static inline void set_feature(uint64_t *features, int feature)
-{
-    *features |= 1ULL << feature;
-}
-
-static inline void unset_feature(uint64_t *features, int feature)
-{
-    *features &= ~(1ULL << feature);
-}
-
 static int read_sys_reg32(int fd, uint32_t *pret, uint64_t id)
 {
     uint64_t ret;
@@ -648,12 +638,11 @@ bool kvm_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
      * with VFPv4+Neon; this in turn implies most of the other
      * feature bits.
      */
-    set_feature(&features, ARM_FEATURE_V8);
-    set_feature(&features, ARM_FEATURE_VFP4);
-    set_feature(&features, ARM_FEATURE_NEON);
-    set_feature(&features, ARM_FEATURE_AARCH64);
-    set_feature(&features, ARM_FEATURE_PMU);
-    set_feature(&features, ARM_FEATURE_GENERIC_TIMER);
+    features |= 1ULL << ARM_FEATURE_V8;
+    features |= 1ULL << ARM_FEATURE_NEON;
+    features |= 1ULL << ARM_FEATURE_AARCH64;
+    features |= 1ULL << ARM_FEATURE_PMU;
+    features |= 1ULL << ARM_FEATURE_GENERIC_TIMER;
 
     ahcf->features = features;
 
@@ -803,7 +792,7 @@ int kvm_arch_init_vcpu(CPUState *cs)
     if (cpu->has_pmu) {
         cpu->kvm_init_features[0] |= 1 << KVM_ARM_VCPU_PMU_V3;
     } else {
-        unset_feature(&env->features, ARM_FEATURE_PMU);
+        env->features &= ~(1ULL << ARM_FEATURE_PMU);
     }
     if (cpu_isar_feature(aa64_sve, cpu)) {
         assert(kvm_arm_sve_supported(cs));
@@ -1095,15 +1084,20 @@ int kvm_arch_put_registers(CPUState *cs, int level)
         return ret;
     }
 
-    ret = kvm_put_vcpu_events(cpu);
-    if (ret) {
-        return ret;
-    }
-
     write_cpustate_to_list(cpu, true);
 
     if (!write_list_to_kvmstate(cpu, level)) {
         return -EINVAL;
+    }
+
+   /*
+    * Setting VCPU events should be triggered after syncing the registers
+    * to avoid overwriting potential changes made by KVM upon calling
+    * KVM_SET_VCPU_EVENTS ioctl
+    */
+    ret = kvm_put_vcpu_events(cpu);
+    if (ret) {
+        return ret;
     }
 
     kvm_arm_sync_mpstate_to_kvm(cpu);

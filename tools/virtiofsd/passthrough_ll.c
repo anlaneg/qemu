@@ -123,7 +123,7 @@ struct lo_inode {
     pthread_mutex_t plock_mutex;
     GHashTable *posix_locks; /* protected by lo_inode->plock_mutex */
 
-    bool is_symlink;
+    mode_t filetype;
 };
 
 struct lo_cred {
@@ -695,7 +695,7 @@ static int utimensat_empty(struct lo_data *lo, struct lo_inode *inode,
     struct lo_inode *parent;
     char path[PATH_MAX];
 
-    if (inode->is_symlink) {
+    if (S_ISLNK(inode->filetype)) {
         res = utimensat(inode->fd, "", tv, AT_EMPTY_PATH);
         if (res == -1 && errno == EINVAL) {
             /* Sorry, no race free way to set times on symlink. */
@@ -928,7 +928,8 @@ static int lo_do_lookup(fuse_req_t req, fuse_ino_t parent, const char *name,
             goto out_err;
         }
 
-        inode->is_symlink = S_ISLNK(e->attr.st_mode);
+        /* cache only filetype */
+        inode->filetype = (e->attr.st_mode & S_IFMT);
 
         /*
          * One for the caller and one for nlookup (released in
@@ -1135,7 +1136,7 @@ static int linkat_empty_nofollow(struct lo_data *lo, struct lo_inode *inode,
     struct lo_inode *parent;
     char path[PATH_MAX];
 
-    if (inode->is_symlink) {
+    if (S_ISLNK(inode->filetype)) {
         res = linkat(inode->fd, "", dfd, name, AT_EMPTY_PATH);
         if (res == -1 && (errno == ENOENT || errno == EINVAL)) {
             /* Sorry, no race free way to hard-link a symlink. */
@@ -1519,8 +1520,7 @@ out_err:
     if (d) {
         if (d->dp) {
             closedir(d->dp);
-        }
-        if (fd != -1) {
+        } else if (fd != -1) {
             close(fd);
         }
         free(d);
@@ -2189,40 +2189,43 @@ static void lo_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
     fuse_log(FUSE_LOG_DEBUG, "lo_getxattr(ino=%" PRIu64 ", name=%s size=%zd)\n",
              ino, name, size);
 
-    if (inode->is_symlink) {
-        /* Sorry, no race free way to getxattr on symlink. */
-        saverr = EPERM;
-        goto out;
-    }
-
-    sprintf(procname, "%i", inode->fd);
-    fd = openat(lo->proc_self_fd, procname, O_RDONLY);
-    if (fd < 0) {
-        goto out_err;
-    }
-
     if (size) {
         value = malloc(size);
         if (!value) {
             goto out_err;
         }
+    }
 
-        ret = fgetxattr(fd, name, value, size);
-        if (ret == -1) {
+    sprintf(procname, "%i", inode->fd);
+    /*
+     * It is not safe to open() non-regular/non-dir files in file server
+     * unless O_PATH is used, so use that method for regular files/dir
+     * only (as it seems giving less performance overhead).
+     * Otherwise, call fchdir() to avoid open().
+     */
+    if (S_ISREG(inode->filetype) || S_ISDIR(inode->filetype)) {
+        fd = openat(lo->proc_self_fd, procname, O_RDONLY);
+        if (fd < 0) {
             goto out_err;
         }
+        ret = fgetxattr(fd, name, value, size);
+    } else {
+        /* fchdir should not fail here */
+        assert(fchdir(lo->proc_self_fd) == 0);
+        ret = getxattr(procname, name, value, size);
+        assert(fchdir(lo->root.fd) == 0);
+    }
+
+    if (ret == -1) {
+        goto out_err;
+    }
+    if (size) {
         saverr = 0;
         if (ret == 0) {
             goto out;
         }
-
         fuse_reply_buf(req, value, ret);
     } else {
-        ret = fgetxattr(fd, name, NULL, 0);
-        if (ret == -1) {
-            goto out_err;
-        }
-
         fuse_reply_xattr(req, ret);
     }
 out_free:
@@ -2238,7 +2241,6 @@ out_free:
 out_err:
     saverr = errno;
 out:
-    lo_inode_put(lo, &inode);
     fuse_reply_err(req, saverr);
     goto out_free;
 }
@@ -2267,40 +2269,37 @@ static void lo_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
     fuse_log(FUSE_LOG_DEBUG, "lo_listxattr(ino=%" PRIu64 ", size=%zd)\n", ino,
              size);
 
-    if (inode->is_symlink) {
-        /* Sorry, no race free way to listxattr on symlink. */
-        saverr = EPERM;
-        goto out;
-    }
-
-    sprintf(procname, "%i", inode->fd);
-    fd = openat(lo->proc_self_fd, procname, O_RDONLY);
-    if (fd < 0) {
-        goto out_err;
-    }
-
     if (size) {
         value = malloc(size);
         if (!value) {
             goto out_err;
         }
+    }
 
-        ret = flistxattr(fd, value, size);
-        if (ret == -1) {
+    sprintf(procname, "%i", inode->fd);
+    if (S_ISREG(inode->filetype) || S_ISDIR(inode->filetype)) {
+        fd = openat(lo->proc_self_fd, procname, O_RDONLY);
+        if (fd < 0) {
             goto out_err;
         }
+        ret = flistxattr(fd, value, size);
+    } else {
+        /* fchdir should not fail here */
+        assert(fchdir(lo->proc_self_fd) == 0);
+        ret = listxattr(procname, value, size);
+        assert(fchdir(lo->root.fd) == 0);
+    }
+
+    if (ret == -1) {
+        goto out_err;
+    }
+    if (size) {
         saverr = 0;
         if (ret == 0) {
             goto out;
         }
-
         fuse_reply_buf(req, value, ret);
     } else {
-        ret = flistxattr(fd, NULL, 0);
-        if (ret == -1) {
-            goto out_err;
-        }
-
         fuse_reply_xattr(req, ret);
     }
 out_free:
@@ -2316,7 +2315,6 @@ out_free:
 out_err:
     saverr = errno;
 out:
-    lo_inode_put(lo, &inode);
     fuse_reply_err(req, saverr);
     goto out_free;
 }
@@ -2345,20 +2343,21 @@ static void lo_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
     fuse_log(FUSE_LOG_DEBUG, "lo_setxattr(ino=%" PRIu64
              ", name=%s value=%s size=%zd)\n", ino, name, value, size);
 
-    if (inode->is_symlink) {
-        /* Sorry, no race free way to setxattr on symlink. */
-        saverr = EPERM;
-        goto out;
-    }
-
     sprintf(procname, "%i", inode->fd);
-    fd = openat(lo->proc_self_fd, procname, O_RDWR);
-    if (fd < 0) {
-        saverr = errno;
-        goto out;
+    if (S_ISREG(inode->filetype) || S_ISDIR(inode->filetype)) {
+        fd = openat(lo->proc_self_fd, procname, O_RDONLY);
+        if (fd < 0) {
+            saverr = errno;
+            goto out;
+        }
+        ret = fsetxattr(fd, name, value, size, flags);
+    } else {
+        /* fchdir should not fail here */
+        assert(fchdir(lo->proc_self_fd) == 0);
+        ret = setxattr(procname, name, value, size, flags);
+        assert(fchdir(lo->root.fd) == 0);
     }
 
-    ret = fsetxattr(fd, name, value, size, flags);
     saverr = ret == -1 ? errno : 0;
 
 out:
@@ -2393,20 +2392,21 @@ static void lo_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name)
     fuse_log(FUSE_LOG_DEBUG, "lo_removexattr(ino=%" PRIu64 ", name=%s)\n", ino,
              name);
 
-    if (inode->is_symlink) {
-        /* Sorry, no race free way to setxattr on symlink. */
-        saverr = EPERM;
-        goto out;
-    }
-
     sprintf(procname, "%i", inode->fd);
-    fd = openat(lo->proc_self_fd, procname, O_RDWR);
-    if (fd < 0) {
-        saverr = errno;
-        goto out;
+    if (S_ISREG(inode->filetype) || S_ISDIR(inode->filetype)) {
+        fd = openat(lo->proc_self_fd, procname, O_RDONLY);
+        if (fd < 0) {
+            saverr = errno;
+            goto out;
+        }
+        ret = fremovexattr(fd, name);
+    } else {
+        /* fchdir should not fail here */
+        assert(fchdir(lo->proc_self_fd) == 0);
+        ret = removexattr(procname, name);
+        assert(fchdir(lo->root.fd) == 0);
     }
 
-    ret = fremovexattr(fd, name);
     saverr = ret == -1 ? errno : 0;
 
 out:
@@ -2531,11 +2531,24 @@ static void print_capabilities(void)
 }
 
 /*
+ * Drop all Linux capabilities because the wait parent process only needs to
+ * sit in waitpid(2) and terminate.
+ */
+static void setup_wait_parent_capabilities(void)
+{
+    capng_setpid(syscall(SYS_gettid));
+    capng_clear(CAPNG_SELECT_BOTH);
+    capng_apply(CAPNG_SELECT_BOTH);
+}
+
+/*
  * Move to a new mount, net, and pid namespaces to isolate this process.
  */
 static void setup_namespaces(struct lo_data *lo, struct fuse_session *se)
 {
     pid_t child;
+    char template[] = "virtiofsd-XXXXXX";
+    char *tmpdir;
 
     /*
      * Create a new pid namespace for *child* processes.  We'll have to
@@ -2560,6 +2573,8 @@ static void setup_namespaces(struct lo_data *lo, struct fuse_session *se)
     if (child > 0) {
         pid_t waited;
         int wstatus;
+
+        setup_wait_parent_capabilities();
 
         /* The parent waits for the child */
         do {
@@ -2597,11 +2612,32 @@ static void setup_namespaces(struct lo_data *lo, struct fuse_session *se)
         exit(1);
     }
 
-    /* Now we can get our /proc/self/fd directory file descriptor */
-    lo->proc_self_fd = open("/proc/self/fd", O_PATH);
-    if (lo->proc_self_fd == -1) {
-        fuse_log(FUSE_LOG_ERR, "open(/proc/self/fd, O_PATH): %m\n");
+    tmpdir = mkdtemp(template);
+    if (!tmpdir) {
+        fuse_log(FUSE_LOG_ERR, "tmpdir(%s): %m\n", template);
         exit(1);
+    }
+
+    if (mount("/proc/self/fd", tmpdir, NULL, MS_BIND, NULL) < 0) {
+        fuse_log(FUSE_LOG_ERR, "mount(/proc/self/fd, %s, MS_BIND): %m\n",
+                 tmpdir);
+        exit(1);
+    }
+
+    /* Now we can get our /proc/self/fd directory file descriptor */
+    lo->proc_self_fd = open(tmpdir, O_PATH);
+    if (lo->proc_self_fd == -1) {
+        fuse_log(FUSE_LOG_ERR, "open(%s, O_PATH): %m\n", tmpdir);
+        exit(1);
+    }
+
+    if (umount2(tmpdir, MNT_DETACH) < 0) {
+        fuse_log(FUSE_LOG_ERR, "umount2(%s, MNT_DETACH): %m\n", tmpdir);
+        exit(1);
+    }
+
+    if (rmdir(tmpdir) < 0) {
+        fuse_log(FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
     }
 }
 
@@ -2643,7 +2679,7 @@ static void setup_mounts(const char *source)
     int oldroot;
     int newroot;
 
-    if (mount(source, source, NULL, MS_BIND, NULL) < 0) {
+    if (mount(source, source, NULL, MS_BIND | MS_REC, NULL) < 0) {
         fuse_log(FUSE_LOG_ERR, "mount(%s, %s, MS_BIND): %m\n", source, source);
         exit(1);
     }
@@ -2696,6 +2732,43 @@ static void setup_mounts(const char *source)
 }
 
 /*
+ * Only keep whitelisted capabilities that are needed for file system operation
+ */
+static void setup_capabilities(void)
+{
+    pthread_mutex_lock(&cap.mutex);
+    capng_restore_state(&cap.saved);
+
+    /*
+     * Whitelist file system-related capabilities that are needed for a file
+     * server to act like root.  Drop everything else like networking and
+     * sysadmin capabilities.
+     *
+     * Exclusions:
+     * 1. CAP_LINUX_IMMUTABLE is not included because it's only used via ioctl
+     *    and we don't support that.
+     * 2. CAP_MAC_OVERRIDE is not included because it only seems to be
+     *    used by the Smack LSM.  Omit it until there is demand for it.
+     */
+    capng_setpid(syscall(SYS_gettid));
+    capng_clear(CAPNG_SELECT_BOTH);
+    capng_updatev(CAPNG_ADD, CAPNG_PERMITTED | CAPNG_EFFECTIVE,
+            CAP_CHOWN,
+            CAP_DAC_OVERRIDE,
+            CAP_DAC_READ_SEARCH,
+            CAP_FOWNER,
+            CAP_FSETID,
+            CAP_SETGID,
+            CAP_SETUID,
+            CAP_MKNOD,
+            CAP_SETFCAP);
+    capng_apply(CAPNG_SELECT_BOTH);
+
+    cap.saved = capng_save_state();
+    pthread_mutex_unlock(&cap.mutex);
+}
+
+/*
  * Lock down this process to prevent access to other processes or files outside
  * source directory.  This reduces the impact of arbitrary code execution bugs.
  */
@@ -2705,25 +2778,20 @@ static void setup_sandbox(struct lo_data *lo, struct fuse_session *se,
     setup_namespaces(lo, se);
     setup_mounts(lo->source);
     setup_seccomp(enable_syslog);
+    setup_capabilities();
 }
 
-/* Raise the maximum number of open file descriptors */
-static void setup_nofile_rlimit(void)
+/* Set the maximum number of open file descriptors */
+static void setup_nofile_rlimit(unsigned long rlimit_nofile)
 {
-    const rlim_t max_fds = 1000000;
-    struct rlimit rlim;
+    struct rlimit rlim = {
+        .rlim_cur = rlimit_nofile,
+        .rlim_max = rlimit_nofile,
+    };
 
-    if (getrlimit(RLIMIT_NOFILE, &rlim) < 0) {
-        fuse_log(FUSE_LOG_ERR, "getrlimit(RLIMIT_NOFILE): %m\n");
-        exit(1);
-    }
-
-    if (rlim.rlim_cur >= max_fds) {
+    if (rlimit_nofile == 0) {
         return; /* nothing to do */
     }
-
-    rlim.rlim_cur = max_fds;
-    rlim.rlim_max = max_fds;
 
     if (setrlimit(RLIMIT_NOFILE, &rlim) < 0) {
         /* Ignore SELinux denials */
@@ -2806,7 +2874,7 @@ static void setup_root(struct lo_data *lo, struct lo_inode *root)
         exit(1);
     }
 
-    root->is_symlink = false;
+    root->filetype = S_IFDIR;
     root->fd = fd;
     root->key.ino = stat.st_ino;
     root->key.dev = stat.st_dev;
@@ -2977,7 +3045,7 @@ int main(int argc, char *argv[])
 
     fuse_daemonize(opts.foreground);
 
-    setup_nofile_rlimit();
+    setup_nofile_rlimit(opts.rlimit_nofile);
 
     /* Must be before sandbox since it wants /proc */
     setup_capng();

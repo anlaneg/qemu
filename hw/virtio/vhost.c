@@ -296,11 +296,18 @@ static int vhost_dev_has_iommu(struct vhost_dev *dev)
 {
     VirtIODevice *vdev = dev->vdev;
 
-    return virtio_host_has_feature(vdev, VIRTIO_F_IOMMU_PLATFORM);
+    /*
+     * For vhost, VIRTIO_F_IOMMU_PLATFORM means the backend support
+     * incremental memory mapping API via IOTLB API. For platform that
+     * does not have IOMMU, there's no need to enable this feature
+     * which may cause unnecessary IOTLB miss/update trnasactions.
+     */
+    return vdev->dma_as != &address_space_memory &&
+           virtio_host_has_feature(vdev, VIRTIO_F_IOMMU_PLATFORM);
 }
 
 static void *vhost_memory_map(struct vhost_dev *dev, hwaddr addr,
-                              hwaddr *plen, int is_write)
+                              hwaddr *plen, bool is_write)
 {
     if (!vhost_dev_has_iommu(dev)) {
     	//无iommu时
@@ -776,6 +783,9 @@ static int vhost_dev_set_features(struct vhost_dev *dev,
     if (enable_log) {
         features |= 0x1ULL << VHOST_F_LOG_ALL;
     }
+    if (!vhost_dev_has_iommu(dev)) {
+        features &= ~(0x1ULL << VIRTIO_F_IOMMU_PLATFORM);
+    }
     r = dev->vhost_ops->vhost_set_features(dev, features);
     if (r < 0) {
         VHOST_OPS_DEBUG("vhost_set_features failed");
@@ -1028,21 +1038,21 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
 
     vq->desc_size = s = l = virtio_queue_get_desc_size(vdev, idx);
     vq->desc_phys = a;
-    vq->desc = vhost_memory_map(dev, a, &l, 0);
+    vq->desc = vhost_memory_map(dev, a, &l, false);
     if (!vq->desc || l != s) {
         r = -ENOMEM;
         goto fail_alloc_desc;
     }
     vq->avail_size = s = l = virtio_queue_get_avail_size(vdev, idx);
     vq->avail_phys = a = virtio_queue_get_avail_addr(vdev, idx);
-    vq->avail = vhost_memory_map(dev, a, &l, 0);
+    vq->avail = vhost_memory_map(dev, a, &l, false);
     if (!vq->avail || l != s) {
         r = -ENOMEM;
         goto fail_alloc_avail;
     }
     vq->used_size = s = l = virtio_queue_get_used_size(vdev, idx);
     vq->used_phys = a = virtio_queue_get_used_addr(vdev, idx);
-    vq->used = vhost_memory_map(dev, a, &l, 1);
+    vq->used = vhost_memory_map(dev, a, &l, true);
     if (!vq->used || l != s) {
         r = -ENOMEM;
         goto fail_alloc_used;
@@ -1526,7 +1536,7 @@ void vhost_dev_set_config_notifier(struct vhost_dev *hdev,
 
 void vhost_dev_free_inflight(struct vhost_inflight *inflight)
 {
-    if (inflight->addr) {
+    if (inflight && inflight->addr) {
         qemu_memfd_free(inflight->addr, inflight->size, inflight->fd);
         inflight->addr = NULL;
         inflight->fd = -1;

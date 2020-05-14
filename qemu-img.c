@@ -234,6 +234,53 @@ static bool qemu_img_object_print_help(const char *type, QemuOpts *opts)
     return true;
 }
 
+/*
+ * Is @optarg safe for accumulate_options()?
+ * It is when multiple of them can be joined together separated by ','.
+ * To make that work, @optarg must not start with ',' (or else a
+ * separating ',' preceding it gets escaped), and it must not end with
+ * an odd number of ',' (or else a separating ',' following it gets
+ * escaped), or be empty (or else a separating ',' preceding it can
+ * escape a separating ',' following it).
+ * 
+ */
+static bool is_valid_option_list(const char *optarg)
+{
+    size_t len = strlen(optarg);
+    size_t i;
+
+    if (!optarg[0] || optarg[0] == ',') {
+        return false;
+    }
+
+    for (i = len; i > 0 && optarg[i - 1] == ','; i--) {
+    }
+    if ((len - i) % 2) {
+        return false;
+    }
+
+    return true;
+}
+
+static int accumulate_options(char **options, char *optarg)
+{
+    char *new_options;
+
+    if (!is_valid_option_list(optarg)) {
+        error_report("Invalid option list: %s", optarg);
+        return -1;
+    }
+
+    if (!*options) {
+        *options = g_strdup(optarg);
+    } else {
+        new_options = g_strdup_printf("%s,%s", *options, optarg);
+        g_free(*options);
+        *options = new_options;
+    }
+    return 0;
+}
+
 static QemuOptsList qemu_source_opts = {
     .name = "source",
     .implied_opt_name = "file",
@@ -502,18 +549,8 @@ static int img_create(int argc, char **argv)
             fmt = optarg;//指明采用哪种格式img
             break;
         case 'o':
-            if (!is_valid_option_list(optarg)) {
-                error_report("Invalid option list: %s", optarg);
+            if (accumulate_options(&options, optarg) < 0) {
                 goto fail;
-            }
-            if (!options) {
-            	//如果之前没有设置过options,则设置
-                options = g_strdup(optarg);
-            } else {
-            	//如果已设置，则合并options
-                char *old_options = options;
-                options = g_strdup_printf("%s,%s", options, optarg);
-                g_free(old_options);
             }
             break;
         case 'q'://安静标记
@@ -677,9 +714,9 @@ static int collect_image_check(BlockDriverState *bs,
     check->leaks                    = result.leaks;
     check->has_leaks                = result.leaks != 0;
     check->corruptions_fixed        = result.corruptions_fixed;
-    check->has_corruptions_fixed    = result.corruptions != 0;
+    check->has_corruptions_fixed    = result.corruptions_fixed != 0;
     check->leaks_fixed              = result.leaks_fixed;
-    check->has_leaks_fixed          = result.leaks != 0;
+    check->has_leaks_fixed          = result.leaks_fixed != 0;
     check->image_end_offset         = result.image_end_offset;
     check->has_image_end_offset     = result.image_end_offset != 0;
     check->total_clusters           = result.bfi.total_clusters;
@@ -833,9 +870,12 @@ static int img_check(int argc, char **argv)
 
     if (check->corruptions_fixed || check->leaks_fixed) {
         int corruptions_fixed, leaks_fixed;
+        bool has_leaks_fixed, has_corruptions_fixed;
 
         leaks_fixed         = check->leaks_fixed;
+        has_leaks_fixed     = check->has_leaks_fixed;
         corruptions_fixed   = check->corruptions_fixed;
+        has_corruptions_fixed = check->has_corruptions_fixed;
 
         if (output_format == OFORMAT_HUMAN) {
             qprintf(quiet,
@@ -847,10 +887,14 @@ static int img_check(int argc, char **argv)
                     check->corruptions_fixed);
         }
 
+        qapi_free_ImageCheck(check);
+        check = g_new0(ImageCheck, 1);
         ret = collect_image_check(bs, check, filename, fmt, 0);
 
         check->leaks_fixed          = leaks_fixed;
+        check->has_leaks_fixed      = has_leaks_fixed;
         check->corruptions_fixed    = corruptions_fixed;
+        check->has_corruptions_fixed = has_corruptions_fixed;
     }
 
     if (!ret) {
@@ -912,9 +956,9 @@ static void run_block_job(BlockJob *job, Error **errp)
     do {
         float progress = 0.0f;
         aio_poll(aio_context, true);
-        if (job->job.progress_total) {
-            progress = (float)job->job.progress_current /
-                       job->job.progress_total * 100.f;
+        if (job->job.progress.total) {
+            progress = (float)job->job.progress.current /
+                       job->job.progress.total * 100.f;
         }
         qemu_progress_print(progress, 0);
     } while (!job_is_ready(&job->job) && !job_is_completed(&job->job));
@@ -1947,8 +1991,8 @@ retry:
         if (status == BLK_DATA && !copy_range) {
             ret = convert_co_read(s, sector_num, n, buf);
             if (ret < 0) {
-                error_report("error while reading sector %" PRId64
-                             ": %s", sector_num, strerror(-ret));
+                error_report("error while reading at byte %lld: %s",
+                             sector_num * BDRV_SECTOR_SIZE, strerror(-ret));
                 s->ret = ret;
             }
         } else if (!s->min_sparse && status == BLK_ZERO) {
@@ -1976,8 +2020,8 @@ retry:
                 ret = convert_co_write(s, sector_num, n, buf, status);
             }
             if (ret < 0) {
-                error_report("error while writing sector %" PRId64
-                             ": %s", sector_num, strerror(-ret));
+                error_report("error while writing at byte %lld: %s",
+                             sector_num * BDRV_SECTOR_SIZE, strerror(-ret));
                 s->ret = ret;
             }
         }
@@ -2150,16 +2194,8 @@ static int img_convert(int argc, char **argv)
             s.compressed = true;
             break;
         case 'o':
-            if (!is_valid_option_list(optarg)) {
-                error_report("Invalid option list: %s", optarg);
+            if (accumulate_options(&options, optarg) < 0) {
                 goto fail_getopt;
-            }
-            if (!options) {
-                options = g_strdup(optarg);
-            } else {
-                char *old_options = options;
-                options = g_strdup_printf("%s,%s", options, optarg);
-                g_free(old_options);
             }
             break;
         case 'l':
@@ -3889,7 +3925,7 @@ static int img_resize(int argc, char **argv)
      * resizing, so pass @exact=true.  It is of no use to report
      * success when the image has not actually been resized.
      */
-    ret = blk_truncate(blk, total_size, true, prealloc, &err);
+    ret = blk_truncate(blk, total_size, true, prealloc, 0, &err);
     if (!ret) {
         qprintf(quiet, "Image resized.\n");
     } else {
@@ -3976,17 +4012,9 @@ static int img_amend(int argc, char **argv)
             help();
             break;
         case 'o':
-            if (!is_valid_option_list(optarg)) {
-                error_report("Invalid option list: %s", optarg);
+            if (accumulate_options(&options, optarg) < 0) {
                 ret = -1;
                 goto out_no_progress;
-            }
-            if (!options) {
-                options = g_strdup(optarg);
-            } else {
-                char *old_options = options;
-                options = g_strdup_printf("%s,%s", options, optarg);
-                g_free(old_options);
             }
             break;
         case 'f':
@@ -4878,16 +4906,8 @@ static int img_measure(int argc, char **argv)
             out_fmt = optarg;
             break;
         case 'o':
-            if (!is_valid_option_list(optarg)) {
-                error_report("Invalid option list: %s", optarg);
+            if (accumulate_options(&options, optarg) < 0) {
                 goto out;
-            }
-            if (!options) {
-                options = g_strdup(optarg);
-            } else {
-                char *old_options = options;
-                options = g_strdup_printf("%s,%s", options, optarg);
-                g_free(old_options);
             }
             break;
         case 'l':
@@ -4962,10 +4982,8 @@ static int img_measure(int argc, char **argv)
         filename = argv[optind];
     }
 
-    if (!filename &&
-        (object_opts || image_opts || fmt || snapshot_name || sn_opts)) {
-        error_report("--object, --image-opts, -f, and -l "
-                     "require a filename argument.");
+    if (!filename && (image_opts || fmt || snapshot_name || sn_opts)) {
+        error_report("--image-opts, -f, and -l require a filename argument.");
         goto out;
     }
     if (filename && img_size != UINT64_MAX) {

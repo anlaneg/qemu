@@ -38,6 +38,7 @@ typedef struct BDRVBackupTopState {
     BlockCopyState *bcs;
     BdrvChild *target;
     bool active;
+    int64_t cluster_size;
 } BDRVBackupTopState;
 
 static coroutine_fn int backup_top_co_preadv(
@@ -57,8 +58,8 @@ static coroutine_fn int backup_top_cbw(BlockDriverState *bs, uint64_t offset,
         return 0;
     }
 
-    off = QEMU_ALIGN_DOWN(offset, s->bcs->cluster_size);
-    end = QEMU_ALIGN_UP(offset + bytes, s->bcs->cluster_size);
+    off = QEMU_ALIGN_DOWN(offset, s->cluster_size);
+    end = QEMU_ALIGN_UP(offset + bytes, s->cluster_size);
 
     return block_copy(s->bcs, off, end - off, NULL);
 }
@@ -147,8 +148,10 @@ static void backup_top_child_perm(BlockDriverState *bs, BdrvChild *c,
          *
          * Share write to target (child_file), to not interfere
          * with guest writes to its disk which may be in target backing chain.
+         * Can't resize during a backup block job because we check the size
+         * only upfront.
          */
-        *nshared = BLK_PERM_ALL;
+        *nshared = BLK_PERM_ALL & ~BLK_PERM_RESIZE;
         *nperm = BLK_PERM_WRITE;
     } else {
         /* Source child */
@@ -158,7 +161,7 @@ static void backup_top_child_perm(BlockDriverState *bs, BdrvChild *c,
         if (perm & BLK_PERM_WRITE) {
             *nperm = *nperm | BLK_PERM_CONSISTENT_READ;
         }
-        *nshared &= ~BLK_PERM_WRITE;
+        *nshared &= ~(BLK_PERM_WRITE | BLK_PERM_RESIZE);
     }
 }
 
@@ -191,11 +194,13 @@ BlockDriverState *bdrv_backup_top_append(BlockDriverState *source,
 {
     Error *local_err = NULL;
     BDRVBackupTopState *state;
-    BlockDriverState *top = bdrv_new_open_driver(&bdrv_backup_top_filter,
-                                                 filter_node_name,
-                                                 BDRV_O_RDWR, errp);
+    BlockDriverState *top;
     bool appended = false;
 
+    assert(source->total_sectors == target->total_sectors);
+
+    top = bdrv_new_open_driver(&bdrv_backup_top_filter, filter_node_name,
+                               BDRV_O_RDWR, errp);
     if (!top) {
         return NULL;
     }
@@ -238,6 +243,7 @@ BlockDriverState *bdrv_backup_top_append(BlockDriverState *source,
         goto fail;
     }
 
+    state->cluster_size = cluster_size;
     state->bcs = block_copy_state_new(top->backing, state->target,
                                       cluster_size, write_flags, &local_err);
     if (local_err) {

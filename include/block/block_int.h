@@ -57,6 +57,7 @@
 #define BLOCK_OPT_REFCOUNT_BITS     "refcount_bits"
 #define BLOCK_OPT_DATA_FILE         "data_file"
 #define BLOCK_OPT_DATA_FILE_RAW     "data_file_raw"
+#define BLOCK_OPT_COMPRESSION_TYPE  "compression_type"
 
 #define BLOCK_PROBE_BUF_SIZE        512
 
@@ -122,6 +123,7 @@ struct BlockDriver {
     int (*bdrv_reopen_prepare)(BDRVReopenState *reopen_state,
                                BlockReopenQueue *queue, Error **errp);
     void (*bdrv_reopen_commit)(BDRVReopenState *reopen_state);
+    void (*bdrv_reopen_commit_post)(BDRVReopenState *reopen_state);
     void (*bdrv_reopen_abort)(BDRVReopenState *reopen_state);
     void (*bdrv_join_options)(QDict *options, QDict *old_options);
 
@@ -134,7 +136,8 @@ struct BlockDriver {
     void (*bdrv_close)(BlockDriverState *bs);
     int coroutine_fn (*bdrv_co_create)(BlockdevCreateOptions *opts,
                                        Error **errp);
-    int coroutine_fn (*bdrv_co_create_opts)(const char *filename,
+    int coroutine_fn (*bdrv_co_create_opts)(BlockDriver *drv,
+                                            const char *filename,
                                             QemuOpts *opts,
                                             Error **errp);
     int (*bdrv_make_empty)(BlockDriverState *bs);
@@ -313,6 +316,10 @@ struct BlockDriver {
      */
     int coroutine_fn (*bdrv_co_flush)(BlockDriverState *bs);
 
+    /* Delete a created file. */
+    int coroutine_fn (*bdrv_co_delete_file)(BlockDriverState *bs,
+                                            Error **errp);
+
     /*
      * Flushes all data that was already written to the OS all the way down to
      * the disk (for example file-posix.c calls fsync()).
@@ -349,7 +356,7 @@ struct BlockDriver {
      */
     int coroutine_fn (*bdrv_co_truncate)(BlockDriverState *bs, int64_t offset,
                                          bool exact, PreallocMode prealloc,
-                                         Error **errp);
+                                         BdrvRequestFlags flags, Error **errp);
 
     int64_t (*bdrv_getlength)(BlockDriverState *bs);
     bool has_variable_length;
@@ -443,15 +450,8 @@ struct BlockDriver {
     /*
      * Returns 1 if newly created images are guaranteed to contain only
      * zeros, 0 otherwise.
-     * Must return 0 if .bdrv_has_zero_init_truncate() returns 0.
      */
     int (*bdrv_has_zero_init)(BlockDriverState *bs);
-
-    /*
-     * Returns 1 if new areas added by growing the image with
-     * PREALLOC_MODE_OFF contain only zeros, 0 otherwise.
-     */
-    int (*bdrv_has_zero_init_truncate)(BlockDriverState *bs);
 
     /* Remove fd handlers, timers, and other event loop callbacks so the event
      * loop is no longer in use.  Called with no in-flight requests and in
@@ -841,6 +841,14 @@ struct BlockDriverState {
     /* Flags honored during pwrite_zeroes (so far: BDRV_REQ_FUA,
      * BDRV_REQ_MAY_UNMAP, BDRV_REQ_WRITE_UNCHANGED) */
     unsigned int supported_zero_flags;
+    /*
+     * Flags honoured during truncate (so far: BDRV_REQ_ZERO_WRITE).
+     *
+     * If BDRV_REQ_ZERO_WRITE is given, the truncate operation must make sure
+     * that any added space reads as all zeros. If this can't be guaranteed,
+     * the operation must fail.
+     */
+    unsigned int supported_truncate_flags;
 
     /* the following member gives a name to every node on the bs graph. */
     char node_name[32];
@@ -1215,8 +1223,6 @@ BlockJob *backup_job_create(const char *job_id, BlockDriverState *bs,
                             BlockCompletionFunc *cb, void *opaque,
                             JobTxn *txn, Error **errp);
 
-void hmp_drive_add_node(Monitor *mon, const char *optstr);
-
 BdrvChild *bdrv_root_attach_child(BlockDriverState *child_bs,
                                   const char *child_name,
                                   const BdrvChildRole *child_role,
@@ -1224,6 +1230,9 @@ BdrvChild *bdrv_root_attach_child(BlockDriverState *child_bs,
                                   uint64_t perm, uint64_t shared_perm,
                                   void *opaque, Error **errp);
 void bdrv_root_unref_child(BdrvChild *child);
+
+void bdrv_get_cumulative_perm(BlockDriverState *bs, uint64_t *perm,
+                              uint64_t *shared_perm);
 
 /**
  * Sets a BdrvChild's permissions.  Avoid if the parent is a BDS; use
@@ -1320,5 +1329,19 @@ int coroutine_fn bdrv_co_copy_range_to(BdrvChild *src, uint64_t src_offset,
                                        BdrvRequestFlags write_flags);
 
 int refresh_total_sectors(BlockDriverState *bs, int64_t hint);
+
+void bdrv_set_monitor_owned(BlockDriverState *bs);
+BlockDriverState *bds_tree_init(QDict *bs_opts, Error **errp);
+
+/**
+ * Simple implementation of bdrv_co_create_opts for protocol drivers
+ * which only support creation via opening a file
+ * (usually existing raw storage device)
+ */
+int coroutine_fn bdrv_co_create_opts_simple(BlockDriver *drv,
+                                            const char *filename,
+                                            QemuOpts *opts,
+                                            Error **errp);
+extern QemuOptsList bdrv_create_opts_simple;
 
 #endif /* BLOCK_INT_H */

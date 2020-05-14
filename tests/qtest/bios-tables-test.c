@@ -426,7 +426,9 @@ static void test_acpi_asl(test_data *data)
 
         fprintf(stderr,
                 "acpi-test: Warning! %.4s binary file mismatch. "
-                "Actual [aml:%s], Expected [aml:%s].\n",
+                "Actual [aml:%s], Expected [aml:%s].\n"
+                "See source file tests/qtest/bios-tables-test.c "
+                "for instructions on how to update expected files.\n",
                 exp_sdt->aml, sdt->aml_file, exp_sdt->aml_file);
 
         all_tables_match = all_tables_match &&
@@ -461,21 +463,20 @@ static void test_acpi_asl(test_data *data)
                         "Actual [asl:%s, aml:%s], Expected [asl:%s, aml:%s].\n",
                         exp_sdt->aml, sdt->asl_file, sdt->aml_file,
                         exp_sdt->asl_file, exp_sdt->aml_file);
+                fflush(stderr);
                 if (getenv("V")) {
-                    const char *diff_cmd = getenv("DIFF");
-                    if (diff_cmd) {
-                        int ret G_GNUC_UNUSED;
-                        char *diff = g_strdup_printf("%s %s %s", diff_cmd,
-                            exp_sdt->asl_file, sdt->asl_file);
-                        ret = system(diff) ;
-                        g_free(diff);
-                    } else {
-                        fprintf(stderr, "acpi-test: Warning. not showing "
-                            "difference since no diff utility is specified. "
-                            "Set 'DIFF' environment variable to a preferred "
-                            "diff utility and run 'make V=1 check' again to "
-                            "see ASL difference.");
-                    }
+                    const char *diff_env = getenv("DIFF");
+                    const char *diff_cmd = diff_env ? diff_env : "diff -u";
+                    char *diff = g_strdup_printf("%s %s %s", diff_cmd,
+                                                 exp_sdt->asl_file, sdt->asl_file);
+                    int out = dup(STDOUT_FILENO);
+                    int ret G_GNUC_UNUSED;
+
+                    dup2(STDERR_FILENO, STDOUT_FILENO);
+                    ret = system(diff) ;
+                    dup2(out, STDOUT_FILENO);
+                    close(out);
+                    g_free(diff);
                 }
             }
         }
@@ -926,12 +927,17 @@ static void test_acpi_virt_tcg_memhp(void)
     };
 
     data.variant = ".memhp";
-    test_acpi_one(" -cpu cortex-a57"
+    test_acpi_one(" -machine nvdimm=on"
+                  " -cpu cortex-a57"
                   " -m 256M,slots=3,maxmem=1G"
                   " -object memory-backend-ram,id=ram0,size=128M"
                   " -object memory-backend-ram,id=ram1,size=128M"
                   " -numa node,memdev=ram0 -numa node,memdev=ram1"
-                  " -numa dist,src=0,dst=1,val=21",
+                  " -numa dist,src=0,dst=1,val=21"
+                  " -object memory-backend-ram,id=ram2,size=128M"
+                  " -object memory-backend-ram,id=nvm0,size=128M"
+                  " -device pc-dimm,id=dimm0,memdev=ram2,node=0"
+                  " -device nvdimm,id=dimm1,memdev=nvm0,node=1",
                   &data);
 
     free_test_data(&data);

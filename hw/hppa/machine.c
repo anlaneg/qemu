@@ -13,7 +13,6 @@
 #include "sysemu/reset.h"
 #include "sysemu/sysemu.h"
 #include "hw/rtc/mc146818rtc.h"
-#include "hw/ide.h"
 #include "hw/timer/i8254.h"
 #include "hw/char/serial.h"
 #include "hw/net/lasi_82596.h"
@@ -22,6 +21,7 @@
 #include "qapi/error.h"
 #include "net/net.h"
 #include "qemu/log.h"
+#include "net/net.h"
 
 #define MAX_IDE_BUS 2
 
@@ -71,13 +71,10 @@ static void machine_hppa_init(MachineState *machine)
     uint64_t kernel_entry = 0, kernel_low, kernel_high;
     MemoryRegion *addr_space = get_system_memory();
     MemoryRegion *rom_region;
-    MemoryRegion *ram_region;
     MemoryRegion *cpu_region;
     long i;
     unsigned int smp_cpus = machine->smp.cpus;
     SysBusDevice *s;
-
-    ram_size = machine->ram_size;
 
     /* Create CPUs.  */
     for (i = 0; i < smp_cpus; i++) {
@@ -97,10 +94,8 @@ static void machine_hppa_init(MachineState *machine)
         error_report("RAM size is currently restricted to 3GB");
         exit(EXIT_FAILURE);
     }
-    ram_region = g_new(MemoryRegion, 1);
-    memory_region_allocate_system_memory(ram_region, OBJECT(machine),
-                                         "ram", ram_size);
-    memory_region_add_subregion_overlap(addr_space, 0, ram_region, -1);
+    memory_region_add_subregion_overlap(addr_space, 0, machine->ram, -1);
+
 
     /* Init Lasi chip */
     lasi_init(addr_space);
@@ -295,9 +290,10 @@ static void machine_hppa_machine_init(MachineClass *mc)
     mc->block_default_type = IF_SCSI;
     mc->max_cpus = HPPA_MAX_CPUS;
     mc->default_cpus = 1;
-    mc->is_default = 1;
+    mc->is_default = true;
     mc->default_ram_size = 512 * MiB;
     mc->default_boot_order = "cd";
+    mc->default_ram_id = "ram";
 }
 
 DEFINE_MACHINE("hppa", machine_hppa_machine_init)

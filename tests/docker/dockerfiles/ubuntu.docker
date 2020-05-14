@@ -58,6 +58,7 @@ ENV PACKAGES flex bison \
     libvdeplug-dev \
     libvte-2.91-dev \
     libxen-dev \
+    libzstd-dev \
     make \
     python3-yaml \
     python3-sphinx \
@@ -67,4 +68,4 @@ ENV PACKAGES flex bison \
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get -y install $PACKAGES
 RUN dpkg -l $PACKAGES | sort > /packages.txt
-ENV FEATURES clang pyyaml sdl2
+ENV FEATURES clang pyyaml sdl2 docs

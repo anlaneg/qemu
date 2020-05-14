@@ -22,11 +22,6 @@
 #include "internals.h"
 #include "qemu/log.h"
 
-static inline void set_feature(uint64_t *features, int feature)
-{
-    *features |= 1ULL << feature;
-}
-
 static int read_sys_reg32(int fd, uint32_t *pret, uint64_t id)
 {
     struct kvm_one_reg idreg = { .id = id, .addr = (uintptr_t)pret };
@@ -146,19 +141,14 @@ bool kvm_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
      * timers; this in turn implies most of the other feature
      * bits, but a few must be tested.
      */
-    set_feature(&features, ARM_FEATURE_V7VE);
-    set_feature(&features, ARM_FEATURE_VFP3);
-    set_feature(&features, ARM_FEATURE_GENERIC_TIMER);
+    features |= 1ULL << ARM_FEATURE_V7VE;
+    features |= 1ULL << ARM_FEATURE_GENERIC_TIMER;
 
     if (extract32(id_pfr0, 12, 4) == 1) {
-        set_feature(&features, ARM_FEATURE_THUMB2EE);
+        features |= 1ULL << ARM_FEATURE_THUMB2EE;
     }
     if (extract32(ahcf->isar.mvfr1, 12, 4) == 1) {
-        set_feature(&features, ARM_FEATURE_NEON);
-    }
-    if (extract32(ahcf->isar.mvfr1, 28, 4) == 1) {
-        /* FMAC support implies VFPv4 */
-        set_feature(&features, ARM_FEATURE_VFP4);
+        features |= 1ULL << ARM_FEATURE_NEON;
     }
 
     ahcf->features = features;
@@ -414,15 +404,20 @@ int kvm_arch_put_registers(CPUState *cs, int level)
         return ret;
     }
 
-    ret = kvm_put_vcpu_events(cpu);
-    if (ret) {
-        return ret;
-    }
-
     write_cpustate_to_list(cpu, true);
 
     if (!write_list_to_kvmstate(cpu, level)) {
         return EINVAL;
+    }
+
+    /*
+     * Setting VCPU events should be triggered after syncing the registers
+     * to avoid overwriting potential changes made by KVM upon calling
+     * KVM_SET_VCPU_EVENTS ioctl
+     */
+    ret = kvm_put_vcpu_events(cpu);
+    if (ret) {
+        return ret;
     }
 
     kvm_arm_sync_mpstate_to_kvm(cpu);

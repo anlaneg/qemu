@@ -238,16 +238,16 @@ static bool opb_read(PnvLpcController *lpc, uint32_t addr, uint8_t *data,
                      int sz)
 {
     /* XXX Handle access size limits and FW read caching here */
-    return !address_space_rw(&lpc->opb_as, addr, MEMTXATTRS_UNSPECIFIED,
-                             data, sz, false);
+    return !address_space_read(&lpc->opb_as, addr, MEMTXATTRS_UNSPECIFIED,
+                               data, sz);
 }
 
 static bool opb_write(PnvLpcController *lpc, uint32_t addr, uint8_t *data,
                       int sz)
 {
     /* XXX Handle access size limits here */
-    return !address_space_rw(&lpc->opb_as, addr, MEMTXATTRS_UNSPECIFIED,
-                             data, sz, true);
+    return !address_space_write(&lpc->opb_as, addr, MEMTXATTRS_UNSPECIFIED,
+                                data, sz);
 }
 
 #define ECCB_CTL_READ           PPC_BIT(15)
@@ -829,7 +829,7 @@ ISABus *pnv_lpc_isa_create(PnvLpcController *lpc, bool use_cpld, Error **errp)
     bool hostboot_mode = !!pnv->fw_load_addr;
 
     /* let isa_bus_new() create its own bridge on SysBus otherwise
-     * devices speficied on the command line won't find the bus and
+     * devices specified on the command line won't find the bus and
      * will fail to create.
      */
     isa_bus = isa_bus_new(NULL, &lpc->isa_mem, &lpc->isa_io, &local_err);

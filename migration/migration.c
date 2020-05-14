@@ -78,6 +78,7 @@
 /*0: means nocompress, 1: best speed, ... 9: best compress ratio */
 #define DEFAULT_MIGRATE_COMPRESS_LEVEL 1
 /* Define default autoconverge cpu throttle migration parameters */
+#define DEFAULT_MIGRATE_THROTTLE_TRIGGER_THRESHOLD 50
 #define DEFAULT_MIGRATE_CPU_THROTTLE_INITIAL 20
 #define DEFAULT_MIGRATE_CPU_THROTTLE_INCREMENT 10
 #define DEFAULT_MIGRATE_MAX_CPU_THROTTLE 99
@@ -88,6 +89,11 @@
 /* The delay time (in ms) between two COLO checkpoints */
 #define DEFAULT_MIGRATE_X_CHECKPOINT_DELAY (200 * 100)
 #define DEFAULT_MIGRATE_MULTIFD_CHANNELS 2
+#define DEFAULT_MIGRATE_MULTIFD_COMPRESSION MULTIFD_COMPRESSION_NONE
+/* 0: means nocompress, 1: best speed, ... 9: best compress ratio */
+#define DEFAULT_MIGRATE_MULTIFD_ZLIB_LEVEL 1
+/* 0: means nocompress, 1: best speed, ... 20: best compress ratio */
+#define DEFAULT_MIGRATE_MULTIFD_ZSTD_LEVEL 1
 
 /* Background transfer rate for postcopy, 0 means unlimited, note
  * that page requests can still exceed this limit.
@@ -484,11 +490,6 @@ static void process_incoming_migration_co(void *opaque)
             goto fail;
         }
 
-        if (colo_init_ram_cache() < 0) {
-            error_report("Init ram cache failed");
-            goto fail;
-        }
-
         qemu_thread_create(&mis->colo_incoming_thread, "COLO incoming",
              colo_process_incoming_thread, mis, QEMU_THREAD_JOINABLE);
         mis->have_colo_incoming_thread = true;
@@ -778,16 +779,21 @@ MigrationParameters *qmp_query_migrate_parameters(Error **errp)
     params->compress_wait_thread = s->parameters.compress_wait_thread;
     params->has_decompress_threads = true;
     params->decompress_threads = s->parameters.decompress_threads;
+    params->has_throttle_trigger_threshold = true;
+    params->throttle_trigger_threshold = s->parameters.throttle_trigger_threshold;
     params->has_cpu_throttle_initial = true;
     params->cpu_throttle_initial = s->parameters.cpu_throttle_initial;
     params->has_cpu_throttle_increment = true;
     params->cpu_throttle_increment = s->parameters.cpu_throttle_increment;
+    params->has_cpu_throttle_tailslow = true;
+    params->cpu_throttle_tailslow = s->parameters.cpu_throttle_tailslow;
     params->has_tls_creds = true;
     params->tls_creds = g_strdup(s->parameters.tls_creds);
     params->has_tls_hostname = true;
     params->tls_hostname = g_strdup(s->parameters.tls_hostname);
     params->has_tls_authz = true;
-    params->tls_authz = g_strdup(s->parameters.tls_authz);
+    params->tls_authz = g_strdup(s->parameters.tls_authz ?
+                                 s->parameters.tls_authz : "");
     params->has_max_bandwidth = true;
     params->max_bandwidth = s->parameters.max_bandwidth;
     params->has_downtime_limit = true;
@@ -798,6 +804,12 @@ MigrationParameters *qmp_query_migrate_parameters(Error **errp)
     params->block_incremental = s->parameters.block_incremental;
     params->has_multifd_channels = true;
     params->multifd_channels = s->parameters.multifd_channels;
+    params->has_multifd_compression = true;
+    params->multifd_compression = s->parameters.multifd_compression;
+    params->has_multifd_zlib_level = true;
+    params->multifd_zlib_level = s->parameters.multifd_zlib_level;
+    params->has_multifd_zstd_level = true;
+    params->multifd_zstd_level = s->parameters.multifd_zstd_level;
     params->has_xbzrle_cache_size = true;
     params->xbzrle_cache_size = s->parameters.xbzrle_cache_size;
     params->has_max_postcopy_bandwidth = true;
@@ -845,6 +857,7 @@ bool migration_is_setup_or_active(int state)
     case MIGRATION_STATUS_PRE_SWITCHOVER:
     case MIGRATION_STATUS_DEVICE:
     case MIGRATION_STATUS_WAIT_UNPLUG:
+    case MIGRATION_STATUS_COLO:
         return true;
 
     default:
@@ -865,7 +878,6 @@ bool migration_is_running(int state)
     case MIGRATION_STATUS_DEVICE:
     case MIGRATION_STATUS_WAIT_UNPLUG:
     case MIGRATION_STATUS_CANCELLING:
-    case MIGRATION_STATUS_COLO:
         return true;
 
     default:
@@ -920,6 +932,7 @@ static void populate_ram_info(MigrationInfo *info, MigrationState *s)
         info->xbzrle_cache->pages = xbzrle_counters.pages;
         info->xbzrle_cache->cache_miss = xbzrle_counters.cache_miss;
         info->xbzrle_cache->cache_miss_rate = xbzrle_counters.cache_miss_rate;
+        info->xbzrle_cache->encoding_rate = xbzrle_counters.encoding_rate;
         info->xbzrle_cache->overflow = xbzrle_counters.overflow;
     }
 
@@ -1164,6 +1177,15 @@ static bool migrate_params_check(MigrationParameters *params, Error **errp)
         return false;
     }
 
+    if (params->has_throttle_trigger_threshold &&
+        (params->throttle_trigger_threshold < 1 ||
+         params->throttle_trigger_threshold > 100)) {
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE,
+                   "throttle_trigger_threshold",
+                   "an integer in the range of 1 to 100");
+        return false;
+    }
+
     if (params->has_cpu_throttle_initial &&
         (params->cpu_throttle_initial < 1 ||
          params->cpu_throttle_initial > 99)) {
@@ -1183,16 +1205,19 @@ static bool migrate_params_check(MigrationParameters *params, Error **errp)
     }
 
     if (params->has_max_bandwidth && (params->max_bandwidth > SIZE_MAX)) {
-        error_setg(errp, "Parameter 'max_bandwidth' expects an integer in the"
-                         " range of 0 to %zu bytes/second", SIZE_MAX);
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE,
+                   "max_bandwidth",
+                   "an integer in the range of 0 to "stringify(SIZE_MAX)
+                   " bytes/second");
         return false;
     }
 
     if (params->has_downtime_limit &&
         (params->downtime_limit > MAX_MIGRATE_DOWNTIME)) {
-        error_setg(errp, "Parameter 'downtime_limit' expects an integer in "
-                         "the range of 0 to %d milliseconds",
-                         MAX_MIGRATE_DOWNTIME);
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE,
+                   "downtime_limit",
+                   "an integer in the range of 0 to "
+                    stringify(MAX_MIGRATE_DOWNTIME)" ms");
         return false;
     }
 
@@ -1205,13 +1230,27 @@ static bool migrate_params_check(MigrationParameters *params, Error **errp)
         return false;
     }
 
+    if (params->has_multifd_zlib_level &&
+        (params->multifd_zlib_level > 9)) {
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "multifd_zlib_level",
+                   "is invalid, it should be in the range of 0 to 9");
+        return false;
+    }
+
+    if (params->has_multifd_zstd_level &&
+        (params->multifd_zstd_level > 20)) {
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "multifd_zstd_level",
+                   "is invalid, it should be in the range of 0 to 20");
+        return false;
+    }
+
     if (params->has_xbzrle_cache_size &&
         (params->xbzrle_cache_size < qemu_target_page_size() ||
          !is_power_of_2(params->xbzrle_cache_size))) {
         error_setg(errp, QERR_INVALID_PARAMETER_VALUE,
                    "xbzrle_cache_size",
                    "is invalid, it should be bigger than target page size"
-                   " and a power of two");
+                   " and a power of 2");
         return false;
     }
 
@@ -1279,12 +1318,20 @@ static void migrate_params_test_apply(MigrateSetParameters *params,
         dest->decompress_threads = params->decompress_threads;
     }
 
+    if (params->has_throttle_trigger_threshold) {
+        dest->throttle_trigger_threshold = params->throttle_trigger_threshold;
+    }
+
     if (params->has_cpu_throttle_initial) {
         dest->cpu_throttle_initial = params->cpu_throttle_initial;
     }
 
     if (params->has_cpu_throttle_increment) {
         dest->cpu_throttle_increment = params->cpu_throttle_increment;
+    }
+
+    if (params->has_cpu_throttle_tailslow) {
+        dest->cpu_throttle_tailslow = params->cpu_throttle_tailslow;
     }
 
     if (params->has_tls_creds) {
@@ -1314,6 +1361,9 @@ static void migrate_params_test_apply(MigrateSetParameters *params,
     }
     if (params->has_multifd_channels) {
         dest->multifd_channels = params->multifd_channels;
+    }
+    if (params->has_multifd_compression) {
+        dest->multifd_compression = params->multifd_compression;
     }
     if (params->has_xbzrle_cache_size) {
         dest->xbzrle_cache_size = params->xbzrle_cache_size;
@@ -1360,12 +1410,20 @@ static void migrate_params_apply(MigrateSetParameters *params, Error **errp)
         s->parameters.decompress_threads = params->decompress_threads;
     }
 
+    if (params->has_throttle_trigger_threshold) {
+        s->parameters.throttle_trigger_threshold = params->throttle_trigger_threshold;
+    }
+
     if (params->has_cpu_throttle_initial) {
         s->parameters.cpu_throttle_initial = params->cpu_throttle_initial;
     }
 
     if (params->has_cpu_throttle_increment) {
         s->parameters.cpu_throttle_increment = params->cpu_throttle_increment;
+    }
+
+    if (params->has_cpu_throttle_tailslow) {
+        s->parameters.cpu_throttle_tailslow = params->cpu_throttle_tailslow;
     }
 
     if (params->has_tls_creds) {
@@ -1410,6 +1468,9 @@ static void migrate_params_apply(MigrateSetParameters *params, Error **errp)
     }
     if (params->has_multifd_channels) {
         s->parameters.multifd_channels = params->multifd_channels;
+    }
+    if (params->has_multifd_compression) {
+        s->parameters.multifd_compression = params->multifd_compression;
     }
     if (params->has_xbzrle_cache_size) {
         s->parameters.xbzrle_cache_size = params->xbzrle_cache_size;
@@ -1606,11 +1667,10 @@ static void migrate_fd_cleanup_bh(void *opaque)
 
 void migrate_set_error(MigrationState *s, const Error *error)
 {
-    qemu_mutex_lock(&s->error_mutex);
+    QEMU_LOCK_GUARD(&s->error_mutex);
     if (!s->error) {
         s->error = error_copy(error);
     }
-    qemu_mutex_unlock(&s->error_mutex);
 }
 
 void migrate_fd_error(MigrationState *s, const Error *error)
@@ -2061,9 +2121,10 @@ void qmp_migrate_set_speed(int64_t value, Error **errp)
 void qmp_migrate_set_downtime(double value, Error **errp)
 {
     if (value < 0 || value > MAX_MIGRATE_DOWNTIME_SECONDS) {
-        error_setg(errp, "Parameter 'downtime_limit' expects an integer in "
-                         "the range of 0 to %d seconds",
-                         MAX_MIGRATE_DOWNTIME_SECONDS);
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE,
+                   "downtime_limit",
+                   "an integer in the range of 0 to "
+                    stringify(MAX_MIGRATE_DOWNTIME_SECONDS)" seconds");
         return;
     }
 
@@ -2234,6 +2295,33 @@ int migrate_multifd_channels(void)
     s = migrate_get_current();
 
     return s->parameters.multifd_channels;
+}
+
+MultiFDCompression migrate_multifd_compression(void)
+{
+    MigrationState *s;
+
+    s = migrate_get_current();
+
+    return s->parameters.multifd_compression;
+}
+
+int migrate_multifd_zlib_level(void)
+{
+    MigrationState *s;
+
+    s = migrate_get_current();
+
+    return s->parameters.multifd_zlib_level;
+}
+
+int migrate_multifd_zstd_level(void)
+{
+    MigrationState *s;
+
+    s = migrate_get_current();
+
+    return s->parameters.multifd_zstd_level;
 }
 
 int migrate_use_xbzrle(void)
@@ -2421,7 +2509,7 @@ retry:
         if (header_type >= MIG_RP_MSG_MAX ||
             header_type == MIG_RP_MSG_INVALID) {
             error_report("RP: Received invalid message 0x%04x length 0x%04x",
-                    header_type, header_len);
+                         header_type, header_len);
             mark_source_rp_bad(ms);
             goto out;
         }
@@ -2430,9 +2518,9 @@ retry:
             header_len != rp_cmd_args[header_type].len) ||
             header_len > sizeof(buf)) {
             error_report("RP: Received '%s' message (0x%04x) with"
-                    "incorrect length %d expecting %zu",
-                    rp_cmd_args[header_type].name, header_type, header_len,
-                    (size_t)rp_cmd_args[header_type].len);
+                         "incorrect length %d expecting %zu",
+                         rp_cmd_args[header_type].name, header_type, header_len,
+                         (size_t)rp_cmd_args[header_type].len);
             mark_source_rp_bad(ms);
             goto out;
         }
@@ -2487,7 +2575,7 @@ retry:
             }
             if (header_len != expected_len) {
                 error_report("RP: Req_Page_id with length %d expecting %zd",
-                        header_len, expected_len);
+                             header_len, expected_len);
                 mark_source_rp_bad(ms);
                 goto out;
             }
@@ -3404,7 +3492,12 @@ void migrate_fd_connect(MigrationState *s, Error *error_in)
     bool resume = s->state == MIGRATION_STATUS_POSTCOPY_PAUSED;
 
     s->expected_downtime = s->parameters.downtime_limit;
-    s->cleanup_bh = qemu_bh_new(migrate_fd_cleanup_bh, s);
+    if (resume) {
+        assert(s->cleanup_bh);
+    } else {
+        assert(!s->cleanup_bh);
+        s->cleanup_bh = qemu_bh_new(migrate_fd_cleanup_bh, s);
+    }
     if (error_in) {
         migrate_fd_error(s, error_in);
         migrate_fd_cleanup(s);
@@ -3506,12 +3599,17 @@ static Property migration_properties[] = {
     DEFINE_PROP_UINT8("x-decompress-threads", MigrationState,
                       parameters.decompress_threads,
                       DEFAULT_MIGRATE_DECOMPRESS_THREAD_COUNT),
+    DEFINE_PROP_UINT8("x-throttle-trigger-threshold", MigrationState,
+                      parameters.throttle_trigger_threshold,
+                      DEFAULT_MIGRATE_THROTTLE_TRIGGER_THRESHOLD),
     DEFINE_PROP_UINT8("x-cpu-throttle-initial", MigrationState,
                       parameters.cpu_throttle_initial,
                       DEFAULT_MIGRATE_CPU_THROTTLE_INITIAL),
     DEFINE_PROP_UINT8("x-cpu-throttle-increment", MigrationState,
                       parameters.cpu_throttle_increment,
                       DEFAULT_MIGRATE_CPU_THROTTLE_INCREMENT),
+    DEFINE_PROP_BOOL("x-cpu-throttle-tailslow", MigrationState,
+                      parameters.cpu_throttle_tailslow, false),
     DEFINE_PROP_SIZE("x-max-bandwidth", MigrationState,
                       parameters.max_bandwidth, MAX_THROTTLE),
     DEFINE_PROP_UINT64("x-downtime-limit", MigrationState,
@@ -3523,6 +3621,15 @@ static Property migration_properties[] = {
     DEFINE_PROP_UINT8("multifd-channels", MigrationState,
                       parameters.multifd_channels,
                       DEFAULT_MIGRATE_MULTIFD_CHANNELS),
+    DEFINE_PROP_MULTIFD_COMPRESSION("multifd-compression", MigrationState,
+                      parameters.multifd_compression,
+                      DEFAULT_MIGRATE_MULTIFD_COMPRESSION),
+    DEFINE_PROP_UINT8("multifd-zlib-level", MigrationState,
+                      parameters.multifd_zlib_level,
+                      DEFAULT_MIGRATE_MULTIFD_ZLIB_LEVEL),
+    DEFINE_PROP_UINT8("multifd-zstd-level", MigrationState,
+                      parameters.multifd_zstd_level,
+                      DEFAULT_MIGRATE_MULTIFD_ZSTD_LEVEL),
     DEFINE_PROP_SIZE("xbzrle-cache-size", MigrationState,
                       parameters.xbzrle_cache_size,
                       DEFAULT_MIGRATE_XBZRLE_CACHE_SIZE),
@@ -3606,13 +3713,18 @@ static void migration_instance_init(Object *obj)
     params->has_compress_level = true;
     params->has_compress_threads = true;
     params->has_decompress_threads = true;
+    params->has_throttle_trigger_threshold = true;
     params->has_cpu_throttle_initial = true;
     params->has_cpu_throttle_increment = true;
+    params->has_cpu_throttle_tailslow = true;
     params->has_max_bandwidth = true;
     params->has_downtime_limit = true;
     params->has_x_checkpoint_delay = true;
     params->has_block_incremental = true;
     params->has_multifd_channels = true;
+    params->has_multifd_compression = true;
+    params->has_multifd_zlib_level = true;
+    params->has_multifd_zstd_level = true;
     params->has_xbzrle_cache_size = true;
     params->has_max_postcopy_bandwidth = true;
     params->has_max_cpu_throttle = true;

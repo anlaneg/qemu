@@ -783,6 +783,12 @@ static inline ARMMMUIdx core_to_arm_mmu_idx(CPUARMState *env, int mmu_idx)
     }
 }
 
+static inline ARMMMUIdx core_to_aa64_mmu_idx(int mmu_idx)
+{
+    /* AArch64 is always a-profile. */
+    return mmu_idx | ARM_MMU_IDX_A;
+}
+
 int arm_mmu_idx_to_el(ARMMMUIdx mmu_idx);
 
 /*
@@ -972,11 +978,6 @@ static inline int arm_num_ctx_cmps(ARMCPU *cpu)
         return FIELD_EX32(cpu->isar.dbgdidr, DBGDIDR, CTX_CMPS) + 1;
     }
 }
-
-/* Note make_memop_idx reserves 4 bits for mmu_idx, and MO_BSWAP is bit 3.
- * Thus a TCGMemOpIdx, without any MO_ALIGN bits, fits in 8 bits.
- */
-#define MEMOPIDX_SHIFT  8
 
 /**
  * v7m_using_psp: Return true if using process stack pointer

@@ -14,13 +14,13 @@
  */
 
 #include "qemu/osdep.h"
+#include "block/qdict.h"
 #include "hw/qdev-core.h"
 #include "qapi/error.h"
 #include "qapi/qapi-commands-qdev.h"
 #include "qapi/qapi-commands-qom.h"
 #include "qapi/qmp/qdict.h"
 #include "qapi/qmp/qerror.h"
-#include "qapi/qobject-input-visitor.h"
 #include "qemu/cutils.h"
 #include "qom/object_interfaces.h"
 #include "qom/qom-qobject.h"
@@ -240,13 +240,12 @@ ObjectPropertyInfoList *qmp_qom_list_properties(const char *typename,
     return prop_list;
 }
 
-void qmp_object_add(const char *type, const char *id,
-                    bool has_props, QObject *props, Error **errp)
+void qmp_object_add(QDict *qdict, QObject **ret_data, Error **errp)
 {
+    QObject *props;
     QDict *pdict;
-    Visitor *v;
-    Object *obj;
 
+    props = qdict_get(qdict, "props");
     if (props) {
         pdict = qobject_to(QDict, props);
         if (!pdict) {
@@ -254,17 +253,17 @@ void qmp_object_add(const char *type, const char *id,
             return;
         }
         qobject_ref(pdict);
-    } else {
-        pdict = qdict_new();
+        qdict_del(qdict, "props");
+        qdict_join(qdict, pdict, false);
+        if (qdict_size(pdict) != 0) {
+            error_setg(errp, "Option in 'props' conflicts with top level");
+            qobject_unref(pdict);
+            return;
+        }
+        qobject_unref(pdict);
     }
 
-    v = qobject_input_visitor_new(QOBJECT(pdict));
-    obj = user_creatable_add_type(type, id, pdict, v, errp);
-    visit_free(v);
-    if (obj) {
-        object_unref(obj);
-    }
-    qobject_unref(pdict);
+    user_creatable_add_dict(qdict, false, errp);
 }
 
 void qmp_object_del(const char *id, Error **errp)

@@ -189,7 +189,6 @@ static void leon3_generic_hw_init(MachineState *machine)
     SPARCCPU *cpu;
     CPUSPARCState   *env;
     MemoryRegion *address_space_mem = get_system_memory();
-    MemoryRegion *ram = g_new(MemoryRegion, 1);
     MemoryRegion *prom = g_new(MemoryRegion, 1);
     int         ret;
     char       *filename;
@@ -251,13 +250,12 @@ static void leon3_generic_hw_init(MachineState *machine)
         exit(1);
     }
 
-    memory_region_allocate_system_memory(ram, NULL, "leon3.ram", ram_size);
-    memory_region_add_subregion(address_space_mem, LEON3_RAM_OFFSET, ram);
+    memory_region_add_subregion(address_space_mem, LEON3_RAM_OFFSET,
+                                machine->ram);
 
     /* Allocate BIOS */
     prom_size = 8 * MiB;
-    memory_region_init_ram(prom, NULL, "Leon3.bios", prom_size, &error_fatal);
-    memory_region_set_readonly(prom, true);
+    memory_region_init_rom(prom, NULL, "Leon3.bios", prom_size, &error_fatal);
     memory_region_add_subregion(address_space_mem, LEON3_PROM_OFFSET, prom);
 
     /* Load boot prom */
@@ -358,6 +356,7 @@ static void leon3_generic_machine_init(MachineClass *mc)
     mc->desc = "Leon-3 generic";
     mc->init = leon3_generic_hw_init;
     mc->default_cpu_type = SPARC_CPU_TYPE_NAME("LEON3");
+    mc->default_ram_id = "leon3.ram";
 }
 
 DEFINE_MACHINE("leon3_generic", leon3_generic_machine_init)

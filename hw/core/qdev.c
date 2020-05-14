@@ -37,6 +37,7 @@
 #include "hw/qdev-properties.h"
 #include "hw/boards.h"
 #include "hw/sysbus.h"
+#include "hw/qdev-clock.h"
 #include "migration/vmstate.h"
 #include "trace.h"
 
@@ -557,7 +558,7 @@ void qdev_connect_gpio_out_named(DeviceState *dev, const char *name, int n,
 
 qemu_irq qdev_get_gpio_out_connector(DeviceState *dev, const char *name, int n)
 {
-    char *propname = g_strdup_printf("%s[%d]",
+    g_autofree char *propname = g_strdup_printf("%s[%d]",
                                      name ? name : "unnamed-gpio-out", n);
 
     qemu_irq ret = (qemu_irq)object_property_get_link(OBJECT(dev), propname,
@@ -857,6 +858,7 @@ static void device_set_realized(Object *obj, bool value, Error **errp)
     DeviceClass *dc = DEVICE_GET_CLASS(dev);
     HotplugHandler *hotplug_ctrl;
     BusState *bus;
+    NamedClockList *ncl;
     Error *local_err = NULL;
     bool unattached_parent = false;
     static int unattached_count;
@@ -904,6 +906,13 @@ static void device_set_realized(Object *obj, bool value, Error **errp)
          */
         g_free(dev->canonical_path);
         dev->canonical_path = object_get_canonical_path(OBJECT(dev));
+        QLIST_FOREACH(ncl, &dev->clocks, node) {
+            if (ncl->alias) {
+                continue;
+            } else {
+                clock_setup_canonical_path(ncl->clock);
+            }
+        }
 
         if (qdev_get_vmsd(dev)) {
             if (vmstate_register_with_alias_id(VMSTATE_IF(dev),
@@ -1027,6 +1036,7 @@ static void device_initfn(Object *obj)
     dev->allow_unplug_during_migration = false;
 
     QLIST_INIT(&dev->gpios);
+    QLIST_INIT(&dev->clocks);
 }
 
 static void device_post_init(Object *obj)
@@ -1055,6 +1065,8 @@ static void device_finalize(Object *obj)
          * here
          */
     }
+
+    qdev_finalize_clocklist(dev);
 
     /* Only send event if the device had been completely realized */
     if (dev->pending_deleted_event) {

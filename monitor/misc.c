@@ -66,6 +66,7 @@
 #include "qemu/option.h"
 #include "qemu/thread.h"
 #include "block/qapi.h"
+#include "block/block-hmp-cmds.h"
 #include "qapi/qapi-commands-char.h"
 #include "qapi/qapi-commands-control.h"
 #include "qapi/qapi-commands-migration.h"
@@ -246,7 +247,7 @@ static void monitor_init_qmp_commands(void)
                          qmp_query_qmp_schema, QCO_ALLOW_PRECONFIG);
     qmp_register_command(&qmp_commands, "device_add", qmp_device_add,
                          QCO_NO_OPTIONS);
-    qmp_register_command(&qmp_commands, "netdev_add", qmp_netdev_add,
+    qmp_register_command(&qmp_commands, "object-add", qmp_object_add,
                          QCO_NO_OPTIONS);
 
     QTAILQ_INIT(&qmp_cap_negotiation_commands);
@@ -1472,7 +1473,7 @@ AddfdInfo *monitor_fdset_add_fd(int fd, bool has_fdset_id, int64_t fdset_id,
     MonFdsetFd *mon_fdset_fd;
     AddfdInfo *fdinfo;
 
-    qemu_mutex_lock(&mon_fdsets_lock);
+    QEMU_LOCK_GUARD(&mon_fdsets_lock);
     if (has_fdset_id) {
         QLIST_FOREACH(mon_fdset, &mon_fdsets, next) {
             /* Break if match found or match impossible due to ordering by ID */
@@ -1493,7 +1494,6 @@ AddfdInfo *monitor_fdset_add_fd(int fd, bool has_fdset_id, int64_t fdset_id,
             if (fdset_id < 0) {
                 error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "fdset-id",
                            "a non-negative value");
-                qemu_mutex_unlock(&mon_fdsets_lock);
                 return NULL;
             }
             /* Use specified fdset ID */
@@ -1544,7 +1544,6 @@ AddfdInfo *monitor_fdset_add_fd(int fd, bool has_fdset_id, int64_t fdset_id,
     fdinfo->fdset_id = mon_fdset->id;
     fdinfo->fd = mon_fdset_fd->fd;
 
-    qemu_mutex_unlock(&mon_fdsets_lock);
     return fdinfo;
 }
 
@@ -2034,13 +2033,11 @@ void netdev_del_completion(ReadLineState *rs, int nb_args, const char *str)
     count = qemu_find_net_clients_except(NULL, ncs, NET_CLIENT_DRIVER_NIC,
                                          MAX_QUEUE_NUM);
     for (i = 0; i < MIN(count, MAX_QUEUE_NUM); i++) {
-        QemuOpts *opts;
         const char *name = ncs[i]->name;
         if (strncmp(str, name, len)) {
             continue;
         }
-        opts = qemu_opts_find(qemu_find_opts_err("netdev", NULL), name);
-        if (opts) {
+        if (ncs[i]->is_netdev) {
             readline_add_completion(rs, name);
         }
     }

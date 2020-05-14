@@ -44,8 +44,10 @@ _supported_os Linux
 # Conversion between different compat versions can only really work
 # with refcount_bits=16;
 # we have explicit tests for data_file here, but the whole test does
-# not work with it
-_unsupported_imgopts 'refcount_bits=\([^1]\|.\([^6]\|$\)\)' data_file
+# not work with it;
+# we have explicit tests for various cluster sizes, the remaining tests
+# require the default 64k cluster
+_unsupported_imgopts 'refcount_bits=\([^1]\|.\([^6]\|$\)\)' data_file cluster_size
 
 echo
 echo "=== Testing version downgrade with zero expansion ==="
@@ -108,6 +110,41 @@ $QEMU_IMG amend -o "compat=1.1,lazy_refcounts=on,size=128M" "$TEST_IMG"
 $PYTHON qcow2.py "$TEST_IMG" dump-header
 $QEMU_IO -c "read -P 0x2a 42M 64k" "$TEST_IMG" | _filter_qemu_io
 _check_test_img
+
+echo
+echo "=== Testing resize with snapshots ==="
+echo
+_make_test_img -o "compat=0.10" 32M
+$QEMU_IO -c "write -P 0x2a 24M 64k" "$TEST_IMG" | _filter_qemu_io
+$QEMU_IMG snapshot -c foo "$TEST_IMG"
+$QEMU_IMG resize "$TEST_IMG" 64M &&
+    echo "unexpected pass"
+$PYTHON qcow2.py "$TEST_IMG" dump-header | grep '^\(version\|size\|nb_snap\)'
+
+$QEMU_IMG amend -o "compat=1.1,size=128M" "$TEST_IMG" ||
+    echo "unexpected fail"
+$PYTHON qcow2.py "$TEST_IMG" dump-header | grep '^\(version\|size\|nb_snap\)'
+
+$QEMU_IMG snapshot -c bar "$TEST_IMG"
+$QEMU_IMG resize --shrink "$TEST_IMG" 64M ||
+    echo "unexpected fail"
+$PYTHON qcow2.py "$TEST_IMG" dump-header | grep '^\(version\|size\|nb_snap\)'
+
+$QEMU_IMG amend -o "compat=0.10,size=32M" "$TEST_IMG" &&
+    echo "unexpected pass"
+$PYTHON qcow2.py "$TEST_IMG" dump-header | grep '^\(version\|size\|nb_snap\)'
+
+$QEMU_IMG snapshot -a bar "$TEST_IMG" ||
+    echo "unexpected fail"
+$PYTHON qcow2.py "$TEST_IMG" dump-header | grep '^\(version\|size\|nb_snap\)'
+
+$QEMU_IMG snapshot -d bar "$TEST_IMG"
+$QEMU_IMG amend -o "compat=0.10,size=32M" "$TEST_IMG" ||
+    echo "unexpected fail"
+$PYTHON qcow2.py "$TEST_IMG" dump-header | grep '^\(version\|size\|nb_snap\)'
+
+_check_test_img
+
 
 echo
 echo "=== Testing dirty lazy_refcounts=off ==="

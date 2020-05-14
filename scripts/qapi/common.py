@@ -14,7 +14,6 @@
 # See the COPYING file in the top-level directory.
 
 import re
-import string
 
 # ENUMName -> ENUM_NAME, EnumName1 -> ENUM_NAME1
 # ENUM_NAME -> ENUM_NAME, ENUM_NAME1 -> ENUM_NAME1, ENUM_Name2 -> ENUM_NAME2
@@ -45,10 +44,7 @@ def c_enum_const(type_name, const_name, prefix=None):
 
 
 #构造映射表，将‘.'对应到'_',将'-'对应到'_'
-if hasattr(str, 'maketrans'):
-    c_name_trans = str.maketrans('.-', '__')
-else:
-    c_name_trans = string.maketrans('.-', '__')
+c_name_trans = str.maketrans('.-', '__')
 
 
 # Map @name to a valid C identifier.

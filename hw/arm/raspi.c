@@ -8,7 +8,8 @@
  * Raspberry Pi 3 emulation Copyright (c) 2018 Zoltán Baldaszti
  * Upstream code cleanup (c) 2018 Pekka Enberg
  *
- * This code is licensed under the GNU GPLv2 and later.
+ * This work is licensed under the terms of the GNU GPL, version 2 or later.
+ * See the COPYING file in the top-level directory.
  */
 
 #include "qemu/osdep.h"
@@ -39,7 +40,6 @@ typedef struct RaspiMachineState {
     MachineState parent_obj;
     /*< public >*/
     BCM283XState soc;
-    MemoryRegion ram;
 } RaspiMachineState;
 
 typedef struct RaspiMachineClass {
@@ -277,16 +277,14 @@ static void raspi_machine_init(MachineState *machine)
         exit(1);
     }
 
-    /* Allocate and map RAM */
-    memory_region_allocate_system_memory(&s->ram, OBJECT(machine), "ram",
-                                         machine->ram_size);
     /* FIXME: Remove when we have custom CPU address space support */
-    memory_region_add_subregion_overlap(get_system_memory(), 0, &s->ram, 0);
+    memory_region_add_subregion_overlap(get_system_memory(), 0,
+                                        machine->ram, 0);
 
     /* Setup the SOC */
     object_initialize_child(OBJECT(machine), "soc", &s->soc, sizeof(s->soc),
                             board_soc_type(board_rev), &error_abort, NULL);
-    object_property_add_const_link(OBJECT(&s->soc), "ram", OBJECT(&s->ram),
+    object_property_add_const_link(OBJECT(&s->soc), "ram", OBJECT(machine->ram),
                                    &error_abort);
     object_property_set_int(OBJECT(&s->soc), board_rev, "board-rev",
                             &error_abort);
@@ -324,6 +322,7 @@ static void raspi_machine_class_init(ObjectClass *oc, void *data)
     mc->no_cdrom = 1;
     mc->default_cpus = mc->min_cpus = mc->max_cpus = cores_count(board_rev);
     mc->default_ram_size = board_ram_size(board_rev);
+    mc->default_ram_id = "ram";
     if (board_version(board_rev) == 2) {
         mc->ignore_memory_transaction_failures = true;
     }

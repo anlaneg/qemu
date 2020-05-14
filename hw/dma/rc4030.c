@@ -513,8 +513,8 @@ static IOMMUTLBEntry rc4030_dma_translate(IOMMUMemoryRegion *iommu, hwaddr addr,
     if (i < s->dma_tl_limit / sizeof(entry)) {
         entry_address = (s->dma_tl_base & 0x7fffffff) + i * sizeof(entry);
         if (address_space_read(ret.target_as, entry_address,
-                               MEMTXATTRS_UNSPECIFIED, (unsigned char *)&entry,
-                               sizeof(entry)) == MEMTX_OK) {
+                               MEMTXATTRS_UNSPECIFIED, &entry, sizeof(entry))
+                == MEMTX_OK) {
             ret.translated_addr = entry.frame & ~(DMA_PAGESIZE - 1);
             ret.perm = IOMMU_RW;
         }
@@ -590,7 +590,7 @@ static const VMStateDescription vmstate_rc4030 = {
 };
 
 static void rc4030_do_dma(void *opaque, int n, uint8_t *buf,
-                          int len, int is_write)
+                          int len, bool is_write)
 {
     rc4030State *s = opaque;
     hwaddr dma_addr;
@@ -630,13 +630,13 @@ struct rc4030DMAState {
 void rc4030_dma_read(void *dma, uint8_t *buf, int len)
 {
     rc4030_dma s = dma;
-    rc4030_do_dma(s->opaque, s->n, buf, len, 0);
+    rc4030_do_dma(s->opaque, s->n, buf, len, false);
 }
 
 void rc4030_dma_write(void *dma, uint8_t *buf, int len)
 {
     rc4030_dma s = dma;
-    rc4030_do_dma(s->opaque, s->n, buf, len, 1);
+    rc4030_do_dma(s->opaque, s->n, buf, len, true);
 }
 
 static rc4030_dma *rc4030_allocate_dmas(void *opaque, int n)
@@ -679,9 +679,9 @@ static void rc4030_realize(DeviceState *dev, Error **errp)
     s->periodic_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                      rc4030_periodic_timer, s);
 
-    memory_region_init_io(&s->iomem_chipset, NULL, &rc4030_ops, s,
+    memory_region_init_io(&s->iomem_chipset, o, &rc4030_ops, s,
                           "rc4030.chipset", 0x300);
-    memory_region_init_io(&s->iomem_jazzio, NULL, &jazzio_ops, s,
+    memory_region_init_io(&s->iomem_jazzio, o, &jazzio_ops, s,
                           "rc4030.jazzio", 0x00001000);
 
     memory_region_init_iommu(&s->dma_mr, sizeof(s->dma_mr),

@@ -26,8 +26,14 @@
 #include "sysemu/qtest.h"
 #include "hw/pci/pci.h"
 #include "hw/mem/nvdimm.h"
+#include "migration/vmstate.h"
+
+GlobalProperty hw_compat_5_0[] = {};
+const size_t hw_compat_5_0_len = G_N_ELEMENTS(hw_compat_5_0);
 
 GlobalProperty hw_compat_4_2[] = {
+    { "virtio-blk-device", "queue-size", "128"},
+    { "virtio-scsi-device", "virtqueue_size", "128"},
     { "virtio-blk-device", "x-enable-wce-if-config-wce", "off" },
     { "virtio-blk-device", "seg-max-adjust", "off"},
     { "virtio-scsi-device", "seg_max_adjust", "off"},
@@ -36,6 +42,7 @@ GlobalProperty hw_compat_4_2[] = {
     { "usb-redir", "suppress-remote-wake", "off" },
     { "qxl", "revision", "4" },
     { "qxl-vga", "revision", "4" },
+    { "fw_cfg", "acpi-mr-restore", "false" },
 };
 const size_t hw_compat_4_2_len = G_N_ELEMENTS(hw_compat_4_2);
 
@@ -50,7 +57,7 @@ GlobalProperty hw_compat_4_0[] = {
     { "secondary-vga",  "edid", "false" },
     { "bochs-display",  "edid", "false" },
     { "virtio-vga",     "edid", "false" },
-    { "virtio-gpu",     "edid", "false" },
+    { "virtio-gpu-device", "edid", "false" },
     { "virtio-device", "use-started", "false" },
     { "virtio-balloon-device", "qemu-4-0-config-size", "true" },
     { "pl031", "migrate-tick-offset", "false" },
@@ -422,6 +429,14 @@ static void machine_set_memory_encryption(Object *obj, const char *value,
 
     g_free(ms->memory_encryption);
     ms->memory_encryption = g_strdup(value);
+
+    /*
+     * With memory encryption, the host can't see the real contents of RAM,
+     * so there's no point in it trying to merge areas.
+     */
+    if (value) {
+        machine_set_mem_merge(obj, false, errp);
+    }
 }
 
 static bool machine_get_nvdimm(Object *obj, Error **errp)
@@ -507,6 +522,22 @@ static void validate_sysbus_device(SysBusDevice *sbdev, void *opaque)
         exit(1);
     }
 }
+
+static char *machine_get_memdev(Object *obj, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+
+    return g_strdup(ms->ram_memdev_id);
+}
+
+static void machine_set_memdev(Object *obj, const char *value, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+
+    g_free(ms->ram_memdev_id);
+    ms->ram_memdev_id = g_strdup(value);
+}
+
 
 static void machine_init_notify(Notifier *notifier, void *data)
 {
@@ -730,6 +761,7 @@ static void smp_parse(MachineState *ms, QemuOpts *opts)
         ms->smp.cpus = cpus;
         ms->smp.cores = cores;
         ms->smp.threads = threads;
+        ms->smp.sockets = sockets;
     }
 
     if (ms->smp.cpus > 1) {
@@ -889,6 +921,14 @@ static void machine_initfn(Object *obj)
                                         "Table (HMAT)", NULL);
     }
 
+    object_property_add_str(obj, "memory-backend",
+                            machine_get_memdev, machine_set_memdev,
+                            &error_abort);
+    object_property_set_description(obj, "memory-backend",
+                                    "Set RAM backend"
+                                    "Valid value is ID of hostmem based backend",
+                                     &error_abort);
+
     /* Register notifier when init is done for sysbus sanity checks */
     ms->sysbus_notifier.notify = machine_init_notify;
     qemu_add_machine_init_done_notifier(&ms->sysbus_notifier);
@@ -1035,9 +1075,32 @@ static void machine_numa_finish_cpu_init(MachineState *machine)
     g_string_free(s, true);
 }
 
+MemoryRegion *machine_consume_memdev(MachineState *machine,
+                                     HostMemoryBackend *backend)
+{
+    MemoryRegion *ret = host_memory_backend_get_memory(backend);
+
+    if (memory_region_is_mapped(ret)) {
+        char *path = object_get_canonical_path_component(OBJECT(backend));
+        error_report("memory backend %s can't be used multiple times.", path);
+        g_free(path);
+        exit(EXIT_FAILURE);
+    }
+    host_memory_backend_set_mapped(backend, true);
+    vmstate_register_ram_global(ret);
+    return ret;
+}
+
 void machine_run_board_init(MachineState *machine)
 {
     MachineClass *machine_class = MACHINE_GET_CLASS(machine);
+
+    if (machine->ram_memdev_id) {
+        Object *o;
+        o = object_resolve_path_type(machine->ram_memdev_id,
+                                     TYPE_MEMORY_BACKEND, NULL);
+        machine->ram = machine_consume_memdev(machine, MEMORY_BACKEND(o));
+    }
 
     //如果board支持numa,则配置numa
     if (machine->numa_state) {

@@ -128,14 +128,20 @@ enum {
 /**
  * DynamicGDBXMLInfo:
  * @desc: Contains the XML descriptions.
- * @num_cpregs: Number of the Coprocessor registers seen by GDB.
- * @cpregs_keys: Array that contains the corresponding Key of
- * a given cpreg with the same order of the cpreg in the XML description.
+ * @num: Number of the registers in this XML seen by GDB.
+ * @data: A union with data specific to the set of registers
+ *    @cpregs_keys: Array that contains the corresponding Key of
+ *                  a given cpreg with the same order of the cpreg
+ *                  in the XML description.
  */
 typedef struct DynamicGDBXMLInfo {
     char *desc;
-    int num_cpregs;
-    uint32_t *cpregs_keys;
+    int num;
+    union {
+        struct {
+            uint32_t *keys;
+        } cpregs;
+    } data;
 } DynamicGDBXMLInfo;
 
 /* CPU state for each instance of a generic timer (in cp15 c14) */
@@ -690,6 +696,16 @@ typedef struct CPUARMState {
     void *gicv3state;
 } CPUARMState;
 
+static inline void set_feature(CPUARMState *env, int feature)
+{
+    env->features |= 1ULL << feature;
+}
+
+static inline void unset_feature(CPUARMState *env, int feature)
+{
+    env->features &= ~(1ULL << feature);
+}
+
 /**
  * ARMELChangeHookFn:
  * type of a function which can be registered via arm_register_el_change_hook()
@@ -749,7 +765,8 @@ struct ARMCPU {
     uint64_t *cpreg_vmstate_values;
     int32_t cpreg_vmstate_array_len;
 
-    DynamicGDBXMLInfo dyn_xml;
+    DynamicGDBXMLInfo dyn_sysreg_xml;
+    DynamicGDBXMLInfo dyn_svereg_xml;
 
     /* Timers used by the generic (architected) timer */
     QEMUTimer *gt_timer[NUM_GTIMERS];
@@ -887,7 +904,7 @@ struct ARMCPU {
         uint64_t id_aa64dfr0;
         uint64_t id_aa64dfr1;
     } isar;
-    uint32_t midr;
+    uint64_t midr;
     uint32_t revidr;
     uint32_t reset_fpsid;
     uint32_t ctr;
@@ -904,7 +921,7 @@ struct ARMCPU {
     /* The elements of this array are the CCSIDR values for each cache,
      * in the order L1DCache, L1ICache, L2DCache, L2ICache, etc.
      */
-    uint32_t ccsidr[16];
+    uint64_t ccsidr[16];
     uint64_t reset_cbar;
     uint32_t reset_auxcr;
     bool reset_hivecs;
@@ -968,13 +985,15 @@ bool arm_cpu_exec_interrupt(CPUState *cpu, int int_req);
 hwaddr arm_cpu_get_phys_page_attrs_debug(CPUState *cpu, vaddr addr,
                                          MemTxAttrs *attrs);
 
-int arm_cpu_gdb_read_register(CPUState *cpu, uint8_t *buf, int reg);
+int arm_cpu_gdb_read_register(CPUState *cpu, GByteArray *buf, int reg);
 int arm_cpu_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg);
 
-/* Dynamically generates for gdb stub an XML description of the sysregs from
- * the cp_regs hashtable. Returns the registered sysregs number.
+/*
+ * Helpers to dynamically generates XML descriptions of the sysregs
+ * and SVE registers. Returns the number of registers in each set.
  */
-int arm_gen_dynamic_xml(CPUState *cpu);
+int arm_gen_dynamic_sysreg_xml(CPUState *cpu, int base_reg);
+int arm_gen_dynamic_svereg_xml(CPUState *cpu, int base_reg);
 
 /* Returns the dynamically generated XML for the gdb stub.
  * Returns a pointer to the XML contents for the specified XML file or NULL
@@ -988,7 +1007,7 @@ int arm_cpu_write_elf32_note(WriteCoreDumpFunction f, CPUState *cs,
                              int cpuid, void *opaque);
 
 #ifdef TARGET_AARCH64
-int aarch64_cpu_gdb_read_register(CPUState *cpu, uint8_t *buf, int reg);
+int aarch64_cpu_gdb_read_register(CPUState *cpu, GByteArray *buf, int reg);
 int aarch64_cpu_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg);
 void aarch64_sve_narrow_vq(CPUARMState *env, unsigned vq);
 void aarch64_sve_change_el(CPUARMState *env, int old_el,
@@ -1410,6 +1429,7 @@ static inline void xpsr_write(CPUARMState *env, uint32_t val, uint32_t mask)
 #define HCR_TERR      (1ULL << 36)
 #define HCR_TEA       (1ULL << 37)
 #define HCR_MIOCNCE   (1ULL << 38)
+/* RES0 bit 39 */
 #define HCR_APK       (1ULL << 40)
 #define HCR_API       (1ULL << 41)
 #define HCR_NV        (1ULL << 42)
@@ -1418,13 +1438,19 @@ static inline void xpsr_write(CPUARMState *env, uint32_t val, uint32_t mask)
 #define HCR_NV2       (1ULL << 45)
 #define HCR_FWB       (1ULL << 46)
 #define HCR_FIEN      (1ULL << 47)
+/* RES0 bit 48 */
 #define HCR_TID4      (1ULL << 49)
 #define HCR_TICAB     (1ULL << 50)
+#define HCR_AMVOFFEN  (1ULL << 51)
 #define HCR_TOCU      (1ULL << 52)
+#define HCR_ENSCXT    (1ULL << 53)
 #define HCR_TTLBIS    (1ULL << 54)
 #define HCR_TTLBOS    (1ULL << 55)
 #define HCR_ATA       (1ULL << 56)
 #define HCR_DCT       (1ULL << 57)
+#define HCR_TID5      (1ULL << 58)
+#define HCR_TWEDEN    (1ULL << 59)
+#define HCR_TWEDEL    MAKE_64BIT_MASK(60, 4)
 
 #define SCR_NS                (1U << 0)
 #define SCR_IRQ               (1U << 1)
@@ -1880,7 +1906,6 @@ QEMU_BUILD_BUG_ON(ARRAY_SIZE(((ARMCPU *)0)->ccsidr) <= R_V7M_CSSELR_INDEX_MASK);
  * mapping in linux-user/elfload.c:get_elf_hwcap().
  */
 enum arm_features {
-    ARM_FEATURE_VFP,
     ARM_FEATURE_AUXCR,  /* ARM1026 Auxiliary control register.  */
     ARM_FEATURE_XSCALE, /* Intel XScale extensions.  */
     ARM_FEATURE_IWMMXT, /* Intel iwMMXt extension.  */
@@ -1889,7 +1914,6 @@ enum arm_features {
     ARM_FEATURE_V7,
     ARM_FEATURE_THUMB2,
     ARM_FEATURE_PMSA,   /* no MMU; may have Memory Protection Unit */
-    ARM_FEATURE_VFP3,
     ARM_FEATURE_NEON,
     ARM_FEATURE_M, /* Microcontroller profile.  */
     ARM_FEATURE_OMAPCP, /* OMAP specific CP15 ops handling.  */
@@ -1900,7 +1924,6 @@ enum arm_features {
     ARM_FEATURE_V5,
     ARM_FEATURE_STRONGARM,
     ARM_FEATURE_VAPA, /* cp15 VA to PA lookups */
-    ARM_FEATURE_VFP4, /* VFPv4 (implies that NEON is v2) */
     ARM_FEATURE_GENERIC_TIMER,
     ARM_FEATURE_MVFR, /* Media and VFP Feature Registers 0 and 1 */
     ARM_FEATURE_DUMMY_C15_REGS, /* RAZ/WI all of cp15 crn=15 */
@@ -2788,6 +2811,9 @@ bool write_cpustate_to_list(ARMCPU *cpu, bool kvm_sync);
  *     handling via the TLB. The only way to do a stage 1 translation without
  *     the immediate stage 2 translation is via the ATS or AT system insns,
  *     which can be slow-pathed and always do a page table walk.
+ *     The only use of stage 2 translations is either as part of an s1+2
+ *     lookup or when loading the descriptors during a stage 1 page table walk,
+ *     and in both those cases we don't use the TLB.
  *  4. we can also safely fold together the "32 bit EL3" and "64 bit EL3"
  *     translation regimes, because they map reasonably well to each other
  *     and they can't both be active at the same time.
@@ -2803,15 +2829,15 @@ bool write_cpustate_to_list(ARMCPU *cpu, bool kvm_sync);
  * NS EL1 EL1&0 stage 1+2 (aka NS PL1)
  * NS EL1 EL1&0 stage 1+2 +PAN
  * NS EL0 EL2&0
+ * NS EL2 EL2&0
  * NS EL2 EL2&0 +PAN
  * NS EL2 (aka NS PL2)
  * S EL0 EL1&0 (aka S PL0)
  * S EL1 EL1&0 (not used if EL3 is 32 bit)
  * S EL1 EL1&0 +PAN
  * S EL3 (aka S PL1)
- * NS EL1&0 stage 2
  *
- * for a total of 12 different mmu_idx.
+ * for a total of 11 different mmu_idx.
  *
  * R profile CPUs have an MPU, but can use the same set of MMU indexes
  * as A profile. They only need to distinguish NS EL0 and NS EL1 (and
@@ -2833,7 +2859,8 @@ bool write_cpustate_to_list(ARMCPU *cpu, bool kvm_sync);
  * are not quite the same -- different CPU types (most notably M profile
  * vs A/R profile) would like to use MMU indexes with different semantics,
  * but since we don't ever need to use all of those in a single CPU we
- * can avoid setting NB_MMU_MODES to more than 8. The lower bits of
+ * can avoid having to set NB_MMU_MODES to "total number of A profile MMU
+ * modes + total number of M profile MMU modes". The lower bits of
  * ARMMMUIdx are the core TLB mmu index, and the higher bits are always
  * the same for any particular CPU.
  * Variables of type ARMMUIdx are always full values, and the core
@@ -2881,8 +2908,6 @@ typedef enum ARMMMUIdx {
     ARMMMUIdx_SE10_1_PAN = 9 | ARM_MMU_IDX_A,
     ARMMMUIdx_SE3        = 10 | ARM_MMU_IDX_A,
 
-    ARMMMUIdx_Stage2     = 11 | ARM_MMU_IDX_A,
-
     /*
      * These are not allocated TLBs and are used only for AT system
      * instructions or for the first stage of an S12 page table walk.
@@ -2890,6 +2915,14 @@ typedef enum ARMMMUIdx {
     ARMMMUIdx_Stage1_E0 = 0 | ARM_MMU_IDX_NOTLB,
     ARMMMUIdx_Stage1_E1 = 1 | ARM_MMU_IDX_NOTLB,
     ARMMMUIdx_Stage1_E1_PAN = 2 | ARM_MMU_IDX_NOTLB,
+    /*
+     * Not allocated a TLB: used only for second stage of an S12 page
+     * table walk, or for descriptor loads during first stage of an S1
+     * page table walk. Note that if we ever want to have a TLB for this
+     * then various TLB flush insns which currently are no-ops or flush
+     * only stage 1 MMU indexes will need to change to flush stage 2.
+     */
+    ARMMMUIdx_Stage2     = 3 | ARM_MMU_IDX_NOTLB,
 
     /*
      * M-profile.
@@ -2923,7 +2956,6 @@ typedef enum ARMMMUIdxBit {
     TO_CORE_BIT(SE10_1),
     TO_CORE_BIT(SE10_1_PAN),
     TO_CORE_BIT(SE3),
-    TO_CORE_BIT(Stage2),
 
     TO_CORE_BIT(MUser),
     TO_CORE_BIT(MPriv),
@@ -2938,16 +2970,6 @@ typedef enum ARMMMUIdxBit {
 #undef TO_CORE_BIT
 
 #define MMU_USER_IDX 0
-
-/**
- * cpu_mmu_index:
- * @env: The cpu environment
- * @ifetch: True for code access, false for data access.
- *
- * Return the core mmu index for the current translation regime.
- * This function is used by generic TCG code paths.
- */
-int cpu_mmu_index(CPUARMState *env, bool ifetch);
 
 /* Indexes used when registering address spaces with cpu_address_space_init */
 typedef enum ARMASIdx {
@@ -3228,6 +3250,19 @@ FIELD(TBFLAG_A64, BTYPE, 10, 2)         /* Not cached. */
 FIELD(TBFLAG_A64, TBID, 12, 2)
 FIELD(TBFLAG_A64, UNPRIV, 14, 1)
 
+/**
+ * cpu_mmu_index:
+ * @env: The cpu environment
+ * @ifetch: True for code access, false for data access.
+ *
+ * Return the core mmu index for the current translation regime.
+ * This function is used by generic TCG code paths.
+ */
+static inline int cpu_mmu_index(CPUARMState *env, bool ifetch)
+{
+    return FIELD_EX32(env->hflags, TBFLAG_ANY, MMUIDX);
+}
+
 static inline bool bswap_code(bool sctlr_b)
 {
 #ifdef CONFIG_USER_ONLY
@@ -3450,6 +3485,15 @@ static inline bool isar_feature_aa32_fp16_arith(const ARMISARegisters *id)
     return FIELD_EX64(id->id_aa64pfr0, ID_AA64PFR0, FP) == 1;
 }
 
+static inline bool isar_feature_aa32_vfp_simd(const ARMISARegisters *id)
+{
+    /*
+     * Return true if either VFP or SIMD is implemented.
+     * In this case, a minimum of VFP w/ D0-D15.
+     */
+    return FIELD_EX32(id->mvfr0, MVFR0, SIMDREG) > 0;
+}
+
 static inline bool isar_feature_aa32_simd_r32(const ARMISARegisters *id)
 {
     /* Return true if D16-D31 are implemented */
@@ -3461,10 +3505,33 @@ static inline bool isar_feature_aa32_fpshvec(const ARMISARegisters *id)
     return FIELD_EX32(id->mvfr0, MVFR0, FPSHVEC) > 0;
 }
 
-static inline bool isar_feature_aa32_fpdp(const ARMISARegisters *id)
+static inline bool isar_feature_aa32_fpsp_v2(const ARMISARegisters *id)
 {
-    /* Return true if CPU supports double precision floating point */
+    /* Return true if CPU supports single precision floating point, VFPv2 */
+    return FIELD_EX32(id->mvfr0, MVFR0, FPSP) > 0;
+}
+
+static inline bool isar_feature_aa32_fpsp_v3(const ARMISARegisters *id)
+{
+    /* Return true if CPU supports single precision floating point, VFPv3 */
+    return FIELD_EX32(id->mvfr0, MVFR0, FPSP) >= 2;
+}
+
+static inline bool isar_feature_aa32_fpdp_v2(const ARMISARegisters *id)
+{
+    /* Return true if CPU supports double precision floating point, VFPv2 */
     return FIELD_EX32(id->mvfr0, MVFR0, FPDP) > 0;
+}
+
+static inline bool isar_feature_aa32_fpdp_v3(const ARMISARegisters *id)
+{
+    /* Return true if CPU supports double precision floating point, VFPv3 */
+    return FIELD_EX32(id->mvfr0, MVFR0, FPDP) >= 2;
+}
+
+static inline bool isar_feature_aa32_vfp(const ARMISARegisters *id)
+{
+    return isar_feature_aa32_fpsp_v2(id) || isar_feature_aa32_fpdp_v2(id);
 }
 
 /*
@@ -3480,6 +3547,18 @@ static inline bool isar_feature_aa32_fp16_spconv(const ARMISARegisters *id)
 static inline bool isar_feature_aa32_fp16_dpconv(const ARMISARegisters *id)
 {
     return FIELD_EX32(id->mvfr1, MVFR1, FPHP) > 1;
+}
+
+/*
+ * Note that this ID register field covers both VFP and Neon FMAC,
+ * so should usually be tested in combination with some other
+ * check that confirms the presence of whichever of VFP or Neon is
+ * relevant, to avoid accidentally enabling a Neon feature on
+ * a VFP-no-Neon core or vice-versa.
+ */
+static inline bool isar_feature_aa32_simdfmac(const ARMISARegisters *id)
+{
+    return FIELD_EX32(id->mvfr1, MVFR1, SIMDFMAC) != 0;
 }
 
 static inline bool isar_feature_aa32_vsel(const ARMISARegisters *id)
@@ -3534,6 +3613,16 @@ static inline bool isar_feature_aa32_hpd(const ARMISARegisters *id)
 static inline bool isar_feature_aa32_ac2(const ARMISARegisters *id)
 {
     return FIELD_EX32(id->id_mmfr4, ID_MMFR4, AC2) != 0;
+}
+
+static inline bool isar_feature_aa32_ccidx(const ARMISARegisters *id)
+{
+    return FIELD_EX32(id->id_mmfr4, ID_MMFR4, CCIDX) != 0;
+}
+
+static inline bool isar_feature_aa32_tts2uxn(const ARMISARegisters *id)
+{
+    return FIELD_EX32(id->id_mmfr4, ID_MMFR4, XNX) != 0;
 }
 
 /*
@@ -3669,6 +3758,12 @@ static inline bool isar_feature_aa64_dcpodp(const ARMISARegisters *id)
     return FIELD_EX64(id->id_aa64isar1, ID_AA64ISAR1, DPB) >= 2;
 }
 
+static inline bool isar_feature_aa64_fp_simd(const ARMISARegisters *id)
+{
+    /* We always set the AdvSIMD and FP fields identically.  */
+    return FIELD_EX64(id->id_aa64pfr0, ID_AA64PFR0, FP) != 0xf;
+}
+
 static inline bool isar_feature_aa64_fp16(const ARMISARegisters *id)
 {
     /* We always set the AdvSIMD and FP fields identically wrt FP16.  */
@@ -3723,8 +3818,28 @@ static inline bool isar_feature_aa64_pmu_8_1(const ARMISARegisters *id)
 
 static inline bool isar_feature_aa64_pmu_8_4(const ARMISARegisters *id)
 {
-    return FIELD_EX32(id->id_aa64dfr0, ID_AA64DFR0, PMUVER) >= 5 &&
-        FIELD_EX32(id->id_aa64dfr0, ID_AA64DFR0, PMUVER) != 0xf;
+    return FIELD_EX64(id->id_aa64dfr0, ID_AA64DFR0, PMUVER) >= 5 &&
+        FIELD_EX64(id->id_aa64dfr0, ID_AA64DFR0, PMUVER) != 0xf;
+}
+
+static inline bool isar_feature_aa64_rcpc_8_3(const ARMISARegisters *id)
+{
+    return FIELD_EX64(id->id_aa64isar1, ID_AA64ISAR1, LRCPC) != 0;
+}
+
+static inline bool isar_feature_aa64_rcpc_8_4(const ARMISARegisters *id)
+{
+    return FIELD_EX64(id->id_aa64isar1, ID_AA64ISAR1, LRCPC) >= 2;
+}
+
+static inline bool isar_feature_aa64_ccidx(const ARMISARegisters *id)
+{
+    return FIELD_EX64(id->id_aa64mmfr2, ID_AA64MMFR2, CCIDX) != 0;
+}
+
+static inline bool isar_feature_aa64_tts2uxn(const ARMISARegisters *id)
+{
+    return FIELD_EX64(id->id_aa64mmfr1, ID_AA64MMFR1, XNX) != 0;
 }
 
 /*
@@ -3748,6 +3863,16 @@ static inline bool isar_feature_any_pmu_8_1(const ARMISARegisters *id)
 static inline bool isar_feature_any_pmu_8_4(const ARMISARegisters *id)
 {
     return isar_feature_aa64_pmu_8_4(id) || isar_feature_aa32_pmu_8_4(id);
+}
+
+static inline bool isar_feature_any_ccidx(const ARMISARegisters *id)
+{
+    return isar_feature_aa64_ccidx(id) || isar_feature_aa32_ccidx(id);
+}
+
+static inline bool isar_feature_any_tts2uxn(const ARMISARegisters *id)
+{
+    return isar_feature_aa64_tts2uxn(id) || isar_feature_aa32_tts2uxn(id);
 }
 
 /*

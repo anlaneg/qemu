@@ -1026,7 +1026,7 @@ err:
 void qcow2_alloc_cluster_abort(BlockDriverState *bs, QCowL2Meta *m)
 {
     BDRVQcow2State *s = bs->opaque;
-    if (!has_data_file(bs)) {
+    if (!has_data_file(bs) && !m->keep_old_clusters) {
         qcow2_free_clusters(bs, m->alloc_offset,
                             m->nb_clusters << s->cluster_bits,
                             QCOW2_DISCARD_NEVER);
@@ -1795,7 +1795,7 @@ int qcow2_cluster_zeroize(BlockDriverState *bs, uint64_t offset,
     /* Caller must pass aligned values, except at image end */
     assert(QEMU_IS_ALIGNED(offset, s->cluster_size));
     assert(QEMU_IS_ALIGNED(end_offset, s->cluster_size) ||
-           end_offset == bs->total_sectors << BDRV_SECTOR_BITS);
+           end_offset >= bs->total_sectors << BDRV_SECTOR_BITS);
 
     /* The zero flag is only supported by version 3 and newer */
     if (s->qcow_version < 3) {

@@ -411,6 +411,11 @@ static inline void rx_desc_set_sof(uint32_t *desc)
     desc[1] |= DESC_1_RX_SOF;
 }
 
+static inline void rx_desc_clear_control(uint32_t *desc)
+{
+    desc[1]  = 0;
+}
+
 static inline void rx_desc_set_eof(uint32_t *desc)
 {
     desc[1] |= DESC_1_RX_EOF;
@@ -505,7 +510,7 @@ static void phy_update_link(CadenceGEMState *s)
     }
 }
 
-static int gem_can_receive(NetClientState *nc)
+static bool gem_can_receive(NetClientState *nc)
 {
     CadenceGEMState *s;
     int i;
@@ -518,7 +523,7 @@ static int gem_can_receive(NetClientState *nc)
             s->can_rx_state = 1;
             DB_PRINT("can't receive - no enable\n");
         }
-        return 0;
+        return false;
     }
 
     for (i = 0; i < s->num_priority_queues; i++) {
@@ -532,14 +537,14 @@ static int gem_can_receive(NetClientState *nc)
             s->can_rx_state = 2;
             DB_PRINT("can't receive - all the buffer descriptors are busy\n");
         }
-        return 0;
+        return false;
     }
 
     if (s->can_rx_state != 0) {
         s->can_rx_state = 0;
         DB_PRINT("can receive\n");
     }
-    return 1;
+    return true;
 }
 
 /*
@@ -871,7 +876,7 @@ static void gem_get_rx_desc(CadenceGEMState *s, int q)
 
     /* read current descriptor */
     address_space_read(&s->dma_as, desc_addr, MEMTXATTRS_UNSPECIFIED,
-                       (uint8_t *)s->rx_desc[q],
+                       s->rx_desc[q],
                        sizeof(uint32_t) * gem_get_desc_len(s, true));
 
     /* Descriptor owned by software ? */
@@ -987,8 +992,9 @@ static ssize_t gem_receive(NetClientState *nc, const uint8_t *buf, size_t size)
             return -1;
         }
 
-        DB_PRINT("copy %d bytes to 0x%x\n", MIN(bytes_to_copy, rxbufsize),
-                rx_desc_get_buffer(s->rx_desc[q]));
+        DB_PRINT("copy %u bytes to 0x%" PRIx64 "\n",
+                 MIN(bytes_to_copy, rxbufsize),
+                 rx_desc_get_buffer(s, s->rx_desc[q]));
 
         /* Copy packet data to emulated DMA buffer */
         address_space_write(&s->dma_as, rx_desc_get_buffer(s, s->rx_desc[q]) +
@@ -997,6 +1003,8 @@ static ssize_t gem_receive(NetClientState *nc, const uint8_t *buf, size_t size)
                             MIN(bytes_to_copy, rxbufsize));
         rxbuf_ptr += MIN(bytes_to_copy, rxbufsize);
         bytes_to_copy -= MIN(bytes_to_copy, rxbufsize);
+
+        rx_desc_clear_control(s->rx_desc[q]);
 
         /* Update the descriptor.  */
         if (first_desc) {
@@ -1029,9 +1037,8 @@ static ssize_t gem_receive(NetClientState *nc, const uint8_t *buf, size_t size)
 
         /* Descriptor write-back.  */
         desc_addr = gem_get_rx_desc_addr(s, q);
-        address_space_write(&s->dma_as, desc_addr,
-                            MEMTXATTRS_UNSPECIFIED,
-                            (uint8_t *)s->rx_desc[q],
+        address_space_write(&s->dma_as, desc_addr, MEMTXATTRS_UNSPECIFIED,
+                            s->rx_desc[q],
                             sizeof(uint32_t) * gem_get_desc_len(s, true));
 
         /* Next descriptor */
@@ -1137,7 +1144,7 @@ static void gem_transmit(CadenceGEMState *s)
 
         DB_PRINT("read descriptor 0x%" HWADDR_PRIx "\n", packet_desc_addr);
         address_space_read(&s->dma_as, packet_desc_addr,
-                           MEMTXATTRS_UNSPECIFIED, (uint8_t *)desc,
+                           MEMTXATTRS_UNSPECIFIED, desc,
                            sizeof(uint32_t) * gem_get_desc_len(s, false));
         /* Handle all descriptors owned by hardware */
         while (tx_desc_get_used(desc) == 0) {
@@ -1160,9 +1167,9 @@ static void gem_transmit(CadenceGEMState *s)
 
             if (tx_desc_get_length(desc) > sizeof(tx_packet) -
                                                (p - tx_packet)) {
-                DB_PRINT("TX descriptor @ 0x%x too large: size 0x%x space " \
-                         "0x%x\n", (unsigned)packet_desc_addr,
-                         (unsigned)tx_desc_get_length(desc),
+                DB_PRINT("TX descriptor @ 0x%" HWADDR_PRIx \
+                         " too large: size 0x%x space 0x%zx\n",
+                         packet_desc_addr, tx_desc_get_length(desc),
                          sizeof(tx_packet) - (p - tx_packet));
                 break;
             }
@@ -1185,14 +1192,12 @@ static void gem_transmit(CadenceGEMState *s)
                  * the processor.
                  */
                 address_space_read(&s->dma_as, desc_addr,
-                                   MEMTXATTRS_UNSPECIFIED,
-                                   (uint8_t *)desc_first,
+                                   MEMTXATTRS_UNSPECIFIED, desc_first,
                                    sizeof(desc_first));
                 tx_desc_set_used(desc_first);
                 address_space_write(&s->dma_as, desc_addr,
-                                  MEMTXATTRS_UNSPECIFIED,
-                                  (uint8_t *)desc_first,
-                                   sizeof(desc_first));
+                                    MEMTXATTRS_UNSPECIFIED, desc_first,
+                                    sizeof(desc_first));
                 /* Advance the hardware current descriptor past this packet */
                 if (tx_desc_get_wrap(desc)) {
                     s->tx_desc_addr[q] = s->regs[GEM_TXQBASE];
@@ -1240,14 +1245,21 @@ static void gem_transmit(CadenceGEMState *s)
             /* read next descriptor */
             if (tx_desc_get_wrap(desc)) {
                 tx_desc_set_last(desc);
-                packet_desc_addr = s->regs[GEM_TXQBASE];
+
+                if (s->regs[GEM_DMACFG] & GEM_DMACFG_ADDR_64B) {
+                    packet_desc_addr = s->regs[GEM_TBQPH];
+                    packet_desc_addr <<= 32;
+                } else {
+                    packet_desc_addr = 0;
+                }
+                packet_desc_addr |= s->regs[GEM_TXQBASE];
             } else {
                 packet_desc_addr += 4 * gem_get_desc_len(s, false);
             }
             DB_PRINT("read descriptor 0x%" HWADDR_PRIx "\n", packet_desc_addr);
             address_space_read(&s->dma_as, packet_desc_addr,
-                              MEMTXATTRS_UNSPECIFIED, (uint8_t *)desc,
-                              sizeof(uint32_t) * gem_get_desc_len(s, false));
+                               MEMTXATTRS_UNSPECIFIED, desc,
+                               sizeof(uint32_t) * gem_get_desc_len(s, false));
         }
 
         if (tx_desc_get_used(desc)) {

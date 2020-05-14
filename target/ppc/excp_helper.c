@@ -57,12 +57,29 @@ static void ppc_hw_interrupt(CPUPPCState *env)
 #else /* defined(CONFIG_USER_ONLY) */
 static inline void dump_syscall(CPUPPCState *env)
 {
-    qemu_log_mask(CPU_LOG_INT, "syscall r0=%016" PRIx64 " r3=%016" PRIx64
-                  " r4=%016" PRIx64 " r5=%016" PRIx64 " r6=%016" PRIx64
+    qemu_log_mask(CPU_LOG_INT, "syscall r0=%016" PRIx64
+                  " r3=%016" PRIx64 " r4=%016" PRIx64 " r5=%016" PRIx64
+                  " r6=%016" PRIx64 " r7=%016" PRIx64 " r8=%016" PRIx64
                   " nip=" TARGET_FMT_lx "\n",
                   ppc_dump_gpr(env, 0), ppc_dump_gpr(env, 3),
                   ppc_dump_gpr(env, 4), ppc_dump_gpr(env, 5),
-                  ppc_dump_gpr(env, 6), env->nip);
+                  ppc_dump_gpr(env, 6), ppc_dump_gpr(env, 7),
+                  ppc_dump_gpr(env, 8), env->nip);
+}
+
+static inline void dump_hcall(CPUPPCState *env)
+{
+    qemu_log_mask(CPU_LOG_INT, "hypercall r3=%016" PRIx64
+		  " r4=%016" PRIx64 " r5=%016" PRIx64 " r6=%016" PRIx64
+		  " r7=%016" PRIx64 " r8=%016" PRIx64 " r9=%016" PRIx64
+		  " r10=%016" PRIx64 " r11=%016" PRIx64 " r12=%016" PRIx64
+                  " nip=" TARGET_FMT_lx "\n",
+                  ppc_dump_gpr(env, 3), ppc_dump_gpr(env, 4),
+		  ppc_dump_gpr(env, 5), ppc_dump_gpr(env, 6),
+		  ppc_dump_gpr(env, 7), ppc_dump_gpr(env, 8),
+		  ppc_dump_gpr(env, 9), ppc_dump_gpr(env, 10),
+		  ppc_dump_gpr(env, 11), ppc_dump_gpr(env, 12),
+		  env->nip);
 }
 
 static int powerpc_reset_wakeup(CPUState *cs, CPUPPCState *env, int excp,
@@ -126,6 +143,37 @@ static uint64_t ppc_excp_vector_offset(CPUState *cs, int ail)
     }
 
     return offset;
+}
+
+static inline void powerpc_set_excp_state(PowerPCCPU *cpu,
+                                          target_ulong vector, target_ulong msr)
+{
+    CPUState *cs = CPU(cpu);
+    CPUPPCState *env = &cpu->env;
+
+    /*
+     * We don't use hreg_store_msr here as already have treated any
+     * special case that could occur. Just store MSR and update hflags
+     *
+     * Note: We *MUST* not use hreg_store_msr() as-is anyway because it
+     * will prevent setting of the HV bit which some exceptions might need
+     * to do.
+     */
+    env->msr = msr & env->msr_mask;
+    hreg_compute_hflags(env);
+    env->nip = vector;
+    /* Reset exception state */
+    cs->exception_index = POWERPC_EXCP_NONE;
+    env->error_code = 0;
+
+    /* Reset the reservation */
+    env->reserve_addr = -1;
+
+    /*
+     * Any interrupt is context synchronizing, check if TCG TLB needs
+     * a delayed flush on ppc64
+     */
+    check_tlb_flush(env, false);
 }
 
 /*
@@ -348,8 +396,13 @@ static inline void powerpc_excp(PowerPCCPU *cpu, int excp_model, int excp)
         }
         break;
     case POWERPC_EXCP_SYSCALL:   /* System call exception                    */
-        dump_syscall(env);
         lev = env->error_code;
+
+        if ((lev == 1) && cpu->vhyp) {
+            dump_hcall(env);
+        } else {
+            dump_syscall(env);
+        }
 
         /*
          * We need to correct the NIP which in this case is supposed
@@ -453,9 +506,10 @@ static inline void powerpc_excp(PowerPCCPU *cpu, int excp_model, int excp)
     case POWERPC_EXCP_ISEG:      /* Instruction segment exception            */
     case POWERPC_EXCP_TRACE:     /* Trace exception                          */
         break;
+    case POWERPC_EXCP_HISI:      /* Hypervisor instruction storage exception */
+        msr |= env->error_code;
     case POWERPC_EXCP_HDECR:     /* Hypervisor decrementer exception         */
     case POWERPC_EXCP_HDSI:      /* Hypervisor data storage exception        */
-    case POWERPC_EXCP_HISI:      /* Hypervisor instruction storage exception */
     case POWERPC_EXCP_HDSEG:     /* Hypervisor data segment exception        */
     case POWERPC_EXCP_HISEG:     /* Hypervisor instruction segment exception */
     case POWERPC_EXCP_SDOOR_HV:  /* Hypervisor Doorbell interrupt            */
@@ -768,29 +822,8 @@ static inline void powerpc_excp(PowerPCCPU *cpu, int excp_model, int excp)
         }
     }
 #endif
-    /*
-     * We don't use hreg_store_msr here as already have treated any
-     * special case that could occur. Just store MSR and update hflags
-     *
-     * Note: We *MUST* not use hreg_store_msr() as-is anyway because it
-     * will prevent setting of the HV bit which some exceptions might need
-     * to do.
-     */
-    env->msr = new_msr & env->msr_mask;
-    hreg_compute_hflags(env);
-    env->nip = vector;
-    /* Reset exception state */
-    cs->exception_index = POWERPC_EXCP_NONE;
-    env->error_code = 0;
 
-    /* Reset the reservation */
-    env->reserve_addr = -1;
-
-    /*
-     * Any interrupt is context synchronizing, check if TCG TLB needs
-     * a delayed flush on ppc64
-     */
-    check_tlb_flush(env, false);
+    powerpc_set_excp_state(cpu, vector, new_msr);
 }
 
 void ppc_cpu_do_interrupt(CPUState *cs)
@@ -957,6 +990,26 @@ void ppc_cpu_do_system_reset(CPUState *cs)
     CPUPPCState *env = &cpu->env;
 
     powerpc_excp(cpu, env->excp_model, POWERPC_EXCP_RESET);
+}
+
+void ppc_cpu_do_fwnmi_machine_check(CPUState *cs, target_ulong vector)
+{
+    PowerPCCPU *cpu = POWERPC_CPU(cs);
+    CPUPPCState *env = &cpu->env;
+    PowerPCCPUClass *pcc = POWERPC_CPU_GET_CLASS(cpu);
+    target_ulong msr = 0;
+
+    /*
+     * Set MSR and NIP for the handler, SRR0/1, DAR and DSISR have already
+     * been set by KVM.
+     */
+    msr = (1ULL << MSR_ME);
+    msr |= env->msr & (1ULL << MSR_SF);
+    if (!(*pcc->interrupts_big_endian)(cpu)) {
+        msr |= (1ULL << MSR_LE);
+    }
+
+    powerpc_set_excp_state(cpu, vector, msr);
 }
 #endif /* !CONFIG_USER_ONLY */
 

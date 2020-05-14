@@ -23,22 +23,23 @@
 #include "qemu/error-report.h"
 #include "qemu/log.h"
 #include "sysemu/qtest.h"
+#include "sysemu/device_tree.h"
 
 typedef struct XlnxZCU102 {
     MachineState parent_obj;
 
     XlnxZynqMPState soc;
-    MemoryRegion ddr_ram;
 
     bool secure;
     bool virt;
+
+    struct arm_boot_info binfo;
 } XlnxZCU102;
 
 #define TYPE_ZCU102_MACHINE   MACHINE_TYPE_NAME("xlnx-zcu102")
 #define ZCU102_MACHINE(obj) \
     OBJECT_CHECK(XlnxZCU102, (obj), TYPE_ZCU102_MACHINE)
 
-static struct arm_boot_info xlnx_zcu102_binfo;
 
 static bool zcu102_get_secure(Object *obj, Error **errp)
 {
@@ -68,6 +69,34 @@ static void zcu102_set_virt(Object *obj, bool value, Error **errp)
     s->virt = value;
 }
 
+static void zcu102_modify_dtb(const struct arm_boot_info *binfo, void *fdt)
+{
+    XlnxZCU102 *s = container_of(binfo, XlnxZCU102, binfo);
+    bool method_is_hvc;
+    char **node_path;
+    const char *r;
+    int prop_len;
+    int i;
+
+    /* If EL3 is enabled, we keep all firmware nodes active.  */
+    if (!s->secure) {
+        node_path = qemu_fdt_node_path(fdt, NULL, "xlnx,zynqmp-firmware",
+                                       &error_fatal);
+
+        for (i = 0; node_path && node_path[i]; i++) {
+            r = qemu_fdt_getprop(fdt, node_path[i], "method", &prop_len, NULL);
+            method_is_hvc = r && !strcmp("hvc", r);
+
+            /* Allow HVC based firmware if EL2 is enabled.  */
+            if (method_is_hvc && s->virt) {
+                continue;
+            }
+            qemu_fdt_setprop_string(fdt, node_path[i], "status", "disabled");
+        }
+        g_strfreev(node_path);
+    }
+}
+
 static void xlnx_zcu102_init(MachineState *machine)
 {
     XlnxZCU102 *s = ZCU102_MACHINE(machine);
@@ -87,13 +116,10 @@ static void xlnx_zcu102_init(MachineState *machine)
                  ram_size);
     }
 
-    memory_region_allocate_system_memory(&s->ddr_ram, NULL, "ddr-ram",
-                                         ram_size);
-
     object_initialize_child(OBJECT(machine), "soc", &s->soc, sizeof(s->soc),
                             TYPE_XLNX_ZYNQMP, &error_abort, NULL);
 
-    object_property_set_link(OBJECT(&s->soc), OBJECT(&s->ddr_ram),
+    object_property_set_link(OBJECT(&s->soc), OBJECT(machine->ram),
                          "ddr-ram", &error_abort);
     object_property_set_bool(OBJECT(&s->soc), s->secure, "secure",
                              &error_fatal);
@@ -170,9 +196,10 @@ static void xlnx_zcu102_init(MachineState *machine)
 
     /* TODO create and connect IDE devices for ide_drive_get() */
 
-    xlnx_zcu102_binfo.ram_size = ram_size;
-    xlnx_zcu102_binfo.loader_start = 0;
-    arm_load_kernel(s->soc.boot_cpu_ptr, machine, &xlnx_zcu102_binfo);
+    s->binfo.ram_size = ram_size;
+    s->binfo.loader_start = 0;
+    s->binfo.modify_dtb = zcu102_modify_dtb;
+    arm_load_kernel(s->soc.boot_cpu_ptr, machine, &s->binfo);
 }
 
 static void xlnx_zcu102_machine_instance_init(Object *obj)
@@ -211,6 +238,7 @@ static void xlnx_zcu102_machine_class_init(ObjectClass *oc, void *data)
     mc->ignore_memory_transaction_failures = true;
     mc->max_cpus = XLNX_ZYNQMP_NUM_APU_CPUS + XLNX_ZYNQMP_NUM_RPU_CPUS;
     mc->default_cpus = XLNX_ZYNQMP_NUM_APU_CPUS;
+    mc->default_ram_id = "ddr-ram";
 }
 
 static const TypeInfo xlnx_zcu102_machine_init_typeinfo = {

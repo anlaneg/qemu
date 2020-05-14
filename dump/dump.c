@@ -364,7 +364,7 @@ static void write_elf_section(DumpState *s, int type, Error **errp)
         shdr = &shdr64;
     }
 
-    ret = fd_write_vmcore(&shdr, shdr_size, s);
+    ret = fd_write_vmcore(shdr, shdr_size, s);
     if (ret < 0) {
         error_setg_errno(errp, -ret,
                          "dump: failed to write section header table");
@@ -1892,7 +1892,7 @@ static void dump_process(DumpState *s, Error **errp)
     result = qmp_query_dump(NULL);
     /* should never fail */
     assert(result);
-    qapi_event_send_dump_completed(result, !!local_err, (local_err ? \
+    qapi_event_send_dump_completed(result, !!local_err, (local_err ?
                                    error_get_pretty(local_err) : NULL));
     qapi_free_DumpQueryResult(result);
 

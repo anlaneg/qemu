@@ -702,6 +702,10 @@ static int raw_open_common(BlockDriverState *bs, QDict *options,
 #endif
 
     bs->supported_zero_flags = BDRV_REQ_MAY_UNMAP | BDRV_REQ_NO_FALLBACK;
+    if (S_ISREG(st.st_mode)) {
+        /* When extending regular files, we get zeros from the OS */
+        bs->supported_truncate_flags = BDRV_REQ_ZERO_WRITE;
+    }
     ret = 0;
 fail:
     if (filename && (bdrv_flags & BDRV_O_TEMPORARY)) {
@@ -888,7 +892,6 @@ static int raw_handle_perm_lock(BlockDriverState *bs,
                               "Is another process using the image [%s]?\n",
                               bs->filename);
         }
-        op = RAW_PL_ABORT;
         /* fall through to unlock bytes. */
     case RAW_PL_ABORT:
         raw_apply_lock_bytes(s, s->fd, s->perm, ~s->shared_perm,
@@ -1614,13 +1617,12 @@ static int handle_aiocb_write_zeroes_unmap(void *opaque)
 {
     RawPosixAIOData *aiocb = opaque;
     BDRVRawState *s G_GNUC_UNUSED = aiocb->bs->opaque;
-    int ret;
 
     /* First try to write zeros and unmap at the same time */
 
 #ifdef CONFIG_FALLOCATE_PUNCH_HOLE
-    ret = do_fallocate(s->fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
-                       aiocb->aio_offset, aiocb->aio_nbytes);
+    int ret = do_fallocate(s->fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+                           aiocb->aio_offset, aiocb->aio_nbytes);
     if (ret != -ENOTSUP) {
         return ret;
     }
@@ -1628,8 +1630,7 @@ static int handle_aiocb_write_zeroes_unmap(void *opaque)
 
     /* If we couldn't manage to unmap while guaranteed that the area reads as
      * all-zero afterwards, just write zeroes without unmapping */
-    ret = handle_aiocb_write_zeroes(aiocb);
-    return ret;
+    return handle_aiocb_write_zeroes(aiocb);
 }
 
 #ifndef HAVE_COPY_FILE_RANGE
@@ -2081,7 +2082,7 @@ raw_regular_truncate(BlockDriverState *bs, int fd, int64_t offset,
 
 static int coroutine_fn raw_co_truncate(BlockDriverState *bs, int64_t offset,
                                         bool exact, PreallocMode prealloc,
-                                        Error **errp)
+                                        BdrvRequestFlags flags, Error **errp)
 {
     BDRVRawState *s = bs->opaque;
     struct stat st;
@@ -2409,7 +2410,9 @@ out:
     return result;
 }
 
-static int coroutine_fn raw_co_create_opts(const char *filename, QemuOpts *opts,
+static int coroutine_fn raw_co_create_opts(BlockDriver *drv,
+                                           const char *filename,
+                                           QemuOpts *opts,
                                            Error **errp)
 {
     BlockdevCreateOptions options;
@@ -2447,6 +2450,28 @@ static int coroutine_fn raw_co_create_opts(const char *filename, QemuOpts *opts,
         },
     };
     return raw_co_create(&options, errp);
+}
+
+static int coroutine_fn raw_co_delete_file(BlockDriverState *bs,
+                                           Error **errp)
+{
+    struct stat st;
+    int ret;
+
+    if (!(stat(bs->filename, &st) == 0) || !S_ISREG(st.st_mode)) {
+        error_setg_errno(errp, ENOENT, "%s is not a regular file",
+                         bs->filename);
+        return -ENOENT;
+    }
+
+    ret = unlink(bs->filename);
+    if (ret < 0) {
+        ret = -errno;
+        error_setg_errno(errp, -ret, "Error when deleting file %s",
+                         bs->filename);
+    }
+
+    return ret;
 }
 
 /*
@@ -2671,9 +2696,12 @@ static void check_cache_dropped(BlockDriverState *bs, Error **errp)
         vec_end = DIV_ROUND_UP(length, page_size);
         for (i = 0; i < vec_end; i++) {
             if (vec[i] & 0x1) {
-                error_setg(errp, "page cache still in use!");
                 break;
             }
+        }
+        if (i < vec_end) {
+            error_setg(errp, "page cache still in use!");
+            break;
         }
     }
 
@@ -3076,10 +3104,10 @@ BlockDriver bdrv_file = {
     .bdrv_co_create = raw_co_create,//块设备创建
     .bdrv_co_create_opts = raw_co_create_opts,
     .bdrv_has_zero_init = bdrv_has_zero_init_1,
-    .bdrv_has_zero_init_truncate = bdrv_has_zero_init_1,
     .bdrv_co_block_status = raw_co_block_status,
     .bdrv_co_invalidate_cache = raw_co_invalidate_cache,
     .bdrv_co_pwrite_zeroes = raw_co_pwrite_zeroes,
+    .bdrv_co_delete_file = raw_co_delete_file,
 
     .bdrv_co_preadv         = raw_co_preadv,
     .bdrv_co_pwritev        = raw_co_pwritev,
@@ -3494,6 +3522,8 @@ static BlockDriver bdrv_host_device = {
     .bdrv_reopen_prepare = raw_reopen_prepare,
     .bdrv_reopen_commit  = raw_reopen_commit,
     .bdrv_reopen_abort   = raw_reopen_abort,
+    .bdrv_co_create_opts = bdrv_co_create_opts_simple,
+    .create_opts         = &bdrv_create_opts_simple,
     .mutable_opts        = mutable_opts,
     .bdrv_co_invalidate_cache = raw_co_invalidate_cache,
     .bdrv_co_pwrite_zeroes = hdev_co_pwrite_zeroes,
@@ -3621,9 +3651,10 @@ static BlockDriver bdrv_host_cdrom = {
     .bdrv_reopen_prepare = raw_reopen_prepare,
     .bdrv_reopen_commit  = raw_reopen_commit,
     .bdrv_reopen_abort   = raw_reopen_abort,
+    .bdrv_co_create_opts = bdrv_co_create_opts_simple,
+    .create_opts         = &bdrv_create_opts_simple,
     .mutable_opts        = mutable_opts,
     .bdrv_co_invalidate_cache = raw_co_invalidate_cache,
-
 
     .bdrv_co_preadv         = raw_co_preadv,
     .bdrv_co_pwritev        = raw_co_pwritev,
@@ -3753,6 +3784,8 @@ static BlockDriver bdrv_host_cdrom = {
     .bdrv_reopen_prepare = raw_reopen_prepare,
     .bdrv_reopen_commit  = raw_reopen_commit,
     .bdrv_reopen_abort   = raw_reopen_abort,
+    .bdrv_co_create_opts = bdrv_co_create_opts_simple,
+    .create_opts         = &bdrv_create_opts_simple,
     .mutable_opts       = mutable_opts,
 
     .bdrv_co_preadv         = raw_co_preadv,

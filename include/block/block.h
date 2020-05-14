@@ -283,6 +283,7 @@ BlockDriver *bdrv_find_format(const char *format_name);
 int bdrv_create(BlockDriver *drv, const char* filename,
                 QemuOpts *opts, Error **errp);
 int bdrv_create_file(const char *filename, QemuOpts *opts, Error **errp);
+
 BlockDriverState *bdrv_new(void);
 void bdrv_append(BlockDriverState *bs_new, BlockDriverState *bs_top,
                  Error **errp);
@@ -338,9 +339,10 @@ BlockDriverState *bdrv_find_backing_image(BlockDriverState *bs,
 void bdrv_refresh_filename(BlockDriverState *bs);
 
 int coroutine_fn bdrv_co_truncate(BdrvChild *child, int64_t offset, bool exact,
-                                  PreallocMode prealloc, Error **errp);
+                                  PreallocMode prealloc, BdrvRequestFlags flags,
+                                  Error **errp);
 int bdrv_truncate(BdrvChild *child, int64_t offset, bool exact,
-                  PreallocMode prealloc, Error **errp);
+                  PreallocMode prealloc, BdrvRequestFlags flags, Error **errp);
 
 int64_t bdrv_nb_sectors(BlockDriverState *bs);
 int64_t bdrv_getlength(BlockDriverState *bs);
@@ -363,6 +365,7 @@ bool bdrv_is_backing_chain_frozen(BlockDriverState *bs, BlockDriverState *base,
 int bdrv_freeze_backing_chain(BlockDriverState *bs, BlockDriverState *base,
                               Error **errp);
 void bdrv_unfreeze_backing_chain(BlockDriverState *bs, BlockDriverState *base);
+int coroutine_fn bdrv_co_delete_file(BlockDriverState *bs, Error **errp);
 
 
 typedef struct BdrvCheckResult {
@@ -427,7 +430,6 @@ int bdrv_pdiscard(BdrvChild *child, int64_t offset, int64_t bytes);
 int bdrv_co_pdiscard(BdrvChild *child, int64_t offset, int64_t bytes);
 int bdrv_has_zero_init_1(BlockDriverState *bs);
 int bdrv_has_zero_init(BlockDriverState *bs);
-int bdrv_has_zero_init_truncate(BlockDriverState *bs);
 bool bdrv_unallocated_blocks_are_zero(BlockDriverState *bs);
 bool bdrv_can_write_zeroes_with_unmap(BlockDriverState *bs);
 int bdrv_block_status(BlockDriverState *bs, int64_t offset,

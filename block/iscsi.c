@@ -991,8 +991,7 @@ iscsi_aio_ioctl_cb(struct iscsi_context *iscsi, int status,
         acb->ioh->driver_status |= SG_ERR_DRIVER_SENSE;
 
         acb->ioh->sb_len_wr = acb->task->datain.size - 2;
-        ss = (acb->ioh->mx_sb_len >= acb->ioh->sb_len_wr) ?
-             acb->ioh->mx_sb_len : acb->ioh->sb_len_wr;
+        ss = MIN(acb->ioh->mx_sb_len, acb->ioh->sb_len_wr);
         memcpy(acb->ioh->sbp, &acb->task->datain.data[2], ss);
     }
 
@@ -1397,20 +1396,17 @@ static void iscsi_nop_timed_event(void *opaque)
 {
     IscsiLun *iscsilun = opaque;
 
-    qemu_mutex_lock(&iscsilun->mutex);
+    QEMU_LOCK_GUARD(&iscsilun->mutex);
     if (iscsi_get_nops_in_flight(iscsilun->iscsi) >= MAX_NOP_FAILURES) {
         error_report("iSCSI: NOP timeout. Reconnecting...");
         iscsilun->request_timed_out = true;
     } else if (iscsi_nop_out_async(iscsilun->iscsi, NULL, NULL, 0, NULL) != 0) {
         error_report("iSCSI: failed to sent NOP-Out. Disabling NOP messages.");
-        goto out;
+        return;
     }
 
     timer_mod(iscsilun->nop_timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + NOP_INTERVAL);
     iscsi_set_events(iscsilun);
-
-out:
-    qemu_mutex_unlock(&iscsilun->mutex);
 }
 
 static void iscsi_readcapacity_sync(IscsiLun *iscsilun, Error **errp)
@@ -2008,7 +2004,7 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
         iscsilun->cluster_size = iscsilun->bl.opt_unmap_gran *
             iscsilun->block_size;
         if (iscsilun->lbprz) {
-            ret = iscsi_allocmap_init(iscsilun, bs->open_flags);
+            ret = iscsi_allocmap_init(iscsilun, flags);
         }
     }
 
@@ -2131,7 +2127,7 @@ static void iscsi_reopen_commit(BDRVReopenState *reopen_state)
 
 static int coroutine_fn iscsi_co_truncate(BlockDriverState *bs, int64_t offset,
                                           bool exact, PreallocMode prealloc,
-                                          Error **errp)
+                                          BdrvRequestFlags flags, Error **errp)
 {
     IscsiLun *iscsilun = bs->opaque;
     int64_t cur_length;
@@ -2405,18 +2401,6 @@ out_unlock:
     return r;
 }
 
-static QemuOptsList iscsi_create_opts = {
-    .name = "iscsi-create-opts",
-    .head = QTAILQ_HEAD_INITIALIZER(iscsi_create_opts.head),
-    .desc = {
-        {
-            .name = BLOCK_OPT_SIZE,
-            .type = QEMU_OPT_SIZE,
-            .help = "Virtual disk size"
-        },
-        { /* end of list */ }
-    }
-};
 
 static const char *const iscsi_strong_runtime_opts[] = {
     "transport",
@@ -2441,6 +2425,8 @@ static BlockDriver bdrv_iscsi = {
     .bdrv_parse_filename    = iscsi_parse_filename,
     .bdrv_file_open         = iscsi_open,
     .bdrv_close             = iscsi_close,
+    .bdrv_co_create_opts    = bdrv_co_create_opts_simple,
+    .create_opts            = &bdrv_create_opts_simple,
     .bdrv_reopen_prepare    = iscsi_reopen_prepare,
     .bdrv_reopen_commit     = iscsi_reopen_commit,
     .bdrv_co_invalidate_cache = iscsi_co_invalidate_cache,
@@ -2479,6 +2465,8 @@ static BlockDriver bdrv_iser = {
     .bdrv_parse_filename    = iscsi_parse_filename,
     .bdrv_file_open         = iscsi_open,
     .bdrv_close             = iscsi_close,
+    .bdrv_co_create_opts    = bdrv_co_create_opts_simple,
+    .create_opts            = &bdrv_create_opts_simple,
     .bdrv_reopen_prepare    = iscsi_reopen_prepare,
     .bdrv_reopen_commit     = iscsi_reopen_commit,
     .bdrv_co_invalidate_cache  = iscsi_co_invalidate_cache,

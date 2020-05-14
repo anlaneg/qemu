@@ -462,7 +462,7 @@ sub top_of_kernel_tree {
 	my @tree_check = (
 		"COPYING", "MAINTAINERS", "Makefile",
 		"README.rst", "docs", "VERSION",
-		"vl.c"
+		"linux-user", "softmmu"
 	);
 
 	foreach my $check (@tree_check) {
@@ -1256,6 +1256,29 @@ sub WARN {
 	}
 }
 
+# According to tests/qtest/bios-tables-test.c: do not
+# change expected file in the same commit with adding test
+sub checkfilename {
+	my ($name, $acpi_testexpected, $acpi_nontestexpected) = @_;
+
+        # Note: shell script that rebuilds the expected files is in the same
+        # directory as files themselves.
+        # Note: allowed diff list can be changed both when changing expected
+        # files and when changing tests.
+	if ($name =~ m#^tests/data/acpi/# and not $name =~ m#^\.sh$#) {
+		$$acpi_testexpected = $name;
+	} elsif ($name =~ m#^tests/qtest/bios-tables-test-allowed-diff.h$#) {
+		$$acpi_nontestexpected = $name;
+	}
+	if (defined $$acpi_testexpected and defined $$acpi_nontestexpected) {
+		ERROR("Do not add expected files together with tests, " .
+		      "follow instructions in " .
+		      "tests/qtest/bios-tables-test.c: both " .
+		      $$acpi_testexpected . " and " .
+		      $$acpi_nontestexpected . " found\n");
+	}
+}
+
 sub process {
 	my $filename = shift;
 
@@ -1301,6 +1324,9 @@ sub process {
 	my %suppress_ifbraces;
 	my %suppress_whiletrailers;
 	my %suppress_export;
+
+        my $acpi_testexpected;
+        my $acpi_nontestexpected;
 
 	# Pre-scan the patch sanitizing the lines.
 
@@ -1431,9 +1457,11 @@ sub process {
 		if ($line =~ /^diff --git.*?(\S+)$/) {
 			$realfile = $1;
 			$realfile =~ s@^([^/]*)/@@ if (!$file);
+	                checkfilename($realfile, \$acpi_testexpected, \$acpi_nontestexpected);
 		} elsif ($line =~ /^\+\+\+\s+(\S+)/) {
 			$realfile = $1;
 			$realfile =~ s@^([^/]*)/@@ if (!$file);
+	                checkfilename($realfile, \$acpi_testexpected, \$acpi_nontestexpected);
 
 			$p1_prefix = $1;
 			if (!$file && $tree && $p1_prefix ne '' &&
