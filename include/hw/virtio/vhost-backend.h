@@ -35,7 +35,9 @@ struct vhost_vring_addr;
 struct vhost_scsi_target;
 struct vhost_iotlb_msg;
 
+//vhost后端初始化
 typedef int (*vhost_backend_init)(struct vhost_dev *dev, void *opaque);
+//vhost后端清理
 typedef int (*vhost_backend_cleanup)(struct vhost_dev *dev);
 typedef int (*vhost_backend_memslots_limit)(struct vhost_dev *dev);
 
@@ -113,7 +115,9 @@ typedef int (*vhost_set_inflight_fd_op)(struct vhost_dev *dev,
                                         struct vhost_inflight *inflight);
 
 typedef struct VhostOps {
+    //后端类型
     VhostBackendType backend_type;
+    //后端初始化
     vhost_backend_init vhost_backend_init;
     vhost_backend_cleanup vhost_backend_cleanup;
     vhost_backend_memslots_limit vhost_backend_memslots_limit;
@@ -133,7 +137,9 @@ typedef struct VhostOps {
     vhost_set_vring_call_op vhost_set_vring_call;
     vhost_set_vring_busyloop_timeout_op vhost_set_vring_busyloop_timeout;
     vhost_set_features_op vhost_set_features;
+    /*获取后端对应的功能*/
     vhost_get_features_op vhost_get_features;
+    //vhost owner设置
     vhost_set_owner_op vhost_set_owner;
     vhost_reset_device_op vhost_reset_device;
     vhost_get_vq_index_op vhost_get_vq_index;

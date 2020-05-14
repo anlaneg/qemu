@@ -746,10 +746,12 @@ ssize_t qemu_sendv_packet_async(NetClientState *sender,
     size_t size = iov_size(iov, iovcnt);
     int ret;
 
+    //超过buffer大小
     if (size > NET_BUFSIZE) {
         return size;
     }
 
+    //发送端link down或者无peer
     if (sender->link_down || !sender->peer) {
         return size;
     }

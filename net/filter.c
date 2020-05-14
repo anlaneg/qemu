@@ -20,6 +20,7 @@
 #include "net/colo.h"
 #include "migration/colo.h"
 
+/*检查nf是否未开启*/
 static inline bool qemu_can_skip_netfilter(NetFilterState *nf)
 {
     return !nf->on;
@@ -34,6 +35,7 @@ ssize_t qemu_netfilter_receive(NetFilterState *nf,
                                NetPacketSent *sent_cb)
 {
     if (qemu_can_skip_netfilter(nf)) {
+        /*未开启，直接跳过*/
         return 0;
     }
     if (nf->direction == direction ||

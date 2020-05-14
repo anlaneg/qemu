@@ -93,7 +93,7 @@ struct NetClientState {
     char *model;//作用不明，取值比如"vhost_user"
     char *name;
     char info_str[256];
-    unsigned receive_disabled : 1;
+    unsigned receive_disabled : 1;//禁止收包
     NetClientDestructor *destructor;//nc释放时调用
     unsigned int queue_index;//队列索引
     unsigned rxfilter_notify_enabled:1;

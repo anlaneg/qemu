@@ -76,6 +76,7 @@ static MemsetThread *memset_thread;
 static int memset_num_threads;
 static bool memset_thread_failed;
 
+//取当前线程id
 int qemu_get_thread_id(void)
 {
 #if defined(__linux__)
@@ -286,6 +287,7 @@ void qemu_set_cloexec(int fd)
 /*
  * Creates a pipe with FD_CLOEXEC set on both file descriptors
  */
+//通过O_CLOEXEC完成pipe创建
 int qemu_pipe(int pipefd[2])
 {
     int ret;

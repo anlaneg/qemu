@@ -37,13 +37,13 @@
 /* bottom halves (can be seen as timers which expire ASAP) */
 
 struct QEMUBH {
-    AioContext *ctx;
-    QEMUBHFunc *cb;
+    AioContext *ctx;//从属的context
+    QEMUBHFunc *cb;//回调函数
     void *opaque;
-    QEMUBH *next;
-    bool scheduled;
+    QEMUBH *next;//用于串起QEMUBH
+    bool scheduled;//是否参与调度（如果否，则不会触发其回调）
     bool idle;
-    bool deleted;
+    bool deleted;//标记需要删除(如标记为delete且不参与调度的bh将被删除及free)
 };
 
 void aio_bh_schedule_oneshot(AioContext *ctx, QEMUBHFunc *cb, void *opaque)
@@ -66,6 +66,7 @@ void aio_bh_schedule_oneshot(AioContext *ctx, QEMUBHFunc *cb, void *opaque)
     aio_notify(ctx);
 }
 
+//申请一个QEMUBH,并将其串在ctx->first_bh
 QEMUBH *aio_bh_new(AioContext *ctx, QEMUBHFunc *cb, void *opaque)
 {
     QEMUBH *bh;
@@ -76,6 +77,7 @@ QEMUBH *aio_bh_new(AioContext *ctx, QEMUBHFunc *cb, void *opaque)
         .opaque = opaque,
     };
     qemu_lockcnt_lock(&ctx->list_lock);
+    //将bh串到ctx的first_bh链头上
     bh->next = ctx->first_bh;
     /* Make sure that the members are ready before putting bh into list */
     smp_wmb();
@@ -84,6 +86,7 @@ QEMUBH *aio_bh_new(AioContext *ctx, QEMUBHFunc *cb, void *opaque)
     return bh;
 }
 
+//触发bh的回调
 void aio_bh_call(QEMUBH *bh)
 {
     bh->cb(bh->opaque);
@@ -100,7 +103,9 @@ int aio_bh_poll(AioContext *ctx)
     bool deleted = false;
 
     ret = 0;
+    //遍历ctx中所有bh
     for (bh = atomic_rcu_read(&ctx->first_bh); bh; bh = next) {
+        /*先保存next指针，防止bh被移除*/
         next = atomic_rcu_read(&bh->next);
         /* The atomic_xchg is paired with the one in qemu_bh_schedule.  The
          * implicit memory barrier ensures that the callback sees all writes
@@ -114,8 +119,11 @@ int aio_bh_poll(AioContext *ctx)
                 ret = 1;
             }
             bh->idle = 0;
+            /*触发bh回调*/
             aio_bh_call(bh);
         }
+
+        /*标记存在需要删除的bh*/
         if (bh->deleted) {
             deleted = true;
         }
@@ -123,9 +131,12 @@ int aio_bh_poll(AioContext *ctx)
 
     /* remove deleted bhs */
     if (!deleted) {
+        /*不存在需要删除的bhs,直接返回*/
         return ret;
     }
 
+    //加锁遍历ctx中的bh链表，针对每个元素，如果其被标记为需要删除，且不再
+    //调度，则将其自链表中移除掉，并释放
     if (qemu_lockcnt_dec_if_lock(&ctx->list_lock)) {
         bhp = &ctx->first_bh;
         while (*bhp) {
@@ -173,6 +184,7 @@ void qemu_bh_schedule(QEMUBH *bh)
  */
 void qemu_bh_cancel(QEMUBH *bh)
 {
+    //将QEMUBH置为不调度
     atomic_mb_set(&bh->scheduled, 0);
 }
 
@@ -181,6 +193,7 @@ void qemu_bh_cancel(QEMUBH *bh)
  */
 void qemu_bh_delete(QEMUBH *bh)
 {
+    //将其置为不调度，且标记为删除
     bh->scheduled = 0;
     bh->deleted = 1;
 }
@@ -447,6 +460,7 @@ AioContext *aio_context_new(Error **errp)
     ctx = (AioContext *) g_source_new(&aio_source_funcs, sizeof(AioContext));
     aio_context_setup(ctx);
 
+    //初始化ctx->notifier
     ret = event_notifier_init(&ctx->notifier, false);
     if (ret < 0) {
         error_setg_errno(errp, -ret, "Failed to initialize event notifier");

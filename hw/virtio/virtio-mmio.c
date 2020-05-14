@@ -327,6 +327,7 @@ static void virtio_mmio_write(void *opaque, hwaddr offset, uint64_t value,
         virtio_queue_set_align(vdev, vdev->queue_sel, value);
         break;
     case VIRTIO_MMIO_QUEUE_PFN:
+        /*设置vring的内存地址*/
         if (!proxy->legacy) {
             qemu_log_mask(LOG_GUEST_ERROR,
                           "%s: write to legacy register (0x%"

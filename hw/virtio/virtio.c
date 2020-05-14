@@ -80,10 +80,12 @@ typedef struct VRingMemoryRegionCaches {
 typedef struct VRing
 {
     unsigned int num;//队列大小
-    unsigned int num_default;
-    unsigned int align;
-    hwaddr desc;
+    unsigned int num_default;//队列默认大小
+    unsigned int align;//队列的对齐方式
+    hwaddr desc;//描述符起始地址（长度为num个sizeof(VRingDesc)）
+    //avail起始地址与desc队列紧挨在一起（长度为结构体VRingAvail，其ring数组长度为num）
     hwaddr avail;
+    //used起始地址跟在avail后面，其需要以align地址对齐
     hwaddr used;
     VRingMemoryRegionCaches *caches;
 } VRing;
@@ -118,13 +120,13 @@ struct VirtQueue
     /* Notification enabled? */
     bool notification;
 
-    uint16_t queue_index;
+    uint16_t queue_index;//队列索引
 
     unsigned int inuse;
 
     uint16_t vector;
-    VirtIOHandleOutput handle_output;//此队列的处理函数
-    VirtIOHandleAIOOutput handle_aio_output;
+    VirtIOHandleOutput handle_output;//此队列的output处理函数
+    VirtIOHandleAIOOutput handle_aio_output;//此队列的异步output处理函数
     VirtIODevice *vdev;
     EventNotifier guest_notifier;
     EventNotifier host_notifier;
@@ -170,24 +172,27 @@ static void virtio_init_region_cache(VirtIODevice *vdev, int n)
         goto out_no_cache;
     }
     new = g_new0(VRingMemoryRegionCaches, 1);
+    /*vring的desc列表内存大小*/
     size = virtio_queue_get_desc_size(vdev, n);
     packed = virtio_vdev_has_feature(vq->vdev, VIRTIO_F_RING_PACKED) ?
                                    true : false;
     len = address_space_cache_init(&new->desc, vdev->dma_as,
-                                   addr, size, packed);
+                                   addr/*desc表起始地址*/, size/*desc表大小*/, packed);
     if (len < size) {
         virtio_error(vdev, "Cannot map desc");
         goto err_desc;
     }
 
+    /*used表*/
     size = virtio_queue_get_used_size(vdev, n);
     len = address_space_cache_init(&new->used, vdev->dma_as,
-                                   vq->vring.used, size, true);
+                                   vq->vring.used/*used表起始地址*/, size/*used表大小*/, true);
     if (len < size) {
         virtio_error(vdev, "Cannot map used");
         goto err_used;
     }
 
+    /*avail表*/
     size = virtio_queue_get_avail_size(vdev, n);
     len = address_space_cache_init(&new->avail, vdev->dma_as,
                                    vq->vring.avail, size, false);
@@ -214,15 +219,18 @@ out_no_cache:
 }
 
 /* virt queue functions */
-void virtio_queue_update_rings(VirtIODevice *vdev, int n)
+void virtio_queue_update_rings(VirtIODevice *vdev, int n/*vq索引号*/)
 {
     VRing *vring = &vdev->vq[n].vring;
 
+    //未完成设置，不处理
     if (!vring->num || !vring->desc || !vring->align) {
         /* not yet setup -> nothing to do */
         return;
     }
+    //设置avail起始地址，其与desc队列紧挨在一起
     vring->avail = vring->desc + vring->num * sizeof(VRingDesc);
+    //设置used起始地址，其跟在avail后面，且以vring->align对齐
     vring->used = vring_align(vring->avail +
                               offsetof(VRingAvail, ring[vring->num]),
                               vring->align);
@@ -469,13 +477,15 @@ static void vring_packed_desc_read_flags(VirtIODevice *vdev,
     virtio_tswap16s(vdev, flags);
 }
 
+//读取i号desc表项
 static void vring_packed_desc_read(VirtIODevice *vdev,
                                    VRingPackedDesc *desc,
                                    MemoryRegionCache *cache,
-                                   int i, bool strict_order)
+                                   int i/*desc 索引*/, bool strict_order)
 {
     hwaddr off = i * sizeof(VRingPackedDesc);
 
+    //读取desc->flags
     vring_packed_desc_read_flags(vdev, &desc->flags, cache, i);
 
     if (strict_order) {
@@ -483,12 +493,17 @@ static void vring_packed_desc_read(VirtIODevice *vdev,
         smp_rmb();
     }
 
+    //读取VRingPackedDesc结构体
+    //读取desc->addr
     address_space_read_cached(cache, off + offsetof(VRingPackedDesc, addr),
                               &desc->addr, sizeof(desc->addr));
+    //读取desc->id
     address_space_read_cached(cache, off + offsetof(VRingPackedDesc, id),
                               &desc->id, sizeof(desc->id));
+    //读取desc->len
     address_space_read_cached(cache, off + offsetof(VRingPackedDesc, len),
                               &desc->len, sizeof(desc->len));
+    //完成字节序到主机序转换
     virtio_tswap64s(vdev, &desc->addr);
     virtio_tswap16s(vdev, &desc->id);
     virtio_tswap32s(vdev, &desc->len);
@@ -1245,6 +1260,7 @@ static bool virtqueue_map_desc(VirtIODevice *vdev, unsigned int *p_num_sg,
     while (sz) {
         hwaddr len = sz;
 
+        //达到最大值
         if (num_sg == max_num_sg) {
             virtio_error(vdev, "virtio: too many write descriptors in "
                                "indirect table");
@@ -1321,17 +1337,26 @@ void virtqueue_map(VirtIODevice *vdev, VirtQueueElement *elem)
     virtqueue_map_iovec(vdev, elem->out_sg, elem->out_addr, elem->out_num, 0);
 }
 
+//申请in,out指定数目的elem
 static void *virtqueue_alloc_element(size_t sz, unsigned out_num, unsigned in_num)
 {
     VirtQueueElement *elem;
+    //sz按type(in_addr[0])对齐，得出in_addr成员的offset
     size_t in_addr_ofs = QEMU_ALIGN_UP(sz, __alignof__(elem->in_addr[0]));
+    //得出out_addr成员的offset
     size_t out_addr_ofs = in_addr_ofs + in_num * sizeof(elem->in_addr[0]);
+    //得出out_addr成员的内存右边界
     size_t out_addr_end = out_addr_ofs + out_num * sizeof(elem->out_addr[0]);
+
+    //out_addr_end考虑到type(in_sg[0])对齐后，得出in_sg成员的offset
     size_t in_sg_ofs = QEMU_ALIGN_UP(out_addr_end, __alignof__(elem->in_sg[0]));
     size_t out_sg_ofs = in_sg_ofs + in_num * sizeof(elem->in_sg[0]);
+    //得出out_sg成员的右边界（即总大小）
     size_t out_sg_end = out_sg_ofs + out_num * sizeof(elem->out_sg[0]);
 
     assert(sz >= sizeof(VirtQueueElement));
+
+    //申请elem
     elem = g_malloc(out_sg_end);
     trace_virtqueue_alloc_element(elem, sz, in_num, out_num);
     elem->out_num = out_num;
@@ -1514,6 +1539,7 @@ static void *virtqueue_packed_pop(VirtQueue *vq, size_t sz)
         goto done;
     }
 
+    //取desc表项信息（vq->last_avail_idx指向）
     desc_cache = &caches->desc;
     vring_packed_desc_read(vdev, &desc, desc_cache, i, true);
     id = desc.id;
@@ -1608,16 +1634,19 @@ err_undo_map:
 void *virtqueue_pop(VirtQueue *vq, size_t sz)
 {
     if (virtio_device_disabled(vq->vdev)) {
+        //设备禁止，则返回NULL
         return NULL;
     }
 
     if (virtio_vdev_has_feature(vq->vdev, VIRTIO_F_RING_PACKED)) {
+        //设备采用packed方式的buffer内存方式
         return virtqueue_packed_pop(vq, sz);
     } else {
         return virtqueue_split_pop(vq, sz);
     }
 }
 
+//丢掉vq中所有报文
 static unsigned int virtqueue_packed_drop_all(VirtQueue *vq)
 {
     VRingMemoryRegionCaches *caches;
@@ -2142,11 +2171,15 @@ void virtio_config_modern_writel(VirtIODevice *vdev,
     }
 }
 
+//设置n号vring相关的地址
 void virtio_queue_set_addr(VirtIODevice *vdev, int n, hwaddr addr)
 {
+    //此vq未初始化，退出
     if (!vdev->vq[n].vring.num) {
         return;
     }
+
+    //设置此vq的desc地址
     vdev->vq[n].vring.desc = addr;
     virtio_queue_update_rings(vdev, n);
 }
@@ -2318,16 +2351,19 @@ void virtio_queue_set_vector(VirtIODevice *vdev, int n, uint16_t vector)
     }
 }
 
-VirtQueue *virtio_add_queue(VirtIODevice *vdev, int queue_size,
-                            VirtIOHandleOutput handle_output)
+//添加一个新的队列
+VirtQueue *virtio_add_queue(VirtIODevice *vdev, int queue_size/*队列大小*/,
+                            VirtIOHandleOutput handle_output/*队列输出函数*/)
 {
     int i;
 
+    //找一个未初始化的队列
     for (i = 0; i < VIRTIO_QUEUE_MAX; i++) {
         if (vdev->vq[i].vring.num == 0)
             break;
     }
 
+    //未找到可使用的队列，或者队列长度过大，则abort
     if (i == VIRTIO_QUEUE_MAX || queue_size > VIRTQUEUE_MAX_SIZE)
         abort();
 
@@ -2339,6 +2375,7 @@ VirtQueue *virtio_add_queue(VirtIODevice *vdev, int queue_size,
     vdev->vq[i].used_elems = g_malloc0(sizeof(VirtQueueElement) *
                                        queue_size);
 
+    /*返回新分配的队列序号*/
     return &vdev->vq[i];
 }
 
@@ -3220,15 +3257,19 @@ hwaddr virtio_queue_get_used_addr(VirtIODevice *vdev, int n)
     return vdev->vq[n].vring.used;
 }
 
+//返回队列n的desc队列大小
 hwaddr virtio_queue_get_desc_size(VirtIODevice *vdev, int n)
 {
+    //desc队列是由 num个VringDesc组成的
     return sizeof(VRingDesc) * vdev->vq[n].vring.num;
 }
 
+//返回队列n的avail队列大小
 hwaddr virtio_queue_get_avail_size(VirtIODevice *vdev, int n)
 {
     int s;
 
+    //packet时，其大小为VRingPackedDescEvent结构体
     if (virtio_vdev_has_feature(vdev, VIRTIO_F_RING_PACKED)) {
         return sizeof(struct VRingPackedDescEvent);
     }
@@ -3238,10 +3279,12 @@ hwaddr virtio_queue_get_avail_size(VirtIODevice *vdev, int n)
         sizeof(uint16_t) * vdev->vq[n].vring.num + s;
 }
 
+//返回队列n的used队列大小
 hwaddr virtio_queue_get_used_size(VirtIODevice *vdev, int n)
 {
     int s;
 
+    //packed类型的，其used队列为结构体VRingPackedDescEvent
     if (virtio_vdev_has_feature(vdev, VIRTIO_F_RING_PACKED)) {
         return sizeof(struct VRingPackedDescEvent);
     }
@@ -3370,6 +3413,7 @@ VirtQueue *virtio_get_queue(VirtIODevice *vdev, int n)
     return vdev->vq + n;
 }
 
+//取队列索引
 uint16_t virtio_get_queue_index(VirtQueue *vq)
 {
     return vq->queue_index;

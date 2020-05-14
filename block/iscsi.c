@@ -1368,6 +1368,7 @@ static void apply_header_digest(struct iscsi_context *iscsi, QemuOpts *opts,
     }
 }
 
+//获得发起者名称
 static char *get_initiator_name(QemuOpts *opts)
 {
     const char *name;
@@ -1381,6 +1382,7 @@ static char *get_initiator_name(QemuOpts *opts)
 
     uuid_info = qmp_query_uuid(NULL);
     if (strcmp(uuid_info->UUID, UUID_NONE) == 0) {
+        //使用qemu vm名称
         name = qemu_get_vm_name();
     } else {
         name = uuid_info->UUID;
@@ -1805,7 +1807,7 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
 
     transport_name = qemu_opt_get(opts, "transport");
     portal = qemu_opt_get(opts, "portal");
-    target = qemu_opt_get(opts, "target");
+    target = qemu_opt_get(opts, "target");/*iscsi target名称*/
     lun = qemu_opt_get_number(opts, "lun", 0);
 
     if (!transport_name || !portal || !target) {
@@ -1839,12 +1841,14 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
         goto out;
     }
 #if LIBISCSI_API_VERSION >= (20160603)
+    //初始化transport
     if (iscsi_init_transport(iscsi, transport)) {
         error_setg(errp, ("Error initializing transport."));
         ret = -EINVAL;
         goto out;
     }
 #endif
+    //设置target名称
     if (iscsi_set_targetname(iscsi, target)) {
         error_setg(errp, "iSCSI: Failed to set target name.");
         ret = -EINVAL;
@@ -1859,6 +1863,7 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
         goto out;
     }
 
+    //设置session类型
     if (iscsi_set_session_type(iscsi, ISCSI_SESSION_NORMAL) != 0) {
         error_setg(errp, "iSCSI: Failed to set session type to normal.");
         ret = -EINVAL;
@@ -1883,6 +1888,7 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
     }
 #endif
 
+    //完成到target的连接及login
     if (iscsi_full_connect_sync(iscsi, portal, lun) != 0) {
         error_setg(errp, "iSCSI: Failed to connect to LUN : %s",
             iscsi_get_error(iscsi));
@@ -2426,6 +2432,7 @@ static const char *const iscsi_strong_runtime_opts[] = {
     NULL
 };
 
+//iscsi块设备驱动
 static BlockDriver bdrv_iscsi = {
     .format_name     = "iscsi",
     .protocol_name   = "iscsi",
@@ -2463,6 +2470,7 @@ static BlockDriver bdrv_iscsi = {
 };
 
 #if LIBISCSI_API_VERSION >= (20160603)
+//使用rdma来传输iscsi
 static BlockDriver bdrv_iser = {
     .format_name     = "iser",
     .protocol_name   = "iser",
@@ -2502,6 +2510,7 @@ static BlockDriver bdrv_iser = {
 
 static void iscsi_block_init(void)
 {
+    //iscsi块设备驱动注册
     bdrv_register(&bdrv_iscsi);
 #if LIBISCSI_API_VERSION >= (20160603)
     bdrv_register(&bdrv_iser);

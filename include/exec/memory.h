@@ -681,10 +681,10 @@ typedef struct FlatRange FlatRange;
  */
 struct FlatView {
     struct rcu_head rcu;
-    unsigned ref;
-    FlatRange *ranges;
-    unsigned nr;
-    unsigned nr_allocated;
+    unsigned ref;//引用计数
+    FlatRange *ranges;//存放range
+    unsigned nr;//当前ranges数组大小
+    unsigned nr_allocated;//申请的可用ranges数组大小
     struct AddressSpaceDispatch *dispatch;
     MemoryRegion *root;
 };
@@ -1217,6 +1217,7 @@ static inline bool memory_region_is_romd(MemoryRegion *mr)
 static inline IOMMUMemoryRegion *memory_region_get_iommu(MemoryRegion *mr)
 {
     if (mr->alias) {
+        /*有别名，递归取别名对应的memory region*/
         return memory_region_get_iommu(mr->alias);
     }
     if (mr->is_iommu) {
@@ -2131,9 +2132,9 @@ MemTxResult address_space_write_rom(AddressSpace *as, hwaddr addr,
 #include "exec/memory_ldst_phys.inc.h"
 
 struct MemoryRegionCache {
-    void *ptr;
+    void *ptr;//起始地址
     hwaddr xlat;
-    hwaddr len;
+    hwaddr len;//终止地址
     FlatView *fv;
     MemoryRegionSection mrs;
     bool is_write;
@@ -2416,8 +2417,10 @@ static inline void
 address_space_read_cached(MemoryRegionCache *cache, hwaddr addr,
                           void *buf, hwaddr len)
 {
+    //(addr,addr+len)范围内的内存在cache中
     assert(addr < cache->len && len <= cache->len - addr);
     if (likely(cache->ptr)) {
+        //自cache中直接读取
         memcpy(buf, cache->ptr + addr, len);
     } else {
         address_space_read_cached_slow(cache, addr, buf, len);

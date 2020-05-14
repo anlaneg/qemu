@@ -54,12 +54,13 @@ typedef struct VirtQueueElement
     unsigned int index;
     unsigned int len;
     unsigned int ndescs;
-    unsigned int out_num;
-    unsigned int in_num;
-    hwaddr *in_addr;
-    hwaddr *out_addr;
-    struct iovec *in_sg;
-    struct iovec *out_sg;
+    unsigned int out_num;//out_addr数组长度
+    unsigned int in_num;//in_addr数组长度
+    hwaddr *in_addr;//平坦内存（长度为in_num)
+    hwaddr *out_addr;//平坦内存（长度为out_num)
+    //这之间可能有空隙
+    struct iovec *in_sg;//平坦内存（长度为in_num)
+    struct iovec *out_sg;//平坦内存（长度为out_num)
 } VirtQueueElement;
 
 #define VIRTIO_QUEUE_MAX 1024
@@ -343,12 +344,14 @@ static inline bool virtio_has_feature(uint64_t features, unsigned int fbit)
     return !!(features & (1ULL << fbit));
 }
 
+//检查virtio vdev是否具有功能fbit
 static inline bool virtio_vdev_has_feature(VirtIODevice *vdev,
                                            unsigned int fbit)
 {
     return virtio_has_feature(vdev->guest_features, fbit);
 }
 
+//检查virtio host设备是否具有功能fbits
 static inline bool virtio_host_has_feature(VirtIODevice *vdev,
                                            unsigned int fbit)
 {
@@ -385,6 +388,7 @@ static inline void virtio_set_started(VirtIODevice *vdev, bool started)
     }
 }
 
+//disable virtio设备
 static inline void virtio_set_disabled(VirtIODevice *vdev, bool disable)
 {
     if (vdev->use_disabled_flag) {
@@ -392,6 +396,7 @@ static inline void virtio_set_disabled(VirtIODevice *vdev, bool disable)
     }
 }
 
+//检查设备是否被disabled
 static inline bool virtio_device_disabled(VirtIODevice *vdev)
 {
     return unlikely(vdev->disabled || vdev->broken);

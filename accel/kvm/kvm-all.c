@@ -356,6 +356,7 @@ static int kvm_get_vcpu(KVMState *s, unsigned long vcpu_id)
 {
     struct KVMParkedVcpu *cpu;
 
+    //如果vcpu_id已存在，则直接返回对应的kvm_fd
     QLIST_FOREACH(cpu, &s->kvm_parked_vcpus, node) {
         if (cpu->vcpu_id == vcpu_id) {
             int kvm_fd;
@@ -367,6 +368,7 @@ static int kvm_get_vcpu(KVMState *s, unsigned long vcpu_id)
         }
     }
 
+    //创建vcpu并返回对应的kvm_fd
     return kvm_vm_ioctl(s, KVM_CREATE_VCPU, (void *)vcpu_id);
 }
 
@@ -2350,6 +2352,7 @@ int kvm_cpu_exec(CPUState *cpu)
          */
         smp_rmb();
 
+        //qemu进程获得cpu,通过ioctl切换到guest
         run_ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
 
         attrs = kvm_arch_post_run(cpu, run);
@@ -2510,11 +2513,13 @@ int kvm_vcpu_ioctl(CPUState *cpu, int type, ...)
     void *arg;
     va_list ap;
 
+    //构造调用参数
     va_start(ap, type);
     arg = va_arg(ap, void *);
     va_end(ap);
 
     trace_kvm_vcpu_ioctl(cpu->cpu_index, type, arg);
+    //执行vcpu的ioctl
     ret = ioctl(cpu->kvm_fd, type, arg);
     if (ret == -1) {
         ret = -errno;

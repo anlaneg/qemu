@@ -93,7 +93,7 @@ static unsigned int throttle_percentage;
 
 bool cpu_is_stopped(CPUState *cpu)
 {
-    return cpu->stopped || !runstate_is_running();
+    return cpu->stopped || !runstate_is_running()/*当前非运行状态*/;
 }
 
 static bool cpu_thread_is_idle(CPUState *cpu)
@@ -1049,6 +1049,7 @@ int vm_shutdown(void)
     return do_vm_stop(RUN_STATE_SHUTDOWN, false);
 }
 
+//检查此cpu是否可继续运行
 static bool cpu_can_run(CPUState *cpu)
 {
     if (cpu->stop) {
@@ -1244,6 +1245,7 @@ static void *qemu_kvm_cpu_thread_fn(void *arg)
 
     do {
         if (cpu_can_run(cpu)) {
+            //cpu可以继续运行，循环调用kvm_cpu_exec
             r = kvm_cpu_exec(cpu);
             if (r == EXCP_DEBUG) {
                 cpu_handle_guest_debug(cpu);

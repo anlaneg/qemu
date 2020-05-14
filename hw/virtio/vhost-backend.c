@@ -29,15 +29,18 @@ static int vhost_kernel_call(struct vhost_dev *dev, unsigned long int request,
     return ioctl(fd, request, arg);
 }
 
+//vhost kernel后端初始化
 static int vhost_kernel_init(struct vhost_dev *dev, void *opaque)
 {
     assert(dev->vhost_ops->backend_type == VHOST_BACKEND_TYPE_KERNEL);
 
+    //设置vhost对应的fd(kernel方式时为/dev/vhost-net对应的fd）
     dev->opaque = opaque;
 
     return 0;
 }
 
+//关闭dev对应的fd
 static int vhost_kernel_cleanup(struct vhost_dev *dev)
 {
     int fd = (uintptr_t) dev->opaque;
@@ -47,11 +50,15 @@ static int vhost_kernel_cleanup(struct vhost_dev *dev)
     return close(fd);
 }
 
+//显示vhost支持的最大mem region
 static int vhost_kernel_memslots_limit(struct vhost_dev *dev)
 {
     int limit = 64;
     char *s;
 
+    //显示最大mem regions
+    //host# cat /sys/module/vhost/parameters/max_mem_regions
+    //64
     if (g_file_get_contents("/sys/module/vhost/parameters/max_mem_regions",
                             &s, NULL, NULL)) {
         uint64_t val = g_ascii_strtoull(s, NULL, 10);
@@ -66,18 +73,22 @@ static int vhost_kernel_memslots_limit(struct vhost_dev *dev)
     return limit;
 }
 
+//通过/dev/vhost-net 字符设备设置后端对应的socket
 static int vhost_kernel_net_set_backend(struct vhost_dev *dev,
                                         struct vhost_vring_file *file)
 {
+    /*为指定vring设置后端对应的socket*/
     return vhost_kernel_call(dev, VHOST_NET_SET_BACKEND, file);
 }
 
+/*通过/dev/vhost-scsi设置scsi的对端*/
 static int vhost_kernel_scsi_set_endpoint(struct vhost_dev *dev,
                                           struct vhost_scsi_target *target)
 {
     return vhost_kernel_call(dev, VHOST_SCSI_SET_ENDPOINT, target);
 }
 
+/*通过/dev/vhost-scsi清除scsi的对端*/
 static int vhost_kernel_scsi_clear_endpoint(struct vhost_dev *dev,
                                             struct vhost_scsi_target *target)
 {
@@ -101,6 +112,7 @@ static int vhost_kernel_set_mem_table(struct vhost_dev *dev,
     return vhost_kernel_call(dev, VHOST_SET_MEM_TABLE, mem);
 }
 
+//vhost-net设置vring地址
 static int vhost_kernel_set_vring_addr(struct vhost_dev *dev,
                                        struct vhost_vring_addr *addr)
 {
@@ -163,6 +175,7 @@ static int vhost_kernel_get_features(struct vhost_dev *dev,
 
 static int vhost_kernel_set_owner(struct vhost_dev *dev)
 {
+    //设置owner为NULL
     return vhost_kernel_call(dev, VHOST_SET_OWNER, NULL);
 }
 
@@ -243,7 +256,9 @@ static const VhostOps kernel_ops = {
         .vhost_backend_init = vhost_kernel_init,
         .vhost_backend_cleanup = vhost_kernel_cleanup,
         .vhost_backend_memslots_limit = vhost_kernel_memslots_limit,
+        /*设置后端fd*/
         .vhost_net_set_backend = vhost_kernel_net_set_backend,
+        /*vhost-scsi设置*/
         .vhost_scsi_set_endpoint = vhost_kernel_scsi_set_endpoint,
         .vhost_scsi_clear_endpoint = vhost_kernel_scsi_clear_endpoint,
         .vhost_scsi_get_abi_version = vhost_kernel_scsi_get_abi_version,
@@ -260,6 +275,7 @@ static const VhostOps kernel_ops = {
                                 vhost_kernel_set_vring_busyloop_timeout,
         .vhost_set_features = vhost_kernel_set_features,
         .vhost_get_features = vhost_kernel_get_features,
+        /*设置owner*/
         .vhost_set_owner = vhost_kernel_set_owner,
         .vhost_reset_device = vhost_kernel_reset_device,
         .vhost_get_vq_index = vhost_kernel_get_vq_index,

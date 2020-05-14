@@ -264,13 +264,17 @@ static FlatView *flatview_new(MemoryRegion *mr_root)
  */
 static void flatview_insert(FlatView *view, unsigned pos, FlatRange *range)
 {
+    //ranges已用满，需要扩充，扩大为原来的两倍
     if (view->nr == view->nr_allocated) {
         view->nr_allocated = MAX(2 * view->nr, 10);
         view->ranges = g_realloc(view->ranges,
                                     view->nr_allocated * sizeof(*view->ranges));
     }
+
+    //range需要放在pos位置，故post位置向后所有其它range均需要移动一格，空出pos位置
     memmove(view->ranges + pos + 1, view->ranges + pos,
             (view->nr - pos) * sizeof(FlatRange));
+    //当range放在pos位置
     view->ranges[pos] = *range;
     memory_region_ref(range->mr);
     ++view->nr;
@@ -729,6 +733,7 @@ static FlatView *generate_memory_topology(MemoryRegion *mr)
         flatview_add_to_dispatch(view, &mrs);
     }
     address_space_dispatch_compact(view->dispatch);
+    //更新mr对应的view
     g_hash_table_replace(flat_views, mr, view);
 
     return view;
@@ -998,6 +1003,7 @@ static void address_space_set_flatview(AddressSpace *as)
 {
     FlatView *old_view = address_space_to_flatview(as);
     MemoryRegion *physmr = memory_region_get_flatview_root(as->root);
+    /*在flat_views中用physmr做key查找view,*/
     FlatView *new_view = g_hash_table_lookup(flat_views, physmr);
 
     assert(new_view);

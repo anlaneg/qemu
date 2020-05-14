@@ -36,7 +36,7 @@
 struct vhost_net {
     struct vhost_dev dev;
     struct vhost_virtqueue vqs[2];
-    int backend;
+    int backend;/*后端对应的信息，例如tap口时tap对应的fd*/
     NetClientState *nc;
 };
 
@@ -148,6 +148,7 @@ struct vhost_net *vhost_net_init(VhostNetOptions *options)
     uint64_t features = 0;
 
     if (!options->net_backend) {
+        /*vhost后端目前有两种，一种是vhost-user,一种是kernel实现的vhost-net*/
         fprintf(stderr, "vhost-net requires net backend to be setup\n");
         goto fail;
     }
@@ -158,16 +159,17 @@ struct vhost_net *vhost_net_init(VhostNetOptions *options)
     net->dev.vqs = net->vqs;
 
     if (backend_kernel) {
-    		//kernel vhost处理
+    	//kernel vhost处理
         r = vhost_net_get_fd(options->net_backend);
         if (r < 0) {
             goto fail;
         }
         net->dev.backend_features = qemu_has_vnet_hdr(options->net_backend)
             ? 0 : (1ULL << VHOST_NET_F_VIRTIO_NET_HDR);
-        net->backend = r;
+        net->backend = r;/*设置后端tap/tun等口对应的fd*/
         net->dev.protocol_features = 0;
     } else {
+        /*vhost-user时，初始化*/
         net->dev.backend_features = 0;
         net->dev.protocol_features = 0;
         net->backend = -1;

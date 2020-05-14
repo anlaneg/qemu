@@ -25,13 +25,13 @@
 
 struct AioHandler
 {
-    GPollFD pfd;
+    GPollFD pfd;//可被poll的fd
     IOHandler *io_read;
     IOHandler *io_write;
     AioPollFn *io_poll;
     IOHandler *io_poll_begin;
     IOHandler *io_poll_end;
-    int deleted;
+    int deleted;/*指明需要被删除*/
     void *opaque;
     bool is_external;
     QLIST_ENTRY(AioHandler) node;
@@ -186,6 +186,7 @@ static bool aio_epoll_check_poll(AioContext *ctx, GPollFD *pfds,
 
 #endif
 
+//通过fd查找记录的非delete aio handler
 static AioHandler *find_aio_handler(AioContext *ctx, int fd)
 {
     AioHandler *node;
@@ -199,6 +200,7 @@ static AioHandler *find_aio_handler(AioContext *ctx, int fd)
     return NULL;
 }
 
+//删除aio handler
 static bool aio_remove_fd_handler(AioContext *ctx, AioHandler *node)
 {
     /* If the GSource is in the process of being destroyed then
@@ -224,17 +226,18 @@ static bool aio_remove_fd_handler(AioContext *ctx, AioHandler *node)
     return true;
 }
 
+//更新,删除(回调为NULL)或者新建 aiohandler
 void aio_set_fd_handler(AioContext *ctx,
                         int fd,
                         bool is_external,
-                        IOHandler *io_read,
-                        IOHandler *io_write,
-                        AioPollFn *io_poll,
-                        void *opaque)
+                        IOHandler *io_read/*读回调*/,
+                        IOHandler *io_write/*写回调*/,
+                        AioPollFn *io_poll/*轮询回调*/,
+                        void *opaque/*回调参数*/)
 {
     AioHandler *node;
     AioHandler *new_node = NULL;
-    bool is_new = false;
+    bool is_new = false;/*是否需要新建aio handler*/
     bool deleted = false;
     int poll_disable_change;
 
@@ -245,6 +248,7 @@ void aio_set_fd_handler(AioContext *ctx,
 
     /* Are we deleting the fd handler? */
     if (!io_read && !io_write && !io_poll) {
+        /*未指定读写轮回调，如果未查到node,则直接返回，否则更新为无关心event*/
         if (node == NULL) {
             qemu_lockcnt_unlock(&ctx->list_lock);
             return;
@@ -256,6 +260,7 @@ void aio_set_fd_handler(AioContext *ctx,
     } else {
         poll_disable_change = !io_poll - (node && !node->io_poll);
         if (node == NULL) {
+            /*未查找到，需要新建*/
             is_new = true;
         }
         /* Alloc and insert if it's not already there */
@@ -268,6 +273,7 @@ void aio_set_fd_handler(AioContext *ctx,
         new_node->opaque = opaque;
         new_node->is_external = is_external;
 
+        //决定使用传入的fd，还是旧的pfd
         if (is_new) {
             new_node->pfd.fd = fd;
         } else {
@@ -277,11 +283,15 @@ void aio_set_fd_handler(AioContext *ctx,
         /*添加此事件到poll*/
         g_source_add_poll(&ctx->source, &new_node->pfd);
 
+        //指明pollfd，当前关注的事件
         new_node->pfd.events = (io_read ? G_IO_IN | G_IO_HUP | G_IO_ERR : 0);
         new_node->pfd.events |= (io_write ? G_IO_OUT | G_IO_ERR : 0);
 
+        //将aio node添加到aio_handlers
         QLIST_INSERT_HEAD_RCU(&ctx->aio_handlers, new_node, node);
     }
+
+    /*存在旧的node,为更新或删除操作，当前new_node已加入，将旧的移除掉*/
     if (node) {
         deleted = aio_remove_fd_handler(ctx, node);
     }
@@ -295,6 +305,7 @@ void aio_set_fd_handler(AioContext *ctx,
     atomic_set(&ctx->poll_disable_cnt,
                atomic_read(&ctx->poll_disable_cnt) + poll_disable_change);
 
+    //自epoll中添加或移除node
     if (new_node) {
         aio_epoll_update(ctx, new_node, is_new);
     } else if (node) {
@@ -329,6 +340,7 @@ void aio_set_event_notifier(AioContext *ctx,
                             EventNotifierHandler *io_read,
                             AioPollFn *io_poll)
 {
+    /*notifier支持读及poll回调*/
     aio_set_fd_handler(ctx, event_notifier_get_fd(notifier), is_external,
                        (IOHandler *)io_read, NULL, io_poll, notifier);
 }
@@ -745,6 +757,7 @@ void aio_context_setup(AioContext *ctx)
 {
 #ifdef CONFIG_EPOLL_CREATE1
     assert(!ctx->epollfd);
+    //创建epollfd
     ctx->epollfd = epoll_create1(EPOLL_CLOEXEC);
     if (ctx->epollfd == -1) {
         fprintf(stderr, "Failed to create epoll instance: %s", strerror(errno));

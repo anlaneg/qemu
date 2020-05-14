@@ -3555,6 +3555,7 @@ void *address_space_map(AddressSpace *as,
     FlatView *fv;
 
     if (len == 0) {
+        /*dma要求长度为0的数据，返回NULL*/
         return NULL;
     }
 
@@ -3650,8 +3651,8 @@ void cpu_physical_memory_unmap(void *buffer, hwaddr len,
 
 int64_t address_space_cache_init(MemoryRegionCache *cache,
                                  AddressSpace *as,
-                                 hwaddr addr,
-                                 hwaddr len,
+                                 hwaddr addr/*space起始地址*/,
+                                 hwaddr len/*space长度*/,
                                  bool is_write)
 {
     AddressSpaceDispatch *d;

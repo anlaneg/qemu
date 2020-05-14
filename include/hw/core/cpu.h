@@ -353,7 +353,7 @@ struct CPUState {
     int nr_cores;
     int nr_threads;
 
-    struct QemuThread *thread;
+    struct QemuThread *thread;//cpu所属线程
 #ifdef _WIN32
     HANDLE hThread;
 #endif
@@ -362,9 +362,9 @@ struct CPUState {
     struct QemuCond *halt_cond;
     bool thread_kicked;
     bool created;
-    bool stop;
-    bool stopped;
-    bool unplug;
+    bool stop;//标明cpu需要停止
+    bool stopped;//标明cpu已停止
+    bool unplug;//是否被拔出
     bool crash_occurred;
     bool exit_request;
     bool in_exclusive_context;

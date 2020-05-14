@@ -11,6 +11,7 @@ struct vhost_net;
 typedef struct vhost_net VHostNetState;
 
 typedef struct VhostNetOptions {
+    //后端类型
     VhostBackendType backend_type;
     NetClientState *net_backend;
     uint32_t busyloop_timeout;

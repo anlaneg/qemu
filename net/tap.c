@@ -340,6 +340,7 @@ static void tap_poll(NetClientState *nc, bool enable)
     tap_write_poll(s, enable);
 }
 
+/*取tap口对应的fd*/
 int tap_get_fd(NetClientState *nc)
 {
     TAPState *s = DO_UPCAST(TAPState, nc, nc);
@@ -380,6 +381,7 @@ static TAPState *net_tap_fd_init(NetClientState *peer,
 
     s = DO_UPCAST(TAPState, nc, nc);
 
+    /*设置tap对应的fd*/
     s->fd = fd;
     s->host_vnet_hdr_len = vnet_hdr ? sizeof(struct virtio_net_hdr) : 0;
     s->using_vnet_hdr = false;
@@ -701,6 +703,7 @@ static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer,
         vhostfdname || (tap->has_vhostforce && tap->vhostforce)) {
         VhostNetOptions options;
 
+        /*使用vhost-net做为后端*/
         options.backend_type = VHOST_BACKEND_TYPE_KERNEL;
         options.net_backend = &s->nc;
         if (tap->has_poll_us) {
@@ -721,6 +724,7 @@ static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer,
             }
             qemu_set_nonblock(vhostfd);
         } else {
+            /*打开vhost-net字符设备，获得对应的fd*/
             vhostfd = open("/dev/vhost-net", O_RDWR);
             if (vhostfd < 0) {
                 if (tap->has_vhostforce && tap->vhostforce) {
@@ -736,6 +740,7 @@ static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer,
         }
         options.opaque = (void *)(uintptr_t)vhostfd;
 
+        /*初始化vhost-net*/
         s->vhost_net = vhost_net_init(&options);
         if (!s->vhost_net) {
             if (tap->has_vhostforce && tap->vhostforce) {

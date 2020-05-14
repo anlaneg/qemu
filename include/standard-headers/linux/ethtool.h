@@ -1633,9 +1633,9 @@ static inline int ethtool_validate_speed(uint32_t speed)
 }
 
 /* Duplex, half or full. */
-#define DUPLEX_HALF		0x00
-#define DUPLEX_FULL		0x01
-#define DUPLEX_UNKNOWN		0xff
+#define DUPLEX_HALF		0x00 //半双工
+#define DUPLEX_FULL		0x01 //全双工
+#define DUPLEX_UNKNOWN		0xff //双工模式未知
 
 static inline int ethtool_validate_duplex(uint8_t duplex)
 {

@@ -184,15 +184,18 @@ static uint64_t vhost_get_log_size(struct vhost_dev *dev)
     return log_size;
 }
 
+//申请size个*(log->log)
 static struct vhost_log *vhost_log_alloc(uint64_t size, bool share)
 {
     Error *err = NULL;
     struct vhost_log *log;
+    /*申请size个vhost_log_chunk_t*/
     uint64_t logsize = size * sizeof(*(log->log));
     int fd = -1;
 
     log = g_new0(struct vhost_log, 1);
     if (share) {
+        /*共享方式，通过memfd方式申请内存*/
         log->log = qemu_memfd_alloc("vhost-log", logsize,
                                     F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL,
                                     &fd, &err);
@@ -218,13 +221,16 @@ static struct vhost_log *vhost_log_get(uint64_t size, bool share)
     struct vhost_log *log = share ? vhost_log_shm : vhost_log;
 
     if (!log || log->size != size) {
+        /*完成vhost_log申请*/
         log = vhost_log_alloc(size, share);
+        /*初始化相应静态变量*/
         if (share) {
             vhost_log_shm = log;
         } else {
             vhost_log = log;
         }
     } else {
+        //增加引用计数
         ++log->refcnt;
     }
 
@@ -268,7 +274,7 @@ static bool vhost_dev_log_is_shared(struct vhost_dev *dev)
            dev->vhost_ops->vhost_requires_shm_log(dev);
 }
 
-static inline void vhost_dev_log_resize(struct vhost_dev *dev, uint64_t size)
+static inline void vhost_dev_log_resize(struct vhost_dev *dev, uint64_t size/*vhost log数目*/)
 {
     struct vhost_log *log = vhost_log_get(size, vhost_dev_log_is_shared(dev));
     uint64_t log_base = (uintptr_t)log->log;
@@ -740,6 +746,7 @@ static void vhost_iommu_region_del(MemoryListener *listener,
     }
 }
 
+/*知会vhost后端vring的地址*/
 static int vhost_virtqueue_set_addr(struct vhost_dev *dev,
                                     struct vhost_virtqueue *vq,
                                     unsigned idx, bool enable_log)
@@ -752,6 +759,7 @@ static int vhost_virtqueue_set_addr(struct vhost_dev *dev,
         .log_guest_addr = vq->used_phys,
         .flags = enable_log ? (1 << VHOST_VRING_F_LOG) : 0,
     };
+    /*知会后端vring的地址*/
     int r = dev->vhost_ops->vhost_set_vring_addr(dev, &addr);
     if (r < 0) {
         VHOST_OPS_DEBUG("vhost_set_vring_addr failed");
@@ -1208,7 +1216,7 @@ static void vhost_virtqueue_cleanup(struct vhost_virtqueue *vq)
 }
 
 int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
-                   VhostBackendType backend_type, uint32_t busyloop_timeout)
+                   VhostBackendType backend_type/*vhost后端类型*/, uint32_t busyloop_timeout)
 {
     uint64_t features;
     int i, r, n_initialized_vqs = 0;
@@ -1718,6 +1726,7 @@ void vhost_dev_stop(struct vhost_dev *hdev, VirtIODevice *vdev)
     hdev->vdev = NULL;
 }
 
+/*设置vhost-net对应的后端socket*/
 int vhost_net_set_backend(struct vhost_dev *hdev,
                           struct vhost_vring_file *file)
 {

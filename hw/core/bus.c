@@ -217,6 +217,7 @@ static void qbus_initfn(Object *obj)
                              object_property_allow_set_link,
                              0,
                              NULL);
+    //向device object添加bool类型的属性realized
     object_property_add_bool(obj, "realized",
                              bus_get_realized, bus_set_realized, NULL);
 }

@@ -71,7 +71,7 @@ struct vhost_dev {
     int n_tmp_sections;
     MemoryRegionSection *tmp_sections;
     struct vhost_virtqueue *vqs;
-    int nvqs;
+    int nvqs;//vq数目
     /* the first virtqueue which would be used by this vhost dev */
     int vq_index;
     uint64_t features;

@@ -594,6 +594,7 @@ static void virtio_net_set_mrg_rx_bufs(VirtIONet *n, int mergeable_rx_bufs,
     }
 }
 
+//按后端类型，确定tx的最大值
 static int virtio_net_max_tx_queue_size(VirtIONet *n)
 {
     NetClientState *peer = n->nic_conf.peers.ncs[0];
@@ -1324,13 +1325,17 @@ static void virtio_net_hdr_swap(VirtIODevice *vdev, struct virtio_net_hdr *hdr)
  * cache.
  */
 static void work_around_broken_dhclient(struct virtio_net_hdr *hdr,
-                                        uint8_t *buf, size_t size)
+                                        uint8_t *buf/*报文起始位置*/, size_t size)
 {
+    //这里有个小问题，buf访问已到达udp源port，但size检查却要求size > 27
+
+    //virtio指明需要计算checksum, 针对dhcp报文，计算checksum
     if ((hdr->flags & VIRTIO_NET_HDR_F_NEEDS_CSUM) && /* missing csum */
         (size > 27 && size < 1500) && /* normal sized MTU */
         (buf[12] == 0x08 && buf[13] == 0x00) && /* ethertype == IPv4 */
         (buf[23] == 17) && /* ip.protocol == UDP */
         (buf[34] == 0 && buf[35] == 67)) { /* udp.srcport == bootps */
+        //计算tcp,udp checksum
         net_checksum_calculate(buf, size);
         hdr->flags &= ~VIRTIO_NET_HDR_F_NEEDS_CSUM;
     }
@@ -1358,6 +1363,7 @@ static void receive_header(VirtIONet *n, const struct iovec *iov, int iov_cnt,
     }
 }
 
+/*检查报文是否可接受，返回0不可接受，返回1可接受*/
 static int receive_filter(VirtIONet *n, const uint8_t *buf, int size)
 {
     static const uint8_t bcast[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
@@ -1368,23 +1374,30 @@ static int receive_filter(VirtIONet *n, const uint8_t *buf, int size)
     if (n->promisc)
         return 1;
 
+    //偏移到mac头部
     ptr += n->host_hdr_len;
 
+    //检查ethtype是否为0x8100 (vlan报文）
     if (!memcmp(&ptr[12], vlan, sizeof(vlan))) {
+        //提取vlanid （12bits)
         int vid = lduw_be_p(ptr + 14) & 0xfff;
         if (!(n->vlans[vid >> 5] & (1U << (vid & 0x1f))))
             return 0;
     }
 
+    //检查目的mac地址是否为组播地址
     if (ptr[0] & 1) { // multicast
         if (!memcmp(ptr, bcast, sizeof(bcast))) {
+            //确认目的mac为组播mac,检查是否收取广播地址
             return !n->nobcast;
         } else if (n->nomulti) {
+            //不收取组播地址，返回0
             return 0;
         } else if (n->allmulti || n->mac_table.multi_overflow) {
             return 1;
         }
 
+        //检查此mac是否已配置
         for (i = n->mac_table.first_multi; i < n->mac_table.in_use; i++) {
             if (!memcmp(ptr, &n->mac_table.macs[i * ETH_ALEN], ETH_ALEN)) {
                 return 1;
@@ -1392,13 +1405,17 @@ static int receive_filter(VirtIONet *n, const uint8_t *buf, int size)
         }
     } else { // unicast
         if (n->nouni) {
+            //不收取单播地址，返回0
             return 0;
         } else if (n->alluni || n->mac_table.uni_overflow) {
+            //容许所有单播，返回1
             return 1;
         } else if (!memcmp(ptr, n->mac, ETH_ALEN)) {
+            //容许设备对应的mac地址
             return 1;
         }
 
+        //检查此mac地址是否已配置
         for (i = 0; i < n->mac_table.first_multi; i++) {
             if (!memcmp(ptr, &n->mac_table.macs[i * ETH_ALEN], ETH_ALEN)) {
                 return 1;
@@ -1430,6 +1447,7 @@ static ssize_t virtio_net_receive_rcu(NetClientState *nc, const uint8_t *buf,
         return 0;
     }
 
+    //如果报文不能收取，则返回size
     if (!receive_filter(n, buf, size))
         return size;
 
@@ -2154,6 +2172,8 @@ static int32_t virtio_net_flush_tx(VirtIONetQueue *q)
     VirtQueueElement *elem;
     int32_t num_packets = 0;
     int queue_index = vq2q(virtio_get_queue_index(q->tx_vq));
+
+    //设备对应的驱动还未ok,不能flush报文，返回0
     if (!(vdev->status & VIRTIO_CONFIG_S_DRIVER_OK)) {
         return num_packets;
     }
@@ -2235,10 +2255,13 @@ drop:
         virtio_notify(vdev, q->tx_vq);
         g_free(elem);
 
+        //已发送的报文数超过burst,则停止发送
         if (++num_packets >= n->tx_burst) {
             break;
         }
     }
+
+    /*本轮发送的数目*/
     return num_packets;
 }
 
@@ -2279,6 +2302,7 @@ static void virtio_net_handle_tx_bh(VirtIODevice *vdev, VirtQueue *vq)
     VirtIONetQueue *q = &n->vqs[vq2q(virtio_get_queue_index(vq))];
 
     if (unlikely((n->status & VIRTIO_NET_S_LINK_UP) == 0)) {
+        /*link down情况下，所有vq中的报文丢弃*/
         virtio_net_drop_tx_queue_data(vdev, vq);
         return;
     }
@@ -2367,10 +2391,12 @@ static void virtio_net_tx_bh(void *opaque)
     }
 }
 
+//为网络设备添加index号队列
 static void virtio_net_add_queue(VirtIONet *n, int index)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(n);
 
+    //添加index号rx队列
     n->vqs[index].rx_vq = virtio_add_queue(vdev, n->net_conf.rx_queue_size,
                                            virtio_net_handle_rx);
 
@@ -2382,6 +2408,7 @@ static void virtio_net_add_queue(VirtIONet *n, int index)
                                               virtio_net_tx_timer,
                                               &n->vqs[index]);
     } else {
+        //添加index号tx队列
         n->vqs[index].tx_vq =
             virtio_add_queue(vdev, n->net_conf.tx_queue_size,
                              virtio_net_handle_tx_bh);
@@ -2963,6 +2990,7 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
         n->host_features |= (1ULL << VIRTIO_NET_F_MTU);
     }
 
+    //针对双工字符串，设置全/半双工
     if (n->net_conf.duplex_str) {
         if (strncmp(n->net_conf.duplex_str, "half", 5) == 0) {
             n->net_conf.duplex = DUPLEX_HALF;
@@ -2976,12 +3004,14 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
         n->net_conf.duplex = DUPLEX_UNKNOWN;
     }
 
+    //设置速率
     if (n->net_conf.speed < SPEED_UNKNOWN) {
         error_setg(errp, "'speed' must be between 0 and INT_MAX");
     } else if (n->net_conf.speed >= 0) {
         n->host_features |= (1ULL << VIRTIO_NET_F_SPEED_DUPLEX);
     }
 
+    //通过failover功能支持迁移
     if (n->failover) {
         n->primary_listener.should_be_hidden =
             virtio_net_primary_should_be_hidden;
@@ -3000,6 +3030,7 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
      * Guests that want a smaller ring can always resize it without
      * help from us (using virtio 1 and up).
      */
+    //rx队列长度校验
     if (n->net_conf.rx_queue_size < VIRTIO_NET_RX_QUEUE_MIN_SIZE ||
         n->net_conf.rx_queue_size > VIRTQUEUE_MAX_SIZE ||
         !is_power_of_2(n->net_conf.rx_queue_size)) {
@@ -3011,6 +3042,7 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
         return;
     }
 
+    //tx队列长度校验
     if (n->net_conf.tx_queue_size < VIRTIO_NET_TX_QUEUE_MIN_SIZE ||
         n->net_conf.tx_queue_size > VIRTQUEUE_MAX_SIZE ||
         !is_power_of_2(n->net_conf.tx_queue_size)) {
@@ -3022,6 +3054,7 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
         return;
     }
 
+    //队列总数为配直的队列数2*n+1
     n->max_queues = MAX(n->nic_conf.peers.queues, 1);
     if (n->max_queues * 2 + 1 > VIRTIO_QUEUE_MAX) {
         error_setg(errp, "Invalid number of queues (= %" PRIu32 "), "
@@ -3045,6 +3078,7 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
     n->net_conf.tx_queue_size = MIN(virtio_net_max_tx_queue_size(n),
                                     n->net_conf.tx_queue_size);
 
+    //为网卡新建max_queues个队列
     for (i = 0; i < n->max_queues; i++) {
         virtio_net_add_queue(n, i);
     }
@@ -3085,6 +3119,8 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
     n->vqs[0].tx_waiting = 0;
     n->tx_burst = n->net_conf.txburst;
     virtio_net_set_mrg_rx_bufs(n, 0, 0);
+
+    //默认开启混杂模式
     n->promisc = 1; /* for compatibility */
 
     n->mac_table.macs = g_malloc0(MAC_TABLE_ENTRIES * ETH_ALEN);

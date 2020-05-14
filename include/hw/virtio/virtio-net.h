@@ -38,12 +38,12 @@ typedef struct virtio_net_conf
     uint32_t txtimer;
     int32_t txburst;
     char *tx;
-    uint16_t rx_queue_size;
-    uint16_t tx_queue_size;
-    uint16_t mtu;
-    int32_t speed;
-    char *duplex_str;
-    uint8_t duplex;
+    uint16_t rx_queue_size;/*rx队列长度*/
+    uint16_t tx_queue_size;/*tx队列长度*/
+    uint16_t mtu;//配置的mtu
+    int32_t speed;//网卡速率
+    char *duplex_str;//双工模式（字符串类型）
+    uint8_t duplex;//双工模式
     char *primary_id_str;
 } virtio_net_conf;
 
@@ -127,31 +127,32 @@ typedef struct VirtioNetRscChain {
 #define VIRTIO_NET_MAX_BUFSIZE (sizeof(struct virtio_net_hdr) + (64 * KiB))
 
 typedef struct VirtIONetQueue {
-    VirtQueue *rx_vq;
-    VirtQueue *tx_vq;
+    VirtQueue *rx_vq;//rx队列
+    VirtQueue *tx_vq;//tx队列
     QEMUTimer *tx_timer;
     QEMUBH *tx_bh;
     uint32_t tx_waiting;
     struct {
         VirtQueueElement *elem;
     } async_tx;
-    struct VirtIONet *n;
+    struct VirtIONet *n;//队列所属的网络设备
 } VirtIONetQueue;
 
+//virtio网络设备
 struct VirtIONet {
     VirtIODevice parent_obj;
-    uint8_t mac[ETH_ALEN];
+    uint8_t mac[ETH_ALEN];//设备mac地址
     uint16_t status;
-    VirtIONetQueue *vqs;
+    VirtIONetQueue *vqs;/*网络设备队列数组，长度为max_queues*/
     VirtQueue *ctrl_vq;
     NICState *nic;
     /* RSC Chains - temporary storage of coalesced data,
        all these data are lost in case of migration */
     QTAILQ_HEAD(, VirtioNetRscChain) rsc_chains;
     uint32_t tx_timeout;
-    int32_t tx_burst;
+    int32_t tx_burst;/*网卡最大一次burst的数目*/
     uint32_t has_vnet_hdr;
-    size_t host_hdr_len;
+    size_t host_hdr_len;/*host头部长度，buf跳过此长度为报文mac头*/
     size_t guest_hdr_len;
     uint64_t host_features;
     uint32_t rsc_timeout;
@@ -159,26 +160,29 @@ struct VirtIONet {
     uint8_t rsc6_enabled;
     uint8_t has_ufo;
     uint32_t mergeable_rx_bufs;
-    uint8_t promisc;
-    uint8_t allmulti;
-    uint8_t alluni;
-    uint8_t nomulti;
-    uint8_t nouni;
-    uint8_t nobcast;
+    uint8_t promisc;//混杂模式是否开启
+    uint8_t allmulti;//是否收取所有组播（mac层）
+    uint8_t alluni;//是否收取所有的单播地址
+    uint8_t nomulti;//不收取组播地址（mac层）
+    uint8_t nouni;//不收取单播地址（mac层）
+    uint8_t nobcast;//不接收广播地址（mac层)
     uint8_t vhost_started;
     struct {
-        uint32_t in_use;
-        uint32_t first_multi;
+        uint32_t in_use;//macs表大小
+        uint32_t first_multi;//首个mac地址索引（组播单播）
         uint8_t multi_overflow;
         uint8_t uni_overflow;
-        uint8_t *macs;
+        uint8_t *macs;//记录容许的mac地址
     } mac_table;
+    //vlan一共有12bits,5个高位bits为一个单位，则vlans数组长度为vlan>>5
+    //每个数组元素，按位记录每个vlan值，共可以记录0x20个vlan(即32个）
+    //记录接口可接收的vlan id
     uint32_t *vlans;
-    virtio_net_conf net_conf;
-    NICConf nic_conf;
+    virtio_net_conf net_conf;//网络配置信息
+    NICConf nic_conf;//网卡配置信息
     DeviceState *qdev;
     int multiqueue;//是否多队列
-    uint16_t max_queues;
+    uint16_t max_queues;//总队列数（rx+tx+ctl)
     uint16_t curr_queues;
     size_t config_size;
     char *netclient_name;
@@ -196,7 +200,7 @@ struct VirtIONet {
     char *primary_device_id;
     char *standby_id;
     bool primary_should_be_hidden;
-    bool failover;
+    bool failover;/*是否开启failover功能*/
     DeviceListener primary_listener;
     Notifier migration_state;
 };

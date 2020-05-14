@@ -92,7 +92,7 @@ struct AioContext {
     QemuLockCnt list_lock;
 
     /* Anchor of the list of Bottom Halves belonging to the context */
-    struct QEMUBH *first_bh;
+    struct QEMUBH *first_bh;//用于指向一组QEMUBH
 
     /* Used by aio_notify.
      *
@@ -154,7 +154,7 @@ struct AioContext {
     /* epoll(7) state used when built with CONFIG_EPOLL */
     int epollfd;
     bool epoll_enabled;
-    bool epoll_available;
+    bool epoll_available;//指明epoll可用
 };
 
 /**
