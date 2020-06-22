@@ -27,6 +27,7 @@ void object_property_set_qobject(Object *obj, QObject *value,
     visit_free(v);
 }
 
+//取Object中名称为name的属性值
 QObject *object_property_get_qobject(Object *obj, const char *name,
                                      Error **errp)
 {
@@ -34,12 +35,16 @@ QObject *object_property_get_qobject(Object *obj, const char *name,
     Error *local_err = NULL;
     Visitor *v;
 
+    /*构造output visitor,并指明结果值存在ret指针中*/
     v = qobject_output_visitor_new(&ret);
+    //获取相应属性值
     object_property_get(obj, v, name, &local_err);
     if (!local_err) {
+        //未发生错误，执行complete
         visit_complete(v, &ret);
     }
     error_propagate(errp, local_err);
     visit_free(v);
+    //返回内容
     return ret;
 }

@@ -19,6 +19,7 @@ struct QNull {
     struct QObjectBase_ base;
 };
 
+//定义null
 extern QNull qnull_;
 
 static inline QNull *qnull(void)

@@ -125,6 +125,7 @@ static inline void qobject_unref_impl(QObject *obj)
  */
 static inline QType qobject_type(const QObject *obj)
 {
+    //返回qobject类型
     assert(QTYPE_NONE < obj->base.type && obj->base.type < QTYPE__MAX);
     return obj->base.type;
 }

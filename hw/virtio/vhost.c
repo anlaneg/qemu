@@ -313,6 +313,7 @@ static void *vhost_memory_map(struct vhost_dev *dev, hwaddr addr,
     	//无iommu时
         return cpu_physical_memory_map(addr, plen, is_write);
     } else {
+        //设备有iommu时，直接返回物理地址
         return (void *)(uintptr_t)addr;
     }
 }
@@ -1036,6 +1037,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
         }
     }
 
+    //描述符表大小 ，物理地址，虚拟地址
     vq->desc_size = s = l = virtio_queue_get_desc_size(vdev, idx);
     vq->desc_phys = a;
     vq->desc = vhost_memory_map(dev, a, &l, false);
@@ -1043,6 +1045,8 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
         r = -ENOMEM;
         goto fail_alloc_desc;
     }
+
+    //avail表大小 ，物理地址，虚拟地址
     vq->avail_size = s = l = virtio_queue_get_avail_size(vdev, idx);
     vq->avail_phys = a = virtio_queue_get_avail_addr(vdev, idx);
     vq->avail = vhost_memory_map(dev, a, &l, false);
@@ -1050,6 +1054,8 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
         r = -ENOMEM;
         goto fail_alloc_avail;
     }
+
+    //use表大小 ，物理地址，虚拟地址
     vq->used_size = s = l = virtio_queue_get_used_size(vdev, idx);
     vq->used_phys = a = virtio_queue_get_used_addr(vdev, idx);
     vq->used = vhost_memory_map(dev, a, &l, true);
@@ -1058,6 +1064,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
         goto fail_alloc_used;
     }
 
+    //知会后端开始设置vring地址
     r = vhost_virtqueue_set_addr(dev, vq, vhost_vq_index, dev->log_enabled);
     if (r < 0) {
         r = -errno;
@@ -1086,6 +1093,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
     if (k->query_guest_notifiers &&
         k->query_guest_notifiers(qbus->parent) &&
         virtio_queue_vector(vdev, idx) == VIRTIO_NO_VECTOR) {
+        /*设置vring call为NULL*/
         file.fd = -1;
         r = dev->vhost_ops->vhost_set_vring_call(dev, &file);
         if (r) {
@@ -1199,6 +1207,7 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
     struct vhost_vring_file file = {
         .index = vhost_vq_index,
     };
+    //创建eventfd
     int r = event_notifier_init(&vq->masked_notifier, 0);
     if (r < 0) {
         return r;
@@ -1446,8 +1455,10 @@ void vhost_dev_disable_notifiers(struct vhost_dev *hdev, VirtIODevice *vdev)
  */
 bool vhost_virtqueue_pending(struct vhost_dev *hdev, int n)
 {
+    //取n号vq
     struct vhost_virtqueue *vq = hdev->vqs + n - hdev->vq_index;
     assert(n >= hdev->vq_index && n < hdev->vq_index + hdev->nvqs);
+    //等待接收vq队列通知
     return event_notifier_test_and_clear(&vq->masked_notifier);
 }
 

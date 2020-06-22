@@ -17,15 +17,18 @@
 #include "qemu/queue.h"
 
 typedef struct QListEntry {
+    //list元素
     QObject *value;
     QTAILQ_ENTRY(QListEntry) next;
 } QListEntry;
 
 struct QList {
+    //qlist对象，单链表
     struct QObjectBase_ base;
     QTAILQ_HEAD(,QListEntry) head;
 };
 
+//将obj加入到链头部
 #define qlist_append(qlist, obj) \
         qlist_append_obj(qlist, QOBJECT(obj))
 

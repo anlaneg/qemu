@@ -68,7 +68,7 @@ struct HostMemoryBackend {
     Object parent;
 
     /* protected */
-    uint64_t size;
+    uint64_t size;//内存大小
     bool merge, dump, use_canonical_path;
     bool prealloc, is_mapped, share;
     uint32_t prealloc_threads;

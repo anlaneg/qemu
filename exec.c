@@ -1454,6 +1454,7 @@ static void *(*phys_mem_alloc)(size_t size, uint64_t *align, bool shared) =
  */
 void phys_mem_set_alloc(void *(*alloc)(size_t, uint64_t *align, bool shared))
 {
+    //设置物理内存申请函数
     phys_mem_alloc = alloc;
 }
 
@@ -2965,11 +2966,13 @@ static void memory_map_init(void)
     system_memory = g_malloc(sizeof(*system_memory));
 
     memory_region_init(system_memory, NULL, "system", UINT64_MAX);
+    //address_space_memory就是虚机的线性地址空间（设备的mmio分布在这个地址空间）
     address_space_init(&address_space_memory, system_memory, "memory");
 
     system_io = g_malloc(sizeof(*system_io));
     memory_region_init_io(system_io, NULL, &unassigned_io_ops, NULL, "io",
                           65536);
+    //address_space_io是虚机的io地址空间（设备的io port就分布在这个地址空间里）
     address_space_init(&address_space_io, system_io, "I/O");
 }
 
@@ -3271,8 +3274,9 @@ MemTxResult address_space_write(AddressSpace *as, hwaddr addr,
     return result;
 }
 
-MemTxResult address_space_rw(AddressSpace *as, hwaddr addr, MemTxAttrs attrs,
-                             void *buf, hwaddr len, bool is_write)
+/*处理地址空间读写操作*/
+MemTxResult address_space_rw(AddressSpace *as/*地址空间*/, hwaddr addr/*要读写的物理地址*/, MemTxAttrs attrs,
+                             void *buf/*源目的buffer*/, hwaddr len/*要读写的内存长度*/, bool is_write/*是否为写操作*/)
 {
     if (is_write) {
         return address_space_write(as, addr, attrs, buf, len);
@@ -3281,8 +3285,9 @@ MemTxResult address_space_rw(AddressSpace *as, hwaddr addr, MemTxAttrs attrs,
     }
 }
 
-void cpu_physical_memory_rw(hwaddr addr, void *buf,
-                            hwaddr len, bool is_write)
+//cpu物理地址读写处理
+void cpu_physical_memory_rw(hwaddr addr/*要读写的物理地址*/, void *buf/*源目的buffer*/,
+                            hwaddr len/*要读写的内存长度*/, bool is_write/*是否为写操作*/)
 {
     address_space_rw(&address_space_memory, addr, MEMTXATTRS_UNSPECIFIED,
                      buf, len, is_write);

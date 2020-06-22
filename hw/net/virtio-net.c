@@ -2782,6 +2782,7 @@ static NetClientInfo net_virtio_info = {
     .announce = virtio_net_announce,
 };
 
+//阻塞等待vdev的idx号队列通知
 static bool virtio_net_guest_notifier_pending(VirtIODevice *vdev, int idx)
 {
     VirtIONet *n = VIRTIO_NET(vdev);

@@ -351,7 +351,7 @@ processed(OptsVisitor *ov, const char *name)
 
 //字符串类型解析
 static void
-opts_type_str(Visitor *v, const char *name, char **obj, Error **errp)
+opts_type_str(Visitor *v, const char *name, char **obj/*出参，返回opts对应的字符串配置选项*/, Error **errp)
 {
     OptsVisitor *ov = to_ov(v);
     const QemuOpt *opt;

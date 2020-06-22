@@ -152,6 +152,7 @@ static int vhost_kernel_set_vring_kick(struct vhost_dev *dev,
 static int vhost_kernel_set_vring_call(struct vhost_dev *dev,
                                        struct vhost_vring_file *file)
 {
+    /*设置vring的通知file*/
     return vhost_kernel_call(dev, VHOST_SET_VRING_CALL, file);
 }
 
@@ -264,13 +265,13 @@ static const VhostOps kernel_ops = {
         .vhost_scsi_get_abi_version = vhost_kernel_scsi_get_abi_version,
         .vhost_set_log_base = vhost_kernel_set_log_base,
         .vhost_set_mem_table = vhost_kernel_set_mem_table,
-        .vhost_set_vring_addr = vhost_kernel_set_vring_addr,
+        .vhost_set_vring_addr = vhost_kernel_set_vring_addr,//设置vring地址
         .vhost_set_vring_endian = vhost_kernel_set_vring_endian,
         .vhost_set_vring_num = vhost_kernel_set_vring_num,
         .vhost_set_vring_base = vhost_kernel_set_vring_base,
         .vhost_get_vring_base = vhost_kernel_get_vring_base,
         .vhost_set_vring_kick = vhost_kernel_set_vring_kick,
-        .vhost_set_vring_call = vhost_kernel_set_vring_call,
+        .vhost_set_vring_call = vhost_kernel_set_vring_call,//向下设置通知用的文件，例如eventfd
         .vhost_set_vring_busyloop_timeout =
                                 vhost_kernel_set_vring_busyloop_timeout,
         .vhost_set_features = vhost_kernel_set_features,

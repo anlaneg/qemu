@@ -42,6 +42,7 @@ void qdev_prop_allow_set_link_before_realize(const Object *obj,
     }
 }
 
+//获取qdev属性值对应的指针
 void *qdev_get_prop_ptr(DeviceState *dev, Property *prop)
 {
     void *ptr = dev;
@@ -288,8 +289,10 @@ static void get_uint16(Object *obj, Visitor *v, const char *name,
 {
     DeviceState *dev = DEVICE(obj);
     Property *prop = opaque;
+    //先取得此属性的指针
     uint16_t *ptr = qdev_get_prop_ptr(dev, prop);
 
+    //再通过v获取字段name的值，将其填充到ptr中
     visit_type_uint16(v, name, ptr, errp);
 }
 
@@ -308,8 +311,9 @@ static void set_uint16(Object *obj, Visitor *v, const char *name,
     visit_type_uint16(v, name, ptr, errp);
 }
 
+//qdev uint16类型的属性
 const PropertyInfo qdev_prop_uint16 = {
-    .name  = "uint16",
+    .name  = "uint16",/*属性名称*/
     .get   = get_uint16,
     .set   = set_uint16,
     .set_default_value = set_default_value_uint,

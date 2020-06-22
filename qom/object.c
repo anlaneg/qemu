@@ -47,30 +47,47 @@ struct TypeImpl
 {
     const char *name;//类型名称
 
-    size_t class_size;//此类型class对象内存大小
+    //此类型ObjectClass内存大小
+    size_t class_size;
 
-    size_t instance_size;//此类型对象内存大小
+    //类型对象大小，如果其为0，则其大小为父类型instance_size
+    size_t instance_size;
 
-    //本类型元数据的构造函数
+    //此函数在所有父类class_base_init之后调用，以便容许设置默认的虚函数指针，当然也容许子类override
+    //父类的虚方法。
     void (*class_init)(ObjectClass *klass, void *data);
     //在本类型构造函数完成后调用，依注释是为了消除memcopy对类型的影响
     void (*class_base_init)(ObjectClass *klass, void *data);
     //用于回调instance_init,instance_post_init,instance_finalize回调的参数
+    //可用于构建动态class
     void *class_data;
 
-    void (*instance_init)(Object *obj);//实例的构造函数
-    void (*instance_post_init)(Object *obj);//实例的构造函数，在instance_init之后调用
-    void (*instance_finalize)(Object *obj);//对象的析构函数
+    //实例的构造函数,对象初始化时会调用本函数，调用本函数时，父对象将已经被初始化，
+    //故本类型仅仅初始化自有成员即可
+    void (*instance_init)(Object *obj);
+    //实例初始化完成后此函数将被调用，在所有@instance_init调用之后
+    void (*instance_post_init)(Object *obj);
+    //此函数在对象销毁期间被调用。在所有父类@instance_finalized调用之前调用，一个
+    //对象仅仅需要稍毁此类型中的成员
+    void (*instance_finalize)(Object *obj);
 
-    bool abstract;//是否抽象类型（如果instance_size为0，则一定为抽象类型）
+    //如果此字段为True,则此class不能被实附化。
+    bool abstract;
 
-    const char *parent;//对应的父类型名称
-    TypeImpl *parent_type;//对应的父类型
+    //对应的父类型名称
+    const char *parent;
+    //对应的父类型名称TypeImpl
+    TypeImpl *parent_type;
 
-    ObjectClass *class;//类元数据
+    //每一个Type均有一个对应的class,每一个type实例前，其对应的class必须
+    //已被初始化，函数type_initialize具体完成这一过程
+    //class内存是平坦的，最前面与parent的ObjectClass一致
+    ObjectClass *class;
 
-    int num_interfaces;//接口数量
-    InterfaceImpl interfaces[MAX_INTERFACES];//接口类型名称数组
+    //接口数量
+    int num_interfaces;
+    //接口类型名称数组
+    InterfaceImpl interfaces[MAX_INTERFACES];
 };
 
 static Type type_interface;
@@ -97,12 +114,14 @@ static void type_table_add(TypeImpl *ti)
     g_hash_table_insert(type_table_get(), (void *)ti->name, ti);
 }
 
-//type查询（给定名称查询type)
+//给定名称查询type
 static TypeImpl *type_table_lookup(const char *name)
 {
     return g_hash_table_lookup(type_table_get(), name);
 }
 
+//TypeInfo用于指明type的继承，大小等信息，每一个TypeInfo均会被
+//转换为一个TypeImpl保存在type表中
 //依据info构造一份TypeImpl数据
 static TypeImpl *type_new(const TypeInfo *info)
 {
@@ -148,13 +167,15 @@ static TypeImpl *type_new(const TypeInfo *info)
 static TypeImpl *type_register_internal(const TypeInfo *info)
 {
     TypeImpl *ti;
-    ti = type_new(info);//由info创建typeImpl
+    //由typeInfo创建typeImpl
+    ti = type_new(info);
 
-    type_table_add(ti);//加入hash表中
+    //加入hash表中
+    type_table_add(ti);
     return ti;
 }
 
-//type注册外部函数
+//type注册函数
 TypeImpl *type_register(const TypeInfo *info)
 {
 	//类型必须要有parent
@@ -178,7 +199,8 @@ void type_register_static_array(const TypeInfo *infos, int nr_infos)
     }
 }
 
-//给定名称查询TypeImpl（支持name==NULL查询，返回NULL）
+//每一个type名称均会有一个TypeImpl被存放在type table中
+//通过给定的type名称，我们可以查询到TypeImpl（支持name==NULL查询，返回NULL）
 static TypeImpl *type_get_by_name(const char *name)
 {
     if (name == NULL) {
@@ -188,11 +210,12 @@ static TypeImpl *type_get_by_name(const char *name)
     return type_table_lookup(name);
 }
 
-//取指定类型的父类型
+//取指定TypeImpl的父TypeImpl
 static TypeImpl *type_get_parent(TypeImpl *type)
 {
 	//如果parent_type未赋值，则查询并赋值，否则直接返回
     if (!type->parent_type && type->parent) {
+        //设置父TypeImpl
         type->parent_type = type_get_by_name(type->parent);
         if (!type->parent_type) {
             fprintf(stderr, "Type '%s' is missing its parent '%s'\n",
@@ -210,11 +233,13 @@ static bool type_has_parent(TypeImpl *type)
     return (type->parent != NULL);
 }
 
-//获取class_size，自身有class_size，则使用，否则使用父类型class_size,否则使用sizeof(ObjectClass)
+//获取类型ti的ObjectClass大小
+//如自身class_size不为0，则使用，否则使用父类型class_size
+//否则使用sizeof(ObjectClass)
 static size_t type_class_get_size(TypeImpl *ti)
 {
     if (ti->class_size) {
-        //如果自身有class_size，则使用
+        //如果自身class_size不为零，则使用
         return ti->class_size;
     }
 
@@ -227,10 +252,12 @@ static size_t type_class_get_size(TypeImpl *ti)
     return sizeof(ObjectClass);
 }
 
-//取类型的instance_size
+//获取类型ti的instance_size
+//如果instance_size不为0,返回instance_size
+//否则使用父类型的instance_size
 static size_t type_object_get_size(TypeImpl *ti)
 {
-	//如果有instance_size,返回instance_size
+	//如果instance_size不为0,返回instance_size
     if (ti->instance_size) {
         return ti->instance_size;
     }
@@ -253,19 +280,20 @@ size_t object_type_get_instance_size(const char *typename)
     return type_object_get_size(type);
 }
 
-//类型type,是否继承自target_type类型或者就是target_type
+//检查给定的TypeImpl,是否继承自target_type类型或者就是target_type
 static bool type_is_ancestor(TypeImpl *type, TypeImpl *target_type)
 {
     assert(target_type);
 
     /* Check if target_type is a direct ancestor of type */
     while (type) {
-    		//首次进入时，如果两者类型一致返回True，后续进入时，
-    		//type继承自target_type类型
+    	//首次进入时，如果两者类型一致返回True，后续进入时，
+    	//type继承自target_type类型
         if (type == target_type) {
             return true;
         }
 
+        //取type的parent TypeImpl
         type = type_get_parent(type);
     }
 
@@ -317,26 +345,27 @@ static void object_property_free(gpointer data)
     g_free(prop);
 }
 
-//type类元数据初始化（可简单理解为对象的初始化，通过memcpy父类初始化好的内存来实现）
+//type Objectclass初始化（可简单理解为对象的初始化，通过memcpy父类初始化好的内存来实现）
 //根据自身的class_size,申请class空间，然后先调基类的class_init,将基类的class空间copy到自身，再调用自身的class_init。
 //按Type类型的注释说明，为了消除memcopy的影响，引入class_base_init在自身class_init之前来解决。
 static void type_initialize(TypeImpl *ti)
 {
     TypeImpl *parent;
 
-    //如果类元数据已初始化，则直接返回
+    //如果type对应的objectclass已初始化，则直接返回
     if (ti->class) {
         return;
     }
 
-    //获取类元数据大小，实例（对象）大小
+    //获取ObjectClass数据大小，实例（对象）大小
     ti->class_size = type_class_get_size(ti);
     ti->instance_size = type_object_get_size(ti);
     /* Any type with zero instance_size is implicitly abstract.
      * This means interface types are all abstract.
      */
     if (ti->instance_size == 0) {
-        ti->abstract = true;//实例大小为0，则为抽象类
+        //将实例大小为0，修改为抽象类
+        ti->abstract = true;
     }
 
     if (type_is_ancestor(ti, type_interface)) {
@@ -349,7 +378,7 @@ static void type_initialize(TypeImpl *ti)
         assert(!ti->num_interfaces);
     }
 
-    //生成类元数据需要的内存
+    //生成ObjectClass需要的内存
     ti->class = g_malloc0(ti->class_size);
 
     parent = type_get_parent(ti);
@@ -363,7 +392,8 @@ static void type_initialize(TypeImpl *ti)
         g_assert(parent->class_size <= ti->class_size);
         g_assert(parent->instance_size <= ti->instance_size);
         //父类的class占用的内存是从ti->class的首地址开始的，长度为parent->class_size
-        memcpy(ti->class, parent->class, parent->class_size);//将父类型创建好的class copy到自身
+        //将父类型创建好的class copy到自身
+        memcpy(ti->class, parent->class, parent->class_size);
         ti->class->interfaces = NULL;
         //构造属性表(传入hash函数，key compare函数，key销毁函数，value销毁函数）
         ti->class->properties = g_hash_table_new_full(
@@ -371,8 +401,10 @@ static void type_initialize(TypeImpl *ti)
 
         //如果父类有接口，遍历所有父类接口
         for (e = parent->class->interfaces; e; e = e->next) {
-            InterfaceClass *iface = e->data;/*取interface对应的class*/
-            ObjectClass *klass = OBJECT_CLASS(iface);//强转interfaceClass为基类(ObjectClass)
+            /*取interface对应的class*/
+            InterfaceClass *iface = e->data;
+            //强转interfaceClass为基类(ObjectClass)
+            ObjectClass *klass = OBJECT_CLASS(iface);
 
             type_initialize_interface(ti, iface->interface_type, klass->type);
         }
@@ -402,7 +434,7 @@ static void type_initialize(TypeImpl *ti)
             type_initialize_interface(ti, t, t);
         }
     } else {
-    	//构造类的属性表
+    	//构造ObjectClass的属性表
         ti->class->properties = g_hash_table_new_full(
             g_str_hash, g_str_equal, NULL, object_property_free);
     }
@@ -548,12 +580,14 @@ void object_apply_compat_props(Object *obj)
     }
 }
 
+//初始化ObjectClass的所有属性
 static void object_class_property_init_all(Object *obj)
 {
     ObjectPropertyIterator iter;
     ObjectProperty *prop;
 
     object_class_property_iter_init(&iter, object_get_class(obj));
+    //遍历ObjectClass对应的所有prop及其父类的prop,针对每一个prop执行init函数
     while ((prop = object_property_iter_next(&iter))) {
         if (prop->init) {
             prop->init(obj, prop);
@@ -565,11 +599,11 @@ static void object_class_property_init_all(Object *obj)
 //@data 要初始化的对象
 //@size 要初始化的对象内存长度
 //@type 要初始化的对象属于那种类型
-static void object_initialize_with_type(void *data, size_t size, TypeImpl *type)
+static void object_initialize_with_type(void *data/*待初始化的obj*/, size_t size, TypeImpl *type)
 {
     Object *obj = data;
 
-    //防止type的class未初始化
+    //防止type的ObjectClass未初始化
     type_initialize(type);
 
     //可实例化的object都是object的子类，故大小必大于Object
@@ -580,7 +614,9 @@ static void object_initialize_with_type(void *data, size_t size, TypeImpl *type)
     memset(obj, 0, type->instance_size);
     obj->class = type->class;//指明对象所属的class
     object_ref(obj);//增加对象的引用计数
+    //初始化ObjectClass的所有属性
     object_class_property_init_all(obj);
+
     //初始化对象的属性表（key没有销毁函数）
     obj->properties = g_hash_table_new_full(g_str_hash, g_str_equal,
                                             NULL, object_property_free);
@@ -592,6 +628,7 @@ static void object_initialize_with_type(void *data, size_t size, TypeImpl *type)
 //已知类型名称的对象初始化
 void object_initialize(void *data, size_t size, const char *typename)
 {
+    //通过类型名称，找到其对应的TypeImpl
     TypeImpl *type = type_get_by_name(typename);
 
     if (!type) {
@@ -763,9 +800,12 @@ static Object *object_new_with_type(Type type)
     Object *obj;
 
     g_assert(type != NULL);
-    type_initialize(type);//初始化类型元数据
+    //初始化type对应的ObjectClass
+    type_initialize(type);
 
-    obj = g_malloc(type->instance_size);//申请此类型对象所需要的合适内存
+    //申请此类型obj所需要的合适内存
+    obj = g_malloc(type->instance_size);
+
     //利用此类型初始化对象
     object_initialize_with_type(obj, type->instance_size, type);
     obj->free = g_free;
@@ -773,6 +813,7 @@ static Object *object_new_with_type(Type type)
     return obj;
 }
 
+//给定class，构造其对应对象
 Object *object_new_with_class(ObjectClass *klass)
 {
     return object_new_with_type(klass->type);
@@ -781,8 +822,10 @@ Object *object_new_with_class(ObjectClass *klass)
 //给定类型名称，构造对象
 Object *object_new(const char *typename)
 {
+    //1。获得此type对应的TypeImpl
     TypeImpl *ti = type_get_by_name(typename);
 
+    //2.通过TypeImpl实例化object
     return object_new_with_type(ti);
 }
 
@@ -804,7 +847,7 @@ Object *object_new_with_props(const char *typename,
     return obj;
 }
 
-//含属性的对象new（定参）
+//含属性的对象new（va_list参数）
 Object *object_new_with_propv(const char *typename,
                               Object *parent,
                               const char *id,
@@ -816,7 +859,7 @@ Object *object_new_with_propv(const char *typename,
     Error *local_err = NULL;
     UserCreatable *uc;
 
-    //通过typename找到此类型的类元数据
+    //通过typename找到此类型的ObjectClass数据
     klass = object_class_by_name(typename);
     if (!klass) {
         error_setg(errp, "invalid object type: %s", typename);
@@ -889,22 +932,24 @@ int object_set_propv(Object *obj,
     //取属性名称
     propname = va_arg(vargs, char *);
     while (propname != NULL) {
-    		//当前存在属性名，再取属性值
+    	//当前存在属性名，再取属性值
         const char *value = va_arg(vargs, char *);
 
         g_assert(value != NULL);
-        //设置obj中属性名称为propname的属性，其值为value
+        //设置obj中属性名称为propname的属性，其值为value（字符串形式）
         object_property_parse(obj, value, propname, &local_err);
         if (local_err) {
             error_propagate(errp, local_err);
             return -1;
         }
+        //下一个属性名称
         propname = va_arg(vargs, char *);
     }
 
     return 0;
 }
 
+//通过此函数可以将obj转换为类型typename
 //如果obj可转换为typename类型，则返回obj,否则返回NULL
 Object *object_dynamic_cast(Object *obj, const char *typename)
 {
@@ -915,6 +960,7 @@ Object *object_dynamic_cast(Object *obj, const char *typename)
     return NULL;
 }
 
+//如果可转换，则返回obj
 Object *object_dynamic_cast_assert(Object *obj, const char *typename,
                                    const char *file, int line, const char *func)
 {
@@ -1053,22 +1099,25 @@ out:
     return ret;
 }
 
+//获得Object对应的类型名称
 const char *object_get_typename(const Object *obj)
 {
     return obj->class->type->name;
 }
 
-//取对象对应的class
+//取对象对应的ObjectClass
 ObjectClass *object_get_class(Object *obj)
 {
     return obj->class;
 }
 
+//检查此ObjectClass是否为抽象类
 bool object_class_is_abstract(ObjectClass *klass)
 {
     return klass->type->abstract;
 }
 
+//通过ObjectClass获得类型名称
 const char *object_class_get_name(ObjectClass *klass)
 {
     return klass->type->name;
@@ -1256,7 +1305,7 @@ object_property_add(Object *obj, const char *name/*属性名称*/, const char *t
     size_t name_len = strlen(name);
 
     if (name_len >= 3 && !memcmp(name + name_len - 3, "[*]", 4)) {
-        /*属性名称以[*]结构的*/
+        /*属性名称以[*]结尾的*/
         int i;
         ObjectProperty *ret;
         char *name_no_array = g_strdup(name);
@@ -1265,6 +1314,7 @@ object_property_add(Object *obj, const char *name/*属性名称*/, const char *t
         for (i = 0; ; ++i) {
             char *full_name = g_strdup_printf("%s[%d]", name_no_array, i);
 
+            /*如果full_name的已存在，则增加i并尝试下一个，直到full_name不存在并填加成功*/
             ret = object_property_add(obj, full_name, type, get, set,
                                       release, opaque, NULL);
             g_free(full_name);
@@ -1299,20 +1349,20 @@ object_property_add(Object *obj, const char *name/*属性名称*/, const char *t
     return prop;
 }
 
-//属性添加
+//向ObjectClass中添加属性
 ObjectProperty *
 object_class_property_add(ObjectClass *klass,
                           const char *name/*属性名称*/,
                           const char *type/*属性类型*/,
-                          ObjectPropertyAccessor *get,
-                          ObjectPropertyAccessor *set,
-                          ObjectPropertyRelease *release,
+                          ObjectPropertyAccessor *get/*属性get函数*/,
+                          ObjectPropertyAccessor *set/*属性set函数*/,
+                          ObjectPropertyRelease *release/*属性释放函数*/,
                           void *opaque/*访问函数不透明参数*/,
                           Error **errp)
 {
     ObjectProperty *prop;
 
-    //1.确认属性不存在
+    //1.检查objectclass中是否存在此属性
     if (object_class_property_find(klass, name, NULL) != NULL) {
         error_setg(errp, "attempt to add duplicate property '%s' to class (type '%s')",
                    name, object_class_get_name(klass));
@@ -1367,19 +1417,24 @@ void object_property_iter_init(ObjectPropertyIterator *iter,
     iter->nextclass = object_get_class(obj);
 }
 
+//返回迭代器对应的value
 ObjectProperty *object_property_iter_next(ObjectPropertyIterator *iter)
 {
     gpointer key, val;
     while (!g_hash_table_iter_next(&iter->iter, &key, &val)) {
+        /*没有找到新的元素，迭代父节点*/
         if (!iter->nextclass) {
+            /*如果nextClass为NULL，则返回NULL*/
             return NULL;
         }
+        //再用父节点初始化迭代器
         g_hash_table_iter_init(&iter->iter, iter->nextclass->properties);
         iter->nextclass = object_class_get_parent(iter->nextclass);
     }
     return val;
 }
 
+//初始化objectClass属性迭代器
 void object_class_property_iter_init(ObjectPropertyIterator *iter,
                                      ObjectClass *klass)
 {
@@ -1388,7 +1443,7 @@ void object_class_property_iter_init(ObjectPropertyIterator *iter,
 }
 
 //在klass中查找属性名称name,出错信息存入errp （类属性查找）
-ObjectProperty *object_class_property_find(ObjectClass *klass, const char *name,
+ObjectProperty *object_class_property_find(ObjectClass *klass, const char *name/*属性名称*/,
                                            Error **errp)
 {
     ObjectProperty *prop;
@@ -1433,19 +1488,22 @@ void object_property_del(Object *obj, const char *name, Error **errp)
 void object_property_get(Object *obj, Visitor *v, const char *name,
                          Error **errp)
 {
+    //查找object中名称为name的属性
     ObjectProperty *prop = object_property_find(obj, name, errp);
     if (prop == NULL) {
         return;
     }
 
     if (!prop->get) {
+        /*如果属性无get回调，则报错*/
         error_setg(errp, QERR_PERMISSION_DENIED);
     } else {
+        //通过get回调获属性值
         prop->get(obj, v, name, prop->opaque, errp);
     }
 }
 
-//属性设置
+//Object属性设置
 void object_property_set(Object *obj, Visitor *v, const char *name,
                          Error **errp)
 {
@@ -1459,7 +1517,7 @@ void object_property_set(Object *obj, Visitor *v, const char *name,
     if (!prop->set) {
         error_setg(errp, QERR_PERMISSION_DENIED);
     } else {
-    		//调用属性的set函数，设置此属性
+    	//调用属性的set函数，设置此属性
         prop->set(obj, v, name, prop->opaque, errp);
     }
 }
@@ -1632,9 +1690,11 @@ void object_property_set_uint(Object *obj, uint64_t value,
     qobject_unref(qnum);
 }
 
+//取Object中name属性值（此值为无符号整数）
 uint64_t object_property_get_uint(Object *obj, const char *name,
                                   Error **errp)
 {
+    //取object中的name属性值
     QObject *ret = object_property_get_qobject(obj, name, errp);
     QNum *qnum;
     uint64_t retval;
@@ -1642,13 +1702,18 @@ uint64_t object_property_get_uint(Object *obj, const char *name,
     if (!ret) {
         return 0;
     }
+    //将ret转为QNum类型
     qnum = qobject_to(QNum, ret);
+
+    //取QNum中保存的无符号整数值
     if (!qnum || !qnum_get_try_uint(qnum, &retval)) {
+        //获取属性值失败，报错
         error_setg(errp, QERR_INVALID_PARAMETER_TYPE, name, "uint");
         retval = 0;
     }
 
     qobject_unref(ret);
+    //返回此值
     return retval;
 }
 
@@ -1724,6 +1789,7 @@ out:
 void object_property_parse(Object *obj, const char *string,
                            const char *name, Error **errp)
 {
+    //通过string构造Visitor，以便可以解析string
     Visitor *v = string_input_visitor_new(string);
     object_property_set(obj, v, name, errp);
     visit_free(v);
@@ -1760,11 +1826,13 @@ const char *object_property_get_type(Object *obj, const char *name, Error **errp
     return prop->type;
 }
 
+//获得root
 Object *object_get_root(void)
 {
     static Object *root;
 
     if (!root) {
+        //如果root不存在，则创建一个container类型的对象
         root = object_new("container");
     }
 
@@ -1788,6 +1856,7 @@ Object *object_get_internal_root(void)
     return internal_root;
 }
 
+//返回obj的名称为name的child属性
 static void object_get_child_property(Object *obj, Visitor *v,
                                       const char *name, void *opaque,
                                       Error **errp)
@@ -1825,13 +1894,14 @@ void object_property_add_child(Object *obj, const char *name,
     ObjectProperty *op;
 
     if (child->parent != NULL) {
+        /*子节点已指明父节点，不能再设置了*/
         error_setg(errp, "child object is already parented");
         return;
     }
 
     type = g_strdup_printf("child<%s>", object_get_typename(OBJECT(child)));
 
-    //向obj中添加属性name
+    //向obj中添加属性name，并指明类型为child<%s>
     op = object_property_add(obj, name, type, object_get_child_property, NULL,
                              object_finalize_child_property, child, &local_err);
     if (local_err) {
@@ -2040,9 +2110,10 @@ void object_property_add_link(Object *obj, const char *name,
     object_add_link_prop(obj, name, type, targetp, check, flags, errp);
 }
 
+//向ObjectClass中添加LinkProperty类型属性
 ObjectProperty *
 object_class_property_add_link(ObjectClass *oc,
-    const char *name,
+    const char *name/*属性名称*/,
     const char *type, ptrdiff_t offset,
     void (*check)(const Object *obj, const char *name,
                   Object *val, Error **errp),
@@ -2095,12 +2166,15 @@ gchar *object_get_canonical_path_component(Object *obj)
         return NULL;
     }
 
+    //遍历父节点的properties
     g_hash_table_iter_init(&iter, obj->parent->properties);
     while (g_hash_table_iter_next(&iter, NULL, (gpointer *)&prop)) {
         if (!object_property_is_child(prop)) {
+            /*跳过非child的property*/
             continue;
         }
 
+        //如果prop与obj相等，则返回此属性名称
         if (prop->opaque == obj) {
             return g_strdup(prop->name);
         }
@@ -2117,6 +2191,7 @@ gchar *object_get_canonical_path(Object *obj)
     char *newpath, *path = NULL;
 
     if (obj == root) {
+        //如果obj就是root,则返回‘/’
         return g_strdup("/");
     }
 
@@ -2131,6 +2206,7 @@ gchar *object_get_canonical_path(Object *obj)
             return NULL;
         }
 
+        //反向的path到'/'
         newpath = g_strdup_printf("/%s%s", component, path ? path : "");
         g_free(path);
         g_free(component);
@@ -2357,9 +2433,11 @@ typedef struct BoolProperty
     void (*set)(Object *, bool, Error **);
 } BoolProperty;
 
+//bool属性访问
 static void property_get_bool(Object *obj, Visitor *v, const char *name,
                               void *opaque, Error **errp)
 {
+    //转为bool property
     BoolProperty *prop = opaque;
     bool value;
     Error *err = NULL;
@@ -2423,9 +2501,9 @@ void object_property_add_bool(Object *obj, const char *name/*属性名称*/,
     }
 }
 
-//向object添加bool类型的name属性
+//向ObjectClass中添加bool类型的属性，属性名为name
 ObjectProperty *
-object_class_property_add_bool(ObjectClass *klass, const char *name,
+object_class_property_add_bool(ObjectClass *klass, const char *name/*属性名称*/,
                                     bool (*get/*属性获取*/)(Object *, Error **),
                                     void (*set/*属性设置*/)(Object *, bool, Error **),
                                     Error **errp)
@@ -2437,11 +2515,12 @@ object_class_property_add_bool(ObjectClass *klass, const char *name,
     prop->get = get;
     prop->set = set;
 
+    //添加名称为name的bool类型属性
     rv = object_class_property_add(klass, name, "bool",
                               get ? property_get_bool : NULL,
                               set ? property_set_bool : NULL,
                               NULL,
-                              prop, &local_err);
+                              prop/*传入BoolProperty*/, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         g_free(prop);
@@ -2990,20 +3069,24 @@ out:
     g_free(prop_type);
 }
 
+//设置ObjectProperty的描述信息
 void object_property_set_description(Object *obj, const char *name,
                                      const char *description, Error **errp)
 {
     ObjectProperty *op;
 
+    //obj必须具有name属性
     op = object_property_find(obj, name, errp);
     if (!op) {
         return;
     }
 
+    //更新属性描述符
     g_free(op->description);
     op->description = g_strdup(description);
 }
 
+//为class的属性设置描述信息
 void object_class_property_set_description(ObjectClass *klass,
                                            const char *name,
                                            const char *description,
@@ -3011,6 +3094,7 @@ void object_class_property_set_description(ObjectClass *klass,
 {
     ObjectProperty *op;
 
+    //检查class中是否有此property
     op = g_hash_table_lookup(klass->properties, name);
     if (!op) {
         error_setg(errp, "Property '.%s' not found", name);

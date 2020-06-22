@@ -25,6 +25,7 @@
  */
 QList *qlist_new(void)
 {
+    //新建一个qlist
     QList *qlist;
 
     qlist = g_malloc(sizeof(*qlist));
@@ -55,6 +56,7 @@ QList *qlist_copy(QList *src)
  */
 void qlist_append_obj(QList *qlist, QObject *value)
 {
+    //构造一个qlist entry,将value存笔试，并将value加入qlist头部
     QListEntry *entry;
 
     entry = g_malloc(sizeof(*entry));
@@ -68,6 +70,7 @@ void qlist_append_int(QList *qlist, int64_t value)
     qlist_append(qlist, qnum_from_int(value));
 }
 
+//在list中添加bool类型
 void qlist_append_bool(QList *qlist, bool value)
 {
     qlist_append(qlist, qbool_from_bool(value));

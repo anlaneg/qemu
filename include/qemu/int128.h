@@ -145,10 +145,11 @@ static inline Int128 bswap128(Int128 a)
 
 #else /* !CONFIG_INT128 */
 
+//定义128bits整数
 typedef struct Int128 Int128;
 
 struct Int128 {
-    uint64_t lo;
+    uint64_t lo;//低64位
     int64_t hi;
 };
 
@@ -217,6 +218,7 @@ static inline Int128 int128_rshift(Int128 a, int n)
     }
 }
 
+//执行两个int128相加
 static inline Int128 int128_add(Int128 a, Int128 b)
 {
     uint64_t lo = a.lo + b.lo;
@@ -256,11 +258,13 @@ static inline bool int128_ne(Int128 a, Int128 b)
     return !int128_eq(a, b);
 }
 
+//检查 a >= b 结果
 static inline bool int128_ge(Int128 a, Int128 b)
 {
     return a.hi > b.hi || (a.hi == b.hi && a.lo >= b.lo);
 }
 
+//检查 a< b 结果
 static inline bool int128_lt(Int128 a, Int128 b)
 {
     return !int128_ge(a, b);
@@ -281,21 +285,25 @@ static inline bool int128_nz(Int128 a)
     return a.lo || a.hi;
 }
 
+//取min(a,b)
 static inline Int128 int128_min(Int128 a, Int128 b)
 {
     return int128_le(a, b) ? a : b;
 }
 
+//取max(a,b)
 static inline Int128 int128_max(Int128 a, Int128 b)
 {
     return int128_ge(a, b) ? a : b;
 }
 
+//执行a=a+b
 static inline void int128_addto(Int128 *a, Int128 b)
 {
     *a = int128_add(*a, b);
 }
 
+//执行a=a-b
 static inline void int128_subfrom(Int128 *a, Int128 b)
 {
     *a = int128_sub(*a, b);

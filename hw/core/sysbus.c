@@ -338,6 +338,7 @@ static void main_system_bus_create(void)
     OBJECT(main_system_bus)->free = g_free;
 }
 
+//获取默认Bus
 BusState *sysbus_get_default(void)
 {
     if (!main_system_bus) {

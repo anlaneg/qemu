@@ -78,7 +78,7 @@ struct ISABus {
     /*< public >*/
 
     MemoryRegion *address_space;
-    MemoryRegion *address_space_io;
+    MemoryRegion *address_space_io;/*isabus的mr空间*/
     qemu_irq *irqs;
     IsaDma *dma[2];
 };

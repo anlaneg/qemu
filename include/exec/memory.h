@@ -147,11 +147,13 @@ static inline void iommu_notifier_init(IOMMUNotifier *n, IOMMUNotify fn,
 struct MemoryRegionOps {
     /* Read from the memory region. @addr is relative to @mr; @size is
      * in bytes. */
+    //读此内存region时回调
     uint64_t (*read)(void *opaque,
                      hwaddr addr,
                      unsigned size);
     /* Write to the memory region. @addr is relative to @mr; @size is
      * in bytes. */
+    //写此内存region时回调
     void (*write)(void *opaque,
                   hwaddr addr,
                   uint64_t data,
@@ -174,7 +176,7 @@ struct MemoryRegionOps {
         /* If nonzero, specify bounds on access sizes beyond which a machine
          * check is thrown.
          */
-        unsigned min_access_size;
+        unsigned min_access_size;//最小访问字节数
         unsigned max_access_size;
         /* If true, unaligned accesses are supported.  Otherwise unaligned
          * accesses throw machine checks.
@@ -371,8 +373,10 @@ struct MemoryRegion {
 
     /* The following fields should fit in a cache line */
     bool romd_mode;
+    //是否可随机访问,如果未真正做内存申请，则ram为false
     bool ram;
     bool subpage;
+    /*是否只读*/
     bool readonly; /* For RAM regions */
     bool nonvolatile;
     bool rom_device;
@@ -386,20 +390,23 @@ struct MemoryRegion {
     //内存region对应的ops
     const MemoryRegionOps *ops;
     void *opaque;
+    //所属的上一层memory region
     MemoryRegion *container;
-    Int128 size;
-    hwaddr addr;
+    Int128 size;//mr大小
+    hwaddr addr;//mr起始地址
     void (*destructor)(MemoryRegion *mr);
     uint64_t align;
     bool terminates;
     bool ram_device;
-    bool enabled;
+    bool enabled;//是否使能
     bool warning_printed; /* For reservations */
     uint8_t vga_logging_count;
     MemoryRegion *alias;
     hwaddr alias_offset;
-    int32_t priority;
+    int32_t priority;//优先级，mr在subregions链上按优先级排序（越大优先级越高，越靠前）
+    //从属于当前mr的所有sub mr
     QTAILQ_HEAD(, MemoryRegion) subregions;
+    //通过此指针，将从属于同一个container(父region)的mr串连在subregions链上
     QTAILQ_ENTRY(MemoryRegion) subregions_link;
     QTAILQ_HEAD(, CoalescedMemoryRange) coalesced;
     const char *name;
@@ -435,7 +442,7 @@ struct MemoryListener {
      *
      * @listener: The #MemoryListener.
      */
-    void (*begin)(MemoryListener *listener);
+    void (*begin)(MemoryListener *listener);//开启as更新事务
 
     /**
      * @commit:
@@ -447,7 +454,7 @@ struct MemoryListener {
      *
      * @listener: The #MemoryListener.
      */
-    void (*commit)(MemoryListener *listener);
+    void (*commit)(MemoryListener *listener);//提交as更新事务
 
     /**
      * @region_add:
@@ -647,12 +654,12 @@ struct MemoryListener {
      * are invoked earlier for "add" or "start" callbacks, and later for "delete"
      * or "stop" callbacks.
      */
-    unsigned priority;
+    unsigned priority;//优先级
 
     /* private: */
-    AddressSpace *address_space;
-    QTAILQ_ENTRY(MemoryListener) link;
-    QTAILQ_ENTRY(MemoryListener) link_as;
+    AddressSpace *address_space;//所对应的as
+    QTAILQ_ENTRY(MemoryListener) link;//用于串连listener在memory_listeners链表上（优先级升序）
+    QTAILQ_ENTRY(MemoryListener) link_as;//用于串listener在self->as->listeners链表上（优先级升序）
 };
 
 /**
@@ -669,7 +676,7 @@ struct AddressSpace {
 
     int ioeventfd_nb;
     struct MemoryRegionIoeventfd *ioeventfds;
-    QTAILQ_HEAD(, MemoryListener) listeners;
+    QTAILQ_HEAD(, MemoryListener) listeners;//所有从属于此as的listener
     QTAILQ_ENTRY(AddressSpace) address_spaces_link;
 };
 
@@ -1181,6 +1188,7 @@ uint64_t memory_region_size(MemoryRegion *mr);
  */
 static inline bool memory_region_is_ram(MemoryRegion *mr)
 {
+    //检查此mr是否可随机访问
     return mr->ram;
 }
 

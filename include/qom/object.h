@@ -321,10 +321,10 @@ typedef struct ObjectProperty ObjectProperty;
  *
  * Called when trying to get/set a property.
  */
-typedef void (ObjectPropertyAccessor)(Object *obj,
-                                      Visitor *v,
-                                      const char *name,
-                                      void *opaque,
+typedef void (ObjectPropertyAccessor)(Object *obj/*待设置属性的obj*/,
+                                      Visitor *v/*包含属性值的解析器*/,
+                                      const char *name/*属性名称*/,
+                                      void *opaque/*属性*/,
                                       Error **errp);
 
 /**
@@ -370,7 +370,7 @@ typedef void (ObjectPropertyInit)(Object *obj, ObjectProperty *prop);
 struct ObjectProperty
 {
     gchar *name;//属性名称
-    gchar *type;//属性类型
+    gchar *type;//属性类型名称
     gchar *description;//属性描述信息
     ObjectPropertyAccessor *get;//属性值get函数
     ObjectPropertyAccessor *set;//属性值set函数
@@ -405,11 +405,12 @@ typedef void (ObjectFree)(void *obj);
  *
  * The base for all classes.  The only thing that #ObjectClass contains is an
  * integer type handle.
+ * 所有class的基类，每个type都有一个关联的class
  */
 struct ObjectClass
 {
     /*< private >*/
-    Type type;//类的类型
+    Type type;//ObjectClass对应的TypeImpl
     GSList *interfaces;//按顺序存入各接口的type class
 
     const char *object_cast_cache[OBJECT_CLASS_CAST_CACHE];
@@ -417,7 +418,8 @@ struct ObjectClass
 
     ObjectUnparent *unparent;
 
-    GHashTable *properties;//对象属性表
+    //属性表（成员为ObjectProperty类型，由object_class_property_add函数加入）
+    GHashTable *properties;
 };
 
 /**
@@ -435,10 +437,10 @@ struct ObjectClass
 struct Object
 {
     /*< private >*/
-    ObjectClass *class;//对象所属的class
-    ObjectFree *free;//对象内存释放函数
-    GHashTable *properties;//对象的属性表（以属性名索引）
-    uint32_t ref;//对象的引用计数
+    ObjectClass *class;//所属的class
+    ObjectFree *free;//内存释放函数
+    GHashTable *properties;//属性表（以属性名索引）
+    uint32_t ref;//引用计数
     Object *parent;//如果此值不为NULL,则此对象已被接管
 };
 
@@ -491,22 +493,33 @@ struct TypeInfo
     const char *name;//类型名称
     const char *parent;//对应的父类型名称
 
-    size_t instance_size;//类型对象大小
-    void (*instance_init)(Object *obj);//实例的构造函数
-    void (*instance_post_init)(Object *obj);//实例的构造函数，在instance_init之后调用
-    void (*instance_finalize)(Object *obj);//对象的析构函数
+    //类型对象大小，如果其为0，则其大小为父类型instance_size
+    size_t instance_size;
+    //实例的构造函数,对象初始化时会调用本函数，调用本函数时，父对象将已经被初始化，
+    //故本类型仅仅初始化自有成员即可
+    void (*instance_init)(Object *obj);
+    //实例初始化完成后此函数将被调用，在所有@instance_init调用之后
+    void (*instance_post_init)(Object *obj);
+    //此函数在对象销毁期间被调用。在所有父类@instance_finalized调用之前调用，一个
+    //对象仅仅需要稍毁此类型中的成员
+    void (*instance_finalize)(Object *obj);
 
-    bool abstract;//是否抽象类型
-    size_t class_size;//类元数据大小
+    //如果此字段为True,则此class不能被实附化。
+    bool abstract;
+    //此object对应objectclass大小，如果@class_size为0，那么这个objectclass数据大小将等于
+    //其父objectclass大小，这将容许某此类型可以不增加新的虚函数，而仅仅做明确的函数实现
+    size_t class_size;
 
-    //本类型元数据的构造函数
+    //此函数在所有父类初始化之后调用，以便容许设置默认的虚函数指针，当然也容许子类override
+    //父类的虚方法。
     void (*class_init)(ObjectClass *klass, void *data);
     //在本类型构造函数完成后调用，依注释是为了消除memcopy对类型的影响
     void (*class_base_init)(ObjectClass *klass, void *data);
     //用于回调instance_init,instance_post_init,instance_finalize回调的参数
+    //可用于构建动态class
     void *class_data;
 
-    //类型的接口信息
+    //本type的一组接口，此指定应指向一个以0结尾的静态数组
     InterfaceInfo *interfaces;
 };
 
@@ -517,6 +530,7 @@ struct TypeInfo
  * Converts an object to a #Object.  Since all objects are #Objects,
  * this function will always succeed.
  */
+//将obj转换为Object类型，所有obj均为Object类型的子类
 #define OBJECT(obj) \
     ((Object *)(obj))
 
@@ -544,7 +558,7 @@ struct TypeInfo
  * If an invalid object is passed to this function, a run time assert will be
  * generated.
  */
-#define OBJECT_CHECK(type, obj, name) \
+#define OBJECT_CHECK(type/*类型结构体*/, obj/*对象*/, name/*类型名称*/) \
     /*检查obj是否为type类型的obj,是否为name的子类型*/\
     ((type *)object_dynamic_cast_assert(OBJECT(obj), (name), \
                                         __FILE__, __LINE__, __func__))
@@ -583,7 +597,7 @@ struct TypeInfo
  * The information associated with an interface.
  */
 struct InterfaceInfo {
-    const char *type;
+    const char *type;//接口类型名称
 };
 
 /**
@@ -596,7 +610,7 @@ struct InterfaceInfo {
 //interfaceClass是所有interface的Class
 struct InterfaceClass
 {
-    ObjectClass parent_class;
+    ObjectClass parent_class;//父ObjectClass
     /*< private >*/
     ObjectClass *concrete_class;
     Type interface_type;//interface对应的Type
@@ -1120,7 +1134,7 @@ ObjectProperty *object_class_property_find(ObjectClass *klass, const char *name,
                                            Error **errp);
 
 typedef struct ObjectPropertyIterator {
-    ObjectClass *nextclass;
+    ObjectClass *nextclass;//待迭代的下一级class
     GHashTableIter iter;
 } ObjectPropertyIterator;
 

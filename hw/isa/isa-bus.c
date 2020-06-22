@@ -123,6 +123,7 @@ IsaDma *isa_get_dma(ISABus *bus, int nchan)
     return bus->dma[nchan > 3 ? 1 : 0];
 }
 
+//更新isa设备的ioport
 static inline void isa_init_ioport(ISADevice *dev, uint16_t ioport)
 {
     if (dev && (dev->ioport_id == 0 || ioport < dev->ioport_id)) {
@@ -130,7 +131,8 @@ static inline void isa_init_ioport(ISADevice *dev, uint16_t ioport)
     }
 }
 
-void isa_register_ioport(ISADevice *dev, MemoryRegion *io, uint16_t start)
+//isa-bus ioport注册
+void isa_register_ioport(ISADevice *dev, MemoryRegion *io, uint16_t start/*起始地址*/)
 {
     memory_region_add_subregion(isabus->address_space_io, start, io);
     isa_init_ioport(dev, start);

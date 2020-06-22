@@ -328,6 +328,7 @@ static USBDevice *usb_try_create_simple(USBBus *bus, const char *name,
     Error *err = NULL;
     USBDevice *dev;
 
+    //创建一个usb设备
     dev = USB_DEVICE(qdev_try_create(&bus->qbus, name));
     if (!dev) {
         error_setg(errp, "Failed to create USB device '%s'", name);

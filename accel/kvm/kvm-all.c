@@ -85,6 +85,7 @@ struct KVMState
     int coalesced_mmio;//返回mmio_page_offset情况
     int coalesced_pio;//是否支持pio
     struct kvm_coalesced_mmio_ring *coalesced_mmio_ring;
+    //标记 coalesced_flush正在处理
     bool coalesced_flush_in_progress;
     int vcpu_events;
     int robust_singlestep;
@@ -304,6 +305,8 @@ static int kvm_set_user_memory_region(KVMMemoryListener *kml, KVMSlot *slot, boo
     mem.userspace_addr = (unsigned long)slot->ram;
     mem.flags = slot->flags;
 
+    //KVM_SET_USER_MEMORY_REGION用于用户创建，删除，修改guest物理内存slot
+    //memory变更时，需要先将其移除掉，故先将此memory设置为0，相当于移除掉内存条
     if (slot->memory_size && !new && (mem.flags ^ slot->old_flags) & KVM_MEM_READONLY) {
         /* Set the slot size to 0 before setting the slot to the desired
          * value. This is needed based on KVM commit 75d61fbc. */
@@ -313,6 +316,7 @@ static int kvm_set_user_memory_region(KVMMemoryListener *kml, KVMSlot *slot, boo
             goto err;
         }
     }
+    //再设置slot内存大小，相当于增加内存条
     mem.memory_size = slot->memory_size;
     ret = kvm_vm_ioctl(s, KVM_SET_USER_MEMORY_REGION, &mem);
     slot->old_flags = mem.flags;
@@ -415,6 +419,7 @@ int kvm_init_vcpu(CPUState *cpu)
         goto err;
     }
 
+    //初始化coalesced_mmio_ring
     if (s->coalesced_mmio && !s->coalesced_mmio_ring) {
         s->coalesced_mmio_ring =
             (void *)cpu->kvm_run + s->coalesced_mmio * PAGE_SIZE;
@@ -1034,6 +1039,7 @@ static void kvm_set_phys_mem(KVMMemoryListener *kml,
 {
     KVMSlot *mem;
     int err;
+    //获得此section对应的mr
     MemoryRegion *mr = section->mr;
     bool writeable = !mr->readonly && !mr->rom_device;
     hwaddr start_addr, size, slot_size;
@@ -1119,9 +1125,11 @@ out:
     kvm_slots_unlock(kml);
 }
 
+//当我们向kvm提交这个secion对应的mr时，此函数将被调用
 static void kvm_region_add(MemoryListener *listener,
                            MemoryRegionSection *section)
 {
+    //由listener获得 kvm memory listener
     KVMMemoryListener *kml = container_of(listener, KVMMemoryListener, listener);
 
     memory_region_ref(section->mr);
@@ -1634,8 +1642,8 @@ int kvm_irqchip_update_msi_route(KVMState *s, int virq, MSIMessage msg,
     return kvm_update_routing_entry(s, &kroute);
 }
 
-static int kvm_irqchip_assign_irqfd(KVMState *s, int fd, int rfd, int virq,
-                                    bool assign)
+static int kvm_irqchip_assign_irqfd(KVMState *s, int fd/*中断源fd*/, int rfd/*如果此值为-1,则resample*/, int virq,
+                                    bool assign/*是否assign操作*/)
 {
     struct kvm_irqfd irqfd = {
         .fd = fd,
@@ -1648,10 +1656,12 @@ static int kvm_irqchip_assign_irqfd(KVMState *s, int fd, int rfd, int virq,
         irqfd.resamplefd = rfd;
     }
 
+    //检查是否开启了irqfds
     if (!kvm_irqfds_enabled()) {
         return -ENOSYS;
     }
 
+    //向kvm配置irqfd,完成中断事件监听并注入中断给vcpu
     return kvm_vm_ioctl(s, KVM_IRQFD, &irqfd);
 }
 
@@ -1755,6 +1765,7 @@ int kvm_irqchip_update_msi_route(KVMState *s, int virq, MSIMessage msg)
 int kvm_irqchip_add_irqfd_notifier_gsi(KVMState *s, EventNotifier *n,
                                        EventNotifier *rn, int virq)
 {
+    //添加中断fd通知
     return kvm_irqchip_assign_irqfd(s, event_notifier_get_fd(n),
            rn ? event_notifier_get_fd(rn) : -1, virq, true);
 }
@@ -2194,9 +2205,11 @@ void kvm_flush_coalesced_mmio_buffer(void)
     KVMState *s = kvm_state;
 
     if (s->coalesced_flush_in_progress) {
+        //如果已在处理，则直接返回
         return;
     }
 
+    //标记正在处理
     s->coalesced_flush_in_progress = true;
 
     if (s->coalesced_mmio_ring) {
@@ -2204,8 +2217,10 @@ void kvm_flush_coalesced_mmio_buffer(void)
         while (ring->first != ring->last) {
             struct kvm_coalesced_mmio *ent;
 
+            //取队列中元素
             ent = &ring->coalesced_mmio[ring->first];
 
+            //确认是io写还是物理内存写
             if (ent->pio == 1) {
                 address_space_write(&address_space_io, ent->phys_addr,
                                     MEMTXATTRS_UNSPECIFIED, ent->data,
@@ -2213,6 +2228,7 @@ void kvm_flush_coalesced_mmio_buffer(void)
             } else {
                 cpu_physical_memory_write(ent->phys_addr, ent->data, ent->len);
             }
+            //跳到下一个元素
             smp_wmb();
             ring->first = (ring->first + 1) % KVM_COALESCED_MMIO_MAX;
         }

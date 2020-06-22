@@ -39,6 +39,7 @@ int event_notifier_init(EventNotifier *e, int active)
     int ret;
 
 #ifdef CONFIG_EVENTFD
+    //创建eventfd
     ret = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 #else
     ret = -1;
@@ -127,6 +128,7 @@ int event_notifier_test_and_clear(EventNotifier *e)
     /* Drain the notify pipe.  For eventfd, only 8 bytes will be read.  */
     value = 0;
     do {
+        /*检查e->rfd是否可读取,如果不可读取，则阻塞*/
         len = read(e->rfd, buffer, sizeof(buffer));
         value |= (len > 0);
     } while ((len == -1 && errno == EINTR) || len == sizeof(buffer));

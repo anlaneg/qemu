@@ -26,7 +26,8 @@ typedef struct QDictEntry {
 
 struct QDict {
     struct QObjectBase_ base;
-    size_t size;
+    size_t size;//元素数目
+    //保存元素的hashtable
     QLIST_HEAD(,QDictEntry) table[QDICT_BUCKET_MAX];
 };
 

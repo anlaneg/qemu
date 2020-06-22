@@ -19,6 +19,7 @@
 #include "qapi/visitor-impl.h"
 #include "trace.h"
 
+//触发visitor的complete回调
 void visit_complete(Visitor *v, void *opaque)
 {
     assert(v->type != VISITOR_OUTPUT || v->complete);
@@ -303,7 +304,7 @@ void visit_type_bool(Visitor *v, const char *name, bool *obj, Error **errp)
 }
 
 //调用type_str解析字符串类型
-void visit_type_str(Visitor *v, const char *name, char **obj, Error **errp)
+void visit_type_str(Visitor *v, const char *name, char **obj/*出错，解析后的内容*/, Error **errp)
 {
     Error *err = NULL;
 
@@ -313,6 +314,7 @@ void visit_type_str(Visitor *v, const char *name, char **obj, Error **errp)
     assert(!(v->type & VISITOR_OUTPUT) || *obj);
      */
     trace_visit_type_str(v, name, obj);
+    //v负责将字符串转换为obj
     v->type_str(v, name, obj, &err);
     if (v->type & VISITOR_INPUT) {
         assert(!err != !*obj);

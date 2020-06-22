@@ -124,7 +124,7 @@ struct VirtQueue
 
     unsigned int inuse;
 
-    uint16_t vector;
+    uint16_t vector;//中断向量
     VirtIOHandleOutput handle_output;//此队列的output处理函数
     VirtIOHandleAIOOutput handle_aio_output;//此队列的异步output处理函数
     VirtIODevice *vdev;
@@ -2273,6 +2273,7 @@ void virtio_queue_set_rings(VirtIODevice *vdev, int n, hwaddr desc,
                             hwaddr avail, hwaddr used)
 {
     if (!vdev->vq[n].vring.num) {
+        /*ring队列为0，直接返回*/
         return;
     }
     vdev->vq[n].vring.desc = desc;
@@ -2408,12 +2409,14 @@ void virtio_queue_notify(VirtIODevice *vdev, int n)
     }
 }
 
+//取队列n的中断向量
 uint16_t virtio_queue_vector(VirtIODevice *vdev, int n)
 {
     return n < VIRTIO_QUEUE_MAX ? vdev->vq[n].vector :
         VIRTIO_NO_VECTOR;
 }
 
+//设置vdev的n号队列使用中断向量vector
 void virtio_queue_set_vector(VirtIODevice *vdev, int n, uint16_t vector)
 {
     VirtQueue *vq = &vdev->vq[n];
@@ -2423,6 +2426,7 @@ void virtio_queue_set_vector(VirtIODevice *vdev, int n, uint16_t vector)
             vdev->vq[n].vector != VIRTIO_NO_VECTOR) {
             QLIST_REMOVE(vq, node);
         }
+        //设置n号队列的中断向量为vector
         vdev->vq[n].vector = vector;
         if (vdev->vector_queues &&
             vector != VIRTIO_NO_VECTOR) {
@@ -3321,6 +3325,7 @@ void virtio_init(VirtIODevice *vdev, const char *name,
     vdev->use_guest_notifier_mask = true;
 }
 
+//取n号vring的desc地址
 hwaddr virtio_queue_get_desc_addr(VirtIODevice *vdev, int n)
 {
     return vdev->vq[n].vring.desc;
@@ -3331,11 +3336,13 @@ bool virtio_queue_enabled(VirtIODevice *vdev, int n)
     return virtio_queue_get_desc_addr(vdev, n) != 0;
 }
 
+//取n号vring的avail地址
 hwaddr virtio_queue_get_avail_addr(VirtIODevice *vdev, int n)
 {
     return vdev->vq[n].vring.avail;
 }
 
+//取n号vring的used地址
 hwaddr virtio_queue_get_used_addr(VirtIODevice *vdev, int n)
 {
     return vdev->vq[n].vring.used;

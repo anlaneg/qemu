@@ -146,9 +146,9 @@ static const QemuOptDesc *find_desc_by_name(const QemuOptDesc *desc,
     return NULL;
 }
 
-//解析img的size参数
-void parse_option_size(const char *name, const char *value,
-                       uint64_t *ret, Error **errp)
+//解析size类型数据，支持 k, M, G, T, P or E 等单位
+void parse_option_size(const char *name/*参数名称*/, const char *value/*参数字面值*/,
+                       uint64_t *ret/*出参，解析结果*/, Error **errp)
 {
     uint64_t size;
     int err;

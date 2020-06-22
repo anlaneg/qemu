@@ -63,6 +63,7 @@ QString *qstring_from_substr(const char *str, size_t start, size_t end)
  */
 QString *qstring_from_str(const char *str)
 {
+    //通过字符串创建Qstring对象
     return qstring_from_substr(str, 0, strlen(str));
 }
 

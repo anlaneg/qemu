@@ -73,6 +73,7 @@ void msix_set_pending(PCIDevice *dev, unsigned int vector)
     *msix_pending_byte(dev, vector) |= msix_pending_mask(vector);
 }
 
+//移除掉dev的vector号向量
 void msix_clr_pending(PCIDevice *dev, int vector)
 {
     *msix_pending_byte(dev, vector) &= ~msix_pending_mask(vector);
@@ -124,6 +125,7 @@ static void msix_handle_mask_update(PCIDevice *dev, int vector, bool was_masked)
 
     msix_fire_vector_notifier(dev, vector, is_masked);
 
+    //如果vector中断未绝，则通知vector号中断
     if (!is_masked && msix_is_pending(dev, vector)) {
         msix_clr_pending(dev, vector);
         msix_notify(dev, vector);
@@ -475,6 +477,7 @@ int msix_enabled(PCIDevice *dev)
 }
 
 /* Send an MSI-X message */
+/*向pci设备发送一个vector号中断*/
 void msix_notify(PCIDevice *dev, unsigned vector)
 {
     MSIMessage msg;
@@ -528,9 +531,11 @@ int msix_vector_use(PCIDevice *dev, unsigned vector)
 /* Mark vector as unused. */
 void msix_vector_unuse(PCIDevice *dev, unsigned vector)
 {
+    //中断向量不得超过最大数，vector号向量没有被使用
     if (vector >= dev->msix_entries_nr || !dev->msix_entry_used[vector]) {
         return;
     }
+    //指明vector号向量被使用
     if (--dev->msix_entry_used[vector]) {
         return;
     }

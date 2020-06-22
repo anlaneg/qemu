@@ -11,9 +11,13 @@ enum {
     DEV_NVECTORS_UNSPECIFIED = -1,
 };
 
+//定义device类型
 #define TYPE_DEVICE "device"
+//将obj转换为DeviceState类型
 #define DEVICE(obj) OBJECT_CHECK(DeviceState, (obj), TYPE_DEVICE)
+//将klass转换为DeviceClass
 #define DEVICE_CLASS(klass) OBJECT_CLASS_CHECK(DeviceClass, (klass), TYPE_DEVICE)
+//由obj获得其对应的DeviceClass
 #define DEVICE_GET_CLASS(obj) OBJECT_GET_CLASS(DeviceClass, (obj), TYPE_DEVICE)
 
 typedef enum DeviceCategory {
@@ -93,6 +97,7 @@ typedef void (*BusUnrealize)(BusState *bus, Error **errp);
  * until it was marked don't hide and qdev_device_add called again.
  *
  */
+//定义Device类型对应的ObjectClass
 typedef struct DeviceClass {
     /*< private >*/
     ObjectClass parent_class;
@@ -106,7 +111,7 @@ typedef struct DeviceClass {
      * The underscore at the end ensures a compile-time error if someone
      * assigns to dc->props instead of using device_class_set_props.
      */
-    Property *props_;
+    Property *props_;//通过device_class_set_props设置的Property数组
 
     /*
      * Can this device be instantiated with -device / device_add?
@@ -129,7 +134,7 @@ typedef struct DeviceClass {
      * TODO: remove once every reset callback is unused
      */
     DeviceReset reset;
-    DeviceRealize realize;
+    DeviceRealize realize;//realize回调
     DeviceUnrealize unrealize;
 
     /* device state */
@@ -169,6 +174,7 @@ struct NamedClockList {
  * so that it can be embedded in individual device state structures.
  */
 struct DeviceState {
+    //qemu的Device类型对象
     /*< private >*/
     Object parent_obj;
     /*< public >*/
@@ -265,11 +271,11 @@ struct BusState {
  *     is true.
  */
 struct Property {
-    const char   *name;
+    const char   *name;/*属性名称*/
     const PropertyInfo *info;
-    ptrdiff_t    offset;
+    ptrdiff_t    offset;//属性在结构体中起始的offset
     uint8_t      bitnr;
-    bool         set_default;
+    bool         set_default;//是否需要设置默认值
     union {
         int64_t i;
         uint64_t u;
@@ -281,14 +287,19 @@ struct Property {
 };
 
 struct PropertyInfo {
-    const char *name;
-    const char *description;
+    const char *name;//属性名称
+    const char *description;//属性描述信息
     const QEnumLookup *enum_table;
     int (*print)(DeviceState *dev, Property *prop, char *dest, size_t len);
+    //通过此回调为prop设置默认值
     void (*set_default_value)(ObjectProperty *op, const Property *prop);
+    //通过create函数，可在ObjectClass中添加属性prop
     void (*create)(ObjectClass *oc, Property *prop, Error **errp);
+    //prop的get访问函数
     ObjectPropertyAccessor *get;
+    //prop的set访问函数
     ObjectPropertyAccessor *set;
+    //prop的释放函数
     ObjectPropertyRelease *release;
 };
 

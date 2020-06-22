@@ -128,6 +128,7 @@ typedef struct VhostOps {
     vhost_scsi_get_abi_version_op vhost_scsi_get_abi_version;
     vhost_set_log_base_op vhost_set_log_base;
     vhost_set_mem_table_op vhost_set_mem_table;
+    //设置vring的地址（desc,avali,used表）
     vhost_set_vring_addr_op vhost_set_vring_addr;
     vhost_set_vring_endian_op vhost_set_vring_endian;
     vhost_set_vring_num_op vhost_set_vring_num;

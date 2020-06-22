@@ -95,7 +95,7 @@ struct kvm_memory_region {
 
 /* for KVM_SET_USER_MEMORY_REGION */
 struct kvm_userspace_memory_region {
-	__u32 slot;
+	__u32 slot;//此字段低15bits用于表示slot编号
 	__u32 flags;
 	__u64 guest_phys_addr;
 	__u64 memory_size; /* bytes */

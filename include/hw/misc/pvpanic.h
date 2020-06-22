@@ -21,12 +21,15 @@
 
 #define PVPANIC_IOPORT_PROP "ioport"
 
+//取inport属性
 static inline uint16_t pvpanic_port(void)
 {
+    //通过path获取Object
     Object *o = object_resolve_path_type("", TYPE_PVPANIC, NULL);
     if (!o) {
         return 0;
     }
+    //取Object中的'ioport'属性，其为一个无符号整数
     return object_property_get_uint(o, PVPANIC_IOPORT_PROP, NULL);
 }
 

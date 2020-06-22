@@ -665,7 +665,7 @@ static void qobject_input_free(Visitor *v)
     g_free(qiv);
 }
 
-//创建input vistor对象
+//创建基本input vistor对象
 static QObjectInputVisitor *qobject_input_visitor_base_new(QObject *obj)
 {
     QObjectInputVisitor *v = g_malloc0(sizeof(*v));

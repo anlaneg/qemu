@@ -617,6 +617,7 @@ static int vhost_user_set_vring_addr(struct vhost_dev *dev,
         .hdr.size = sizeof(msg.payload.addr),
     };
 
+    //发送vring设置消息
     if (vhost_user_write(dev, &msg, NULL, 0) < 0) {
         return -1;
     }
@@ -1951,7 +1952,7 @@ const VhostOps user_ops = {
         .vhost_backend_memslots_limit = vhost_user_memslots_limit,
         .vhost_set_log_base = vhost_user_set_log_base,
         .vhost_set_mem_table = vhost_user_set_mem_table,
-        .vhost_set_vring_addr = vhost_user_set_vring_addr,
+        .vhost_set_vring_addr = vhost_user_set_vring_addr,//实现vring地址设置avali,use,desc等
         .vhost_set_vring_endian = vhost_user_set_vring_endian,
         .vhost_set_vring_num = vhost_user_set_vring_num,
         .vhost_set_vring_base = vhost_user_set_vring_base,

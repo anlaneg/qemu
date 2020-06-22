@@ -24,6 +24,7 @@
  */
 QDict *qdict_new(void)
 {
+    //创建dict对象
     QDict *qdict;
 
     qdict = g_malloc0(sizeof(*qdict));
@@ -38,6 +39,7 @@ QDict *qdict_new(void)
  */
 static unsigned int tdb_hash(const char *name)
 {
+    //按名称获得hashcode
     unsigned value;	/* Used to compute the hash value.  */
     unsigned   i;	/* Used to cycle through random values. */
 
@@ -111,16 +113,19 @@ static QDictEntry *qdict_find(const QDict *qdict,
  */
 void qdict_put_obj(QDict *qdict, const char *key, QObject *value)
 {
+    //dict数据类型，将key,value存入
     unsigned int bucket;
     QDictEntry *entry;
 
     bucket = tdb_hash(key) % QDICT_BUCKET_MAX;
     entry = qdict_find(qdict, key, bucket);
     if (entry) {
+        /*如果已存在此key,则更新*/
         /* replace key's value */
         qobject_unref(entry->value);
         entry->value = value;
     } else {
+        //此key不存在，则向hashtable中加入
         /* allocate a new entry */
         entry = alloc_entry(key, value);
         QLIST_INSERT_HEAD(&qdict->table[bucket], entry, next);
@@ -128,9 +133,10 @@ void qdict_put_obj(QDict *qdict, const char *key, QObject *value)
     }
 }
 
+//向dict中存入整理数据
 void qdict_put_int(QDict *qdict, const char *key, int64_t value)
 {
-    qdict_put(qdict, key, qnum_from_int(value));
+    qdict_put(qdict, key, qnum_from_int(value)/*通过value创建QNum对象*/);
 }
 
 void qdict_put_bool(QDict *qdict, const char *key, bool value)

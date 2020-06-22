@@ -76,8 +76,8 @@ static inline void cpu_physical_memory_read(hwaddr addr,
 {
     cpu_physical_memory_rw(addr, buf, len, false);
 }
-static inline void cpu_physical_memory_write(hwaddr addr,
-                                             const void *buf, hwaddr len)
+static inline void cpu_physical_memory_write(hwaddr addr/*写的物理地址*/,
+                                             const void *buf/*要写入的内容*/, hwaddr len/*写入的数据长度*/)
 {
     cpu_physical_memory_rw(addr, (void *)buf, len, true);
 }

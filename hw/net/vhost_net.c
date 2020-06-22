@@ -408,6 +408,7 @@ int vhost_net_notify_migration_done(struct vhost_net *net, char* mac_addr)
     return vhost_ops->vhost_migration_done(&net->dev, mac_addr);
 }
 
+//阻塞等待idx号队列通知
 bool vhost_net_virtqueue_pending(VHostNetState *net, int idx)
 {
     return vhost_virtqueue_pending(&net->dev, idx);

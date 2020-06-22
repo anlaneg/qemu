@@ -548,9 +548,10 @@ int qemu_strtoul(const char *nptr, const char **endptr, int base,
  * Works like qemu_strtol(), except it stores INT64_MAX on overflow,
  * and INT64_MIN on underflow.
  */
-int qemu_strtoi64(const char *nptr, const char **endptr, int base,
+int qemu_strtoi64(const char *nptr, const char **endptr, int base/*转换基进制*/,
                  int64_t *result)
 {
+    //字符串转int64_t
     char *ep;
 
     assert((unsigned) base <= 36 && base != 1);
@@ -623,6 +624,7 @@ int qemu_strtou64(const char *nptr, const char **endptr, int base,
  */
 int qemu_strtod(const char *nptr, const char **endptr, double *result)
 {
+    //字符串转double
     char *ep;
 
     if (!nptr) {
@@ -643,7 +645,7 @@ int qemu_strtod(const char *nptr, const char **endptr, double *result)
  * Works like qemu_strtod(), except that "NaN" and "inf" are rejected
  * with -EINVAL and no conversion is performed.
  */
-int qemu_strtod_finite(const char *nptr, const char **endptr, double *result)
+int qemu_strtod_finite(const char *nptr, const char **endptr, double *result/*出参，字符串转double结果*/)
 {
     double tmp;
     int ret;

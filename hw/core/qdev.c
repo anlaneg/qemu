@@ -95,11 +95,13 @@ static void bus_add_child(BusState *bus, DeviceState *child)
                              NULL);
 }
 
+//为device设置parent bus
 void qdev_set_parent_bus(DeviceState *dev, BusState *bus)
 {
     BusState *old_parent_bus = dev->parent_bus;
 
     if (old_parent_bus) {
+        //有旧的parent_bus
         trace_qdev_update_parent_bus(dev, object_get_typename(OBJECT(dev)),
             old_parent_bus, object_get_typename(OBJECT(old_parent_bus)),
             OBJECT(bus), object_get_typename(OBJECT(bus)));
@@ -113,6 +115,7 @@ void qdev_set_parent_bus(DeviceState *dev, BusState *bus)
         object_ref(OBJECT(dev));
         bus_remove_child(dev->parent_bus, dev);
     }
+    //更新设备的parent_bus
     dev->parent_bus = bus;
     object_ref(OBJECT(bus));
     bus_add_child(bus, dev);
@@ -147,18 +150,23 @@ DeviceState *qdev_create(BusState *bus, const char *name)
     return dev;
 }
 
+//创建指定type的Device
 DeviceState *qdev_try_create(BusState *bus, const char *type)
 {
     DeviceState *dev;
 
+    //此类型对应的ObjectClass必须已注册
     if (object_class_by_name(type) == NULL) {
         return NULL;
     }
+
+    //创建此类型的Device
     dev = DEVICE(object_new(type));
     if (!dev) {
         return NULL;
     }
 
+    //如未指定bus,使用默认bus
     if (!bus) {
         /* Assert that the device really is a SysBusDevice before
          * we put it onto the sysbus. Non-sysbus devices which aren't
@@ -169,8 +177,10 @@ DeviceState *qdev_try_create(BusState *bus, const char *type)
         bus = sysbus_get_default();
     }
 
+    //为dev设置bus
     qdev_set_parent_bus(dev, bus);
     object_unref(OBJECT(dev));
+    //返回创建的device
     return dev;
 }
 
@@ -774,6 +784,7 @@ void qdev_property_add_static(DeviceState *dev, Property *prop)
                              prop->info->release,
                              prop, &error_abort);
 
+    //设置属性的描述信息
     object_property_set_description(obj, prop->name,
                                     prop->info->description,
                                     &error_abort);
@@ -786,13 +797,16 @@ void qdev_property_add_static(DeviceState *dev, Property *prop)
     }
 }
 
+//为qdev添加属性
 static void qdev_class_add_property(DeviceClass *klass, Property *prop)
 {
     ObjectClass *oc = OBJECT_CLASS(klass);
 
     if (prop->info->create) {
+        //如属性指定了create函数，则通过create完成属性添加
         prop->info->create(oc, prop, &error_abort);
     } else {
+        //否则添加并设置默认值
         ObjectProperty *op;
 
         op = object_class_property_add(oc,
@@ -851,9 +865,10 @@ static bool check_only_migratable(Object *obj, Error **errp)
     return true;
 }
 
-//向device object的realized属性设置值
+//设置device object的realized属性值
 static void device_set_realized(Object *obj, bool value, Error **errp)
 {
+    //将obj转换为DeviceState类型
     DeviceState *dev = DEVICE(obj);
     DeviceClass *dc = DEVICE_GET_CLASS(dev);
     HotplugHandler *hotplug_ctrl;
@@ -864,10 +879,12 @@ static void device_set_realized(Object *obj, bool value, Error **errp)
     static int unattached_count;
 
     if (dev->hotplugged && !dc->hotpluggable) {
+        //如果设置被置热插拔，但class不支持热插拔时，报错
         error_setg(errp, QERR_DEVICE_NO_HOTPLUG, object_get_typename(obj));
         return;
     }
 
+    //设备之前未识别，当前value指明识别
     if (value && !dev->realized) {
         if (!check_only_migratable(obj, &local_err)) {
             goto fail;
@@ -1022,6 +1039,7 @@ static bool device_get_hotplugged(Object *obj, Error **errp)
     return dev->hotplugged;
 }
 
+//DeviceState构造函数，完成初始化
 static void device_initfn(Object *obj)
 {
     DeviceState *dev = DEVICE(obj);
@@ -1052,6 +1070,7 @@ static void device_post_init(Object *obj)
 /* Unlink device from bus and free the structure.  */
 static void device_finalize(Object *obj)
 {
+    //DeviceState设备析构函数
     NamedGPIOList *ngl, *next;
 
     DeviceState *dev = DEVICE(obj);
@@ -1168,6 +1187,7 @@ static ResettableTrFunction device_get_transitional_reset(Object *obj)
     return NULL;
 }
 
+//初始化DeviceClass
 static void device_class_init(ObjectClass *class, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(class);
@@ -1204,12 +1224,15 @@ static void device_class_init(ObjectClass *class, void *data)
     dc->reset = device_phases_reset;
     rc->get_transitional_function = device_get_transitional_reset;
 
+    //添加realized属性
     object_class_property_add_bool(class, "realized",
                                    device_get_realized, device_set_realized,
                                    &error_abort);
+    //添加hotpluggable属性
     object_class_property_add_bool(class, "hotpluggable",
                                    device_get_hotpluggable, NULL,
                                    &error_abort);
+    //iggds加hotplugged属性
     object_class_property_add_bool(class, "hotplugged",
                                    device_get_hotplugged, NULL,
                                    &error_abort);
@@ -1218,11 +1241,13 @@ static void device_class_init(ObjectClass *class, void *data)
                                    &error_abort);
 }
 
+/*为DeviceClass设置一组property*/
 void device_class_set_props(DeviceClass *dc, Property *props)
 {
     Property *prop;
 
     dc->props_ = props;
+    //遍历设置的property,其必须有名称，将其加入到dc中
     for (prop = props; prop && prop->name; prop++) {
         qdev_class_add_legacy_property(dc, prop);
         qdev_class_add_property(dc, prop);
@@ -1274,6 +1299,7 @@ Object *qdev_get_machine(void)
     return dev;
 }
 
+//定义device类型
 static const TypeInfo device_type_info = {
     .name = TYPE_DEVICE,
     .parent = TYPE_OBJECT,
@@ -1283,8 +1309,8 @@ static const TypeInfo device_type_info = {
     .instance_finalize = device_finalize,
     .class_base_init = device_class_base_init,
     .class_init = device_class_init,
-    .abstract = true,
-    .class_size = sizeof(DeviceClass),
+    .abstract = true,//device为抽象类型
+    .class_size = sizeof(DeviceClass),//device对应class为DeviceClass
     .interfaces = (InterfaceInfo[]) {
         { TYPE_VMSTATE_IF },
         { TYPE_RESETTABLE_INTERFACE },
@@ -1292,6 +1318,7 @@ static const TypeInfo device_type_info = {
     }
 };
 
+//注册device类型
 static void qdev_register_types(void)
 {
     type_register_static(&device_type_info);
