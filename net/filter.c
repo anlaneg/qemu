@@ -38,8 +38,11 @@ ssize_t qemu_netfilter_receive(NetFilterState *nf,
         /*未开启，直接跳过*/
         return 0;
     }
+
+    /*如果与net filter方向匹配，则进入filter接收*/
     if (nf->direction == direction ||
         nf->direction == NET_FILTER_DIRECTION_ALL) {
+        //通过receive_iov回调进行处理
         return NETFILTER_GET_CLASS(OBJECT(nf))->receive_iov(
                                    nf, sender, flags, iov, iovcnt, sent_cb);
     }

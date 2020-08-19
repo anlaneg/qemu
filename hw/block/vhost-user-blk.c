@@ -312,6 +312,8 @@ static int vhost_user_blk_connect(DeviceState *dev)
 
     vhost_dev_set_config_notifier(&s->dev, &blk_ops);
 
+
+    /*vhost user类型的vhost设备初始化*/
     ret = vhost_dev_init(&s->dev, &s->vhost_user, VHOST_BACKEND_TYPE_USER, 0);
     if (ret < 0) {
         error_report("vhost-user-blk: vhost initialization failed: %s",

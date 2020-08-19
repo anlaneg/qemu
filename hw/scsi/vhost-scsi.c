@@ -220,8 +220,9 @@ static void vhost_scsi_realize(DeviceState *dev, Error **errp)
     vsc->dev.vq_index = 0;
     vsc->dev.backend_features = 0;
 
+    //kernel类型的vhost设备初始化
     ret = vhost_dev_init(&vsc->dev, (void *)(uintptr_t)vhostfd,
-                         VHOST_BACKEND_TYPE_KERNEL, 0);//kernel类型的vhost
+                         VHOST_BACKEND_TYPE_KERNEL, 0);
     if (ret < 0) {
         error_setg(errp, "vhost-scsi: vhost initialization failed: %s",
                    strerror(-ret));

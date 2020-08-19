@@ -1657,8 +1657,10 @@ int monitor_fd_param(Monitor *mon, const char *fdname, Error **errp)
     Error *local_err = NULL;
 
     if (!qemu_isdigit(fdname[0]) && mon) {
+        /*fdname首个字符不为数字，则通过monitor获得fd，*/
         fd = monitor_get_fd(mon, fdname, &local_err);
     } else {
+        /*fdname首字符为数字，按数字直接解析fd*/
         fd = qemu_parse_fd(fdname);
         if (fd == -1) {
             error_setg(&local_err, "Invalid file descriptor number '%s'",
@@ -1672,6 +1674,7 @@ int monitor_fd_param(Monitor *mon, const char *fdname, Error **errp)
         assert(fd != -1);
     }
 
+    /*返回给定的fd*/
     return fd;
 }
 

@@ -121,6 +121,7 @@ static void vhost_user_scsi_realize(DeviceState *dev, Error **errp)
     vsc->dev.backend_features = 0;
     vqs = vsc->dev.vqs;
 
+    /*vhost_user类型的vhost设备初始化*/
     ret = vhost_dev_init(&vsc->dev, &s->vhost_user,
                          VHOST_BACKEND_TYPE_USER, 0);
     if (ret < 0) {

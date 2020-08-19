@@ -49,7 +49,7 @@ typedef struct NetFilterClass {
     FilterStatusChanged *status_changed;
     FilterHandleEvent *handle_event;
     /* mandatory */
-    FilterReceiveIOV *receive_iov;
+    FilterReceiveIOV *receive_iov;//net filter回调，支持iov格式输入
 } NetFilterClass;
 
 
@@ -60,7 +60,9 @@ struct NetFilterState {
     /* protected */
     char *netdev_id;
     NetClientState *netdev;
+    //标记此filter应用于哪个方向
     NetFilterDirection direction;
+    //标记此filter是否开启
     bool on;
     char *position;
     bool insert_before_flag;

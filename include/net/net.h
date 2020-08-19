@@ -64,11 +64,15 @@ typedef void (NetAnnounce)(NetClientState *);
 
 typedef struct NetClientInfo {
     NetClientDriver type;
-    size_t size;
+    size_t size;/*指明net client state结构体大小*/
+    //函数回调，用于收取单个地址连续的buffer，如无receive_raw时，也支持raw标记报文
     NetReceive *receive;
+    //函数回调，用于收取单个地址连续的buffer,收取有raw标记的报文
     NetReceive *receive_raw;
+    //函数回调，用于收取iov格式的buffer,不支持raw标记报文收取
     NetReceiveIOV *receive_iov;
     NetCanReceive *can_receive;
+    //nc被移除时，需要执行的回调
     NetCleanup *cleanup;
     LinkStatusChanged *link_status_changed;
     QueryRxFilter *query_rx_filter;
@@ -86,20 +90,31 @@ typedef struct NetClientInfo {
 
 struct NetClientState {
     NetClientInfo *info;
+    //链路是否为down
     int link_down;
     QTAILQ_ENTRY(NetClientState) next;
+    //指向nc对端
     NetClientState *peer;
-    NetQueue *incoming_queue;//队列
-    char *model;//作用不明，取值比如"vhost_user"
+    //用于缓存报文的队列，完成报文收取
+    NetQueue *incoming_queue;
+    //作用不明，取值比如"vhost_user"
+    char *model;
+    //net client的id号
     char *name;
+    //字符串格式的提示信息，例如fd=%d
     char info_str[256];
-    unsigned receive_disabled : 1;//禁止收包
-    NetClientDestructor *destructor;//nc释放时调用
-    unsigned int queue_index;//队列索引
+    //禁止收包
+    unsigned receive_disabled : 1;
+    //nc释放时调用
+    NetClientDestructor *destructor;
+    //队列索引
+    unsigned int queue_index;
     unsigned rxfilter_notify_enabled:1;
     int vring_enable;
     int vnet_hdr_len;
+    //指明nc是否为netdev
     bool is_netdev;
+    //用于串连net filter,用于进行各方向上报文过滤
     QTAILQ_HEAD(, NetFilterState) filters;
 };
 

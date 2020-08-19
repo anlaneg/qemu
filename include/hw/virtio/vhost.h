@@ -83,7 +83,7 @@ struct vhost_dev {
     bool log_enabled;
     uint64_t log_size;
     Error *migration_blocker;
-    const VhostOps *vhost_ops;
+    const VhostOps *vhost_ops;/*设备对应的vhost操作集，目前支持vhost,vhost-user两类*/
     void *opaque;
     struct vhost_log *log;
     QLIST_ENTRY(vhost_dev) entry;

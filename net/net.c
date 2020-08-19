@@ -61,6 +61,7 @@
 #endif
 
 static VMChangeStateEntry *net_change_state_entry;
+/*记录系统中创建的所有nc*/
 static QTAILQ_HEAD(, NetClientState) net_clients;
 
 /***********************************************************/
@@ -221,6 +222,7 @@ static char *assign_name(NetClientState *nc1, const char *model)
     return g_strdup_printf("%s.%d", model, id);
 }
 
+//net client state结构体释放函数
 static void qemu_net_client_destructor(NetClientState *nc)
 {
     g_free(nc);
@@ -231,6 +233,7 @@ static ssize_t qemu_deliver_packet_iov(NetClientState *sender,
                                        int iovcnt,
                                        void *opaque);
 
+//初始化net client state
 static void qemu_net_client_setup(NetClientState *nc,
                                   NetClientInfo *info,
                                   NetClientState *peer,
@@ -247,11 +250,12 @@ static void qemu_net_client_setup(NetClientState *nc,
     }
 
     if (peer) {
-    	//对端信息维护
+    	//对端信息维护,使相互指向对方
         assert(!peer->peer);
         nc->peer = peer;
         peer->peer = nc;
     }
+    //加入nc列表
     QTAILQ_INSERT_TAIL(&net_clients, nc, next);
 
     nc->incoming_queue = qemu_new_net_queue(qemu_deliver_packet_iov, nc);
@@ -259,6 +263,7 @@ static void qemu_net_client_setup(NetClientState *nc,
     QTAILQ_INIT(&nc->filters);
 }
 
+/*申请并初始化net client state*/
 NetClientState *qemu_new_net_client(NetClientInfo *info,
                                     NetClientState *peer,
                                     const char *model,
@@ -268,6 +273,7 @@ NetClientState *qemu_new_net_client(NetClientInfo *info,
 
     assert(info->size >= sizeof(NetClientState));
 
+    //按info大小，申请net client state
     nc = g_malloc0(info->size);
     qemu_net_client_setup(nc, info, peer, model, name,
                           qemu_net_client_destructor);
@@ -326,6 +332,7 @@ void *qemu_get_nic_opaque(NetClientState *nc)
     return nic->opaque;
 }
 
+//nc被移除，触发cleanup回调
 static void qemu_cleanup_net_client(NetClientState *nc)
 {
     QTAILQ_REMOVE(&net_clients, nc, next);
@@ -538,8 +545,9 @@ int qemu_can_send_packet(NetClientState *sender)
     return 1;
 }
 
+//执行net filter检查
 static ssize_t filter_receive_iov(NetClientState *nc,
-                                  NetFilterDirection direction,
+                                  NetFilterDirection direction/*filter方向*/,
                                   NetClientState *sender,
                                   unsigned flags,
                                   const struct iovec *iov,
@@ -550,6 +558,8 @@ static ssize_t filter_receive_iov(NetClientState *nc,
     NetFilterState *nf = NULL;
 
     if (direction == NET_FILTER_DIRECTION_TX) {
+        //tx方向的filter处理
+        //顺序遍历net filter,进行过滤检查，如果返回非0，则报文会被过滤，停止处理
         QTAILQ_FOREACH(nf, &nc->filters, next) {
             ret = qemu_netfilter_receive(nf, direction, sender, flags, iov,
                                          iovcnt, sent_cb);
@@ -558,6 +568,7 @@ static ssize_t filter_receive_iov(NetClientState *nc,
             }
         }
     } else {
+        //反序遍历net filter,进行过滤检查，如果返回非0，则报文会被过滤，停止处理
         QTAILQ_FOREACH_REVERSE(nf, &nc->filters, next) {
             ret = qemu_netfilter_receive(nf, direction, sender, flags, iov,
                                          iovcnt, sent_cb);
@@ -570,6 +581,7 @@ static ssize_t filter_receive_iov(NetClientState *nc,
     return ret;
 }
 
+//将地址连续的一段buffer直接转换为iov,调用filter_receive_iov完成filter
 static ssize_t filter_receive(NetClientState *nc,
                               NetFilterDirection direction,
                               NetClientState *sender,
@@ -604,6 +616,7 @@ void qemu_flush_or_purge_queued_packets(NetClientState *nc, bool purge)
             qemu_notify_event();
         }
     }
+    /*将nc队列全部flush掉，完成报文到对端的投递*/
     if (qemu_net_queue_flush(nc->incoming_queue)) {
         /* We emptied the queue successfully, signal to the IO thread to repoll
          * the file descriptor (for tap, for example).
@@ -620,6 +633,7 @@ void qemu_flush_queued_packets(NetClientState *nc)
     qemu_flush_or_purge_queued_packets(nc, false);
 }
 
+//报文自sneder设备上来，需要去对端，先执行tx方向filter再执行rx方向filter
 static ssize_t qemu_send_packet_async_with_flags(NetClientState *sender,
                                                  unsigned flags,
                                                  const uint8_t *buf, int size,
@@ -633,17 +647,21 @@ static ssize_t qemu_send_packet_async_with_flags(NetClientState *sender,
     qemu_hexdump((const char *)buf, stdout, "net", size);
 #endif
 
+    //link down或者无peer,直接返回size
     if (sender->link_down || !sender->peer) {
         return size;
     }
 
     /* Let filters handle the packet first */
+    //先执行tx方向过滤
     ret = filter_receive(sender, NET_FILTER_DIRECTION_TX,
                          sender, flags, buf, size, sent_cb);
     if (ret) {
+        /*返回值非0，报文被net filter过滤，直接返回*/
         return ret;
     }
 
+    //再执行rx方向过滤
     ret = filter_receive(sender->peer, NET_FILTER_DIRECTION_RX,
                          sender, flags, buf, size, sent_cb);
     if (ret) {
@@ -653,6 +671,7 @@ static ssize_t qemu_send_packet_async_with_flags(NetClientState *sender,
     //获取对端的队列
     queue = sender->peer->incoming_queue;
 
+    //将报文加入到对端设备队列
     return qemu_net_queue_send(queue, sender, flags, buf, size, sent_cb);
 }
 
@@ -675,6 +694,7 @@ ssize_t qemu_send_packet_raw(NetClientState *nc, const uint8_t *buf, int size)
                                              buf, size, NULL);
 }
 
+/*解决不支持iov格式receive回调的收取*/
 static ssize_t nc_sendv_compat(NetClientState *nc, const struct iovec *iov,
                                int iovcnt, unsigned flags)
 {
@@ -683,6 +703,7 @@ static ssize_t nc_sendv_compat(NetClientState *nc, const struct iovec *iov,
     size_t offset;
     ssize_t ret;
 
+    //将其转换为单个连续的buffer,offloset记录buffer的长度
     if (iovcnt == 1) {
         buffer = iov[0].iov_base;
         offset = iov[0].iov_len;
@@ -696,6 +717,7 @@ static ssize_t nc_sendv_compat(NetClientState *nc, const struct iovec *iov,
         offset = iov_to_buf(iov, iovcnt, 0, buf, offset);
     }
 
+    //通过回调完成报文receive
     if (flags & QEMU_NET_PACKET_FLAG_RAW && nc->info->receive_raw) {
         ret = nc->info->receive_raw(nc, buffer, offset);
     } else {
@@ -710,12 +732,13 @@ static ssize_t qemu_deliver_packet_iov(NetClientState *sender,
                                        unsigned flags,
                                        const struct iovec *iov,
                                        int iovcnt,
-                                       void *opaque)
+                                       void *opaque/*对应网卡*/)
 {
+    //取对应的网卡
     NetClientState *nc = opaque;
     int ret;
 
-    //如果link down,返回数据长度
+    //如果link down,返回要投递的数据长度
     if (nc->link_down) {
         return iov_size(iov, iovcnt);
     }
@@ -726,11 +749,13 @@ static ssize_t qemu_deliver_packet_iov(NetClientState *sender,
     }
 
     if (nc->info->receive_iov && !(flags & QEMU_NET_PACKET_FLAG_RAW)) {
+        //采用iov格式收取
         ret = nc->info->receive_iov(nc, iov, iovcnt);
     } else {
         ret = nc_sendv_compat(nc, iov, iovcnt, flags);
     }
 
+    /*如返回0表示，接收失败，置为停止接收*/
     if (ret == 0) {
         nc->receive_disabled = 1;
     }
@@ -782,6 +807,7 @@ qemu_sendv_packet(NetClientState *nc, const struct iovec *iov, int iovcnt)
     return qemu_sendv_packet_async(nc, iov, iovcnt, NULL);
 }
 
+/*通过id查找指定名称的net client*/
 NetClientState *qemu_find_netdev(const char *id)
 {
     NetClientState *nc;
@@ -942,7 +968,7 @@ static int net_init_nic(const Netdev *netdev, const char *name,
     return idx;
 }
 
-
+//定义各种netclient初始化函数
 static int (* const net_client_init_fun[NET_CLIENT_DRIVER__MAX])(
     const Netdev *netdev,
     const char *name,
@@ -965,7 +991,7 @@ static int (* const net_client_init_fun[NET_CLIENT_DRIVER__MAX])(
 #endif
         [NET_CLIENT_DRIVER_HUBPORT]   = net_init_hubport,
 #ifdef CONFIG_VHOST_NET_USER
-	//针对vhost_user的初始化函数
+        //针对vhost_user的初始化函数
         [NET_CLIENT_DRIVER_VHOST_USER] = net_init_vhost_user,
 #endif
 #ifdef CONFIG_L2TPV3
@@ -983,6 +1009,7 @@ static int net_client_init1(const void *object, bool is_netdev, Error **errp)
 
     if (is_netdev) {
         netdev = object;
+        /*netdev对应的名称*/
         name = netdev->id;
 
         //对没有init_fun的报错（DUMP,NIC强制报错）
@@ -994,6 +1021,7 @@ static int net_client_init1(const void *object, bool is_netdev, Error **errp)
             return -1;
         }
     } else {
+        /*obj为NetLegacy*/
         const NetLegacy *net = object;
         const NetLegacyOptions *opts = net->opts;
         legacy.id = net->id;
@@ -1018,6 +1046,7 @@ static int net_client_init1(const void *object, bool is_netdev, Error **errp)
             legacy.u.user = opts->u.user;
             break;
         case NET_LEGACY_OPTIONS_TYPE_TAP:
+            //后端为tap类设备
             legacy.type = NET_CLIENT_DRIVER_TAP;
             legacy.u.tap = opts->u.tap;
             break;
@@ -1049,6 +1078,7 @@ static int net_client_init1(const void *object, bool is_netdev, Error **errp)
             abort();
         }
 
+        /*后端类型必须有对应的init回调*/
         if (!net_client_init_fun[netdev->type]) {
             error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "type",
                        "a net backend type (maybe it is not compiled "
@@ -1063,8 +1093,8 @@ static int net_client_init1(const void *object, bool is_netdev, Error **errp)
         }
     }
 
-    //按不同netdev类型，进行初始化
-    if (net_client_init_fun[netdev->type](netdev, name, peer, errp) < 0) {
+    //按不同netdev类型，初始化相应的net client,并指明其peer
+    if (net_client_init_fun[netdev->type](netdev, name, peer/*对端设备*/, errp) < 0) {
         /* FIXME drop when all init functions store an Error */
         if (errp && !*errp) {
             error_setg(errp, QERR_DEVICE_INIT_FAILED,
@@ -1173,7 +1203,7 @@ static int net_client_init(QemuOpts *opts, bool is_netdev, Error **errp)
     }
 
     if (!err) {
-    	//将构造好的对应传入
+    	//将构造好的obj传入
         ret = net_client_init1(object, is_netdev, &err);
     }
 
@@ -1204,6 +1234,7 @@ void qmp_netdev_del(const char *id, Error **errp)
 {
     NetClientState *nc;
 
+    //先通过id找到net client
     nc = qemu_find_netdev(id);
     if (!nc) {
         error_set(errp, ERROR_CLASS_DEVICE_NOT_FOUND,
@@ -1211,6 +1242,7 @@ void qmp_netdev_del(const char *id, Error **errp)
         return;
     }
 
+    /*如果nc非netdev，则不容许移除*/
     if (!nc->is_netdev) {
         error_setg(errp, "Device '%s' is not a netdev", id);
         return;
@@ -1485,6 +1517,7 @@ void net_check_clients(void)
 
 static int net_init_client(void *dummy, QemuOpts *opts, Error **errp)
 {
+    //非netdev配置初始化
     return net_client_init(opts, false, errp);
 }
 
@@ -1557,6 +1590,7 @@ out:
     return ret;
 }
 
+//处理配置参数，初始化相对应的net client
 int net_init_clients(Error **errp)
 {
 
@@ -1566,17 +1600,22 @@ int net_init_clients(Error **errp)
 
     QTAILQ_INIT(&net_clients);
 
+    //通过-netdev 方式配置的网络，例如-netdev tap,id=hostnet0,ifname=vnet0
+    //-device virtio-net-pci,netdev=hostnet0,id=net0,mac=52:54:00:6b:0d:a1,bus=pci.0,addr=0x3
     //遍历qemu所有netdev配置,并调用net_init_netdev
     if (qemu_opts_foreach(qemu_find_opts("netdev"),
                           net_init_netdev, NULL, errp)) {
         return -1;
     }
 
+    //通过-nic方式配置的网络，例如
     if (qemu_opts_foreach(qemu_find_opts("nic"), net_param_nic, NULL, errp)) {
         return -1;
     }
 
     //针对每个-net选项，调用net初始化
+    //通过-net方式配置网络，例如
+    //-net  tap [,vlan=n] [,name=str] [,fd=h] [,ifname=name] [,script=file] [,downscript=dfile] [,helper=helper] [,sndbuf=nbytes] [,vnet_hdr=on|off] [,vhost=on|off] [,vhostfd=h] [,vhostforce=on|off]
     if (qemu_opts_foreach(qemu_find_opts("net"), net_init_client, NULL, errp)) {
         return -1;
     }

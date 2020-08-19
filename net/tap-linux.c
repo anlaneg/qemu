@@ -197,9 +197,11 @@ int tap_probe_has_ufo(int fd)
 int tap_probe_vnet_hdr_len(int fd, int len)
 {
     int orig;
+    //先取vnethdr长度
     if (ioctl(fd, TUNGETVNETHDRSZ, &orig) == -1) {
         return 0;
     }
+    //尝试更改vnethdr长度（这里有问题，==0时应返回，-1时应恢复）
     if (ioctl(fd, TUNSETVNETHDRSZ, &len) == -1) {
         return 0;
     }

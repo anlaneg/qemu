@@ -37,6 +37,7 @@
  * because iohandlers mustn't be polled by aio_poll(qemu_aio_context). */
 static AioContext *iohandler_ctx;
 
+//如果iohandler_ctx还没有创建，则创建iohander_ctx
 static void iohandler_init(void)
 {
     if (!iohandler_ctx) {
@@ -58,8 +59,8 @@ GSource *iohandler_get_g_source(void)
 }
 
 void qemu_set_fd_handler(int fd,
-                         IOHandler *fd_read,
-                         IOHandler *fd_write,
+                         IOHandler *fd_read,/*fd可读时回调*/
+                         IOHandler *fd_write,/*fd可写时回调*/
                          void *opaque)
 {
     iohandler_init();

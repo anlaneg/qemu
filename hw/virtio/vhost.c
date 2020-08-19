@@ -1234,6 +1234,7 @@ static void vhost_virtqueue_cleanup(struct vhost_virtqueue *vq)
     event_notifier_cleanup(&vq->masked_notifier);
 }
 
+//vhost类型设备初始化
 int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
                    VhostBackendType backend_type/*vhost后端类型*/, uint32_t busyloop_timeout)
 {
@@ -1248,7 +1249,8 @@ int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
     r = vhost_set_backend_type(hdev, backend_type);
     assert(r >= 0);
 
-    //后端初始化（例如vhost-user.c提供的vhost_backend_init)
+    //后端初始化
+    //例如vhost-backend.c中提供的kernel_ops->vhost_backend_init
     r = hdev->vhost_ops->vhost_backend_init(hdev, opaque);
     if (r < 0) {
         goto fail;

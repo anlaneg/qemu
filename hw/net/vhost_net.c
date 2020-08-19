@@ -138,7 +138,7 @@ static int vhost_net_get_fd(NetClientState *backend)
     }
 }
 
-//vhost_net初始化
+//vhost_net设备初始化
 struct vhost_net *vhost_net_init(VhostNetOptions *options)
 {
     int r;
@@ -154,8 +154,10 @@ struct vhost_net *vhost_net_init(VhostNetOptions *options)
     }
     net->nc = options->net_backend;
 
-    net->dev.max_queues = 1;//最大队列数为1
-    net->dev.nvqs = 2;//默认初始化2个队列（读＋写）
+    //最大队列数为1
+    net->dev.max_queues = 1;
+    //默认初始化2个队列（读＋写）
+    net->dev.nvqs = 2;
     net->dev.vqs = net->vqs;
 
     if (backend_kernel) {
@@ -166,7 +168,8 @@ struct vhost_net *vhost_net_init(VhostNetOptions *options)
         }
         net->dev.backend_features = qemu_has_vnet_hdr(options->net_backend)
             ? 0 : (1ULL << VHOST_NET_F_VIRTIO_NET_HDR);
-        net->backend = r;/*设置后端tap/tun等口对应的fd*/
+        /*设置后端tap/tun等口对应的fd*/
+        net->backend = r;
         net->dev.protocol_features = 0;
     } else {
         /*vhost-user时，初始化*/

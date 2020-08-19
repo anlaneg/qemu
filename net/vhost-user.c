@@ -79,7 +79,7 @@ static int vhost_user_start(int queues, NetClientState *ncs[],
     options.backend_type = VHOST_BACKEND_TYPE_USER;
 
     for (i = 0; i < queues; i++) {
-    		//网卡类型为均为NET_CLIENT_DRIVER_VHOST_USER
+    	//网卡类型为均为NET_CLIENT_DRIVER_VHOST_USER
         assert(ncs[i]->info->type == NET_CLIENT_DRIVER_VHOST_USER);
 
         s = DO_UPCAST(NetVhostUserState, nc, ncs[i]);
@@ -87,7 +87,8 @@ static int vhost_user_start(int queues, NetClientState *ncs[],
         options.net_backend = ncs[i];
         options.opaque      = be;//设置为后端
         options.busyloop_timeout = 0;
-        net = vhost_net_init(&options);//初始化vhost_net
+        /*初始化vhost_net*/
+        net = vhost_net_init(&options);
         if (!net) {
             error_report("failed to init vhost_net for queue %d", i);
             goto err;
