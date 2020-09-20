@@ -603,6 +603,7 @@ DeviceState *qdev_device_add(QemuOpts *opts, Error **errp)
     Error *err = NULL;
     bool hide;
 
+    /*取设备设置的driver*/
     driver = qemu_opt_get(opts, "driver");
     if (!driver) {
         error_setg(errp, QERR_MISSING_PARAMETER, "driver");

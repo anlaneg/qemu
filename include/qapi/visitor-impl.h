@@ -48,6 +48,7 @@ struct Visitor
      */
 
     /* Must be set to visit structs */
+    //通过函数visit_start_struct调用
     void (*start_struct)(Visitor *v, const char *name, void **obj,
                          size_t size, Error **errp);
 
@@ -96,7 +97,7 @@ struct Visitor
     void (*type_bool)(Visitor *v, const char *name, bool *obj, Error **errp);/*bool类型解析*/
 
     /* Must be set */
-    void (*type_str)(Visitor *v, const char *name, char **obj, Error **errp);/*字符串类型解析*/
+    void (*type_str)(Visitor *v, const char *name, char **obj/*出参，解析结果*/, Error **errp);/*字符串类型解析*/
 
     /* Must be set to visit numbers */
     void (*type_number)(Visitor *v, const char *name, double *obj,

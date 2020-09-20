@@ -23,6 +23,7 @@ def main(argv):
         description='Generate code from a QAPI schema')
     parser.add_argument('-b', '--builtins', action='store_true',
                         help="generate code for built-in types")
+    #指定输出到哪个目录
     parser.add_argument('-o', '--output-dir', action='store', default='',
                         help="write output to directory OUTPUT_DIR")
     parser.add_argument('-p', '--prefix', action='store', default='',

@@ -2426,7 +2426,7 @@ object_class_property_add_str(ObjectClass *klass, const char *name,
     return rv;
 }
 
-/*boolean类型属性*/
+/*boolean类型属性函数集*/
 typedef struct BoolProperty
 {
 	/*取boolean属性值*/
@@ -2435,16 +2435,16 @@ typedef struct BoolProperty
     void (*set)(Object *, bool, Error **);
 } BoolProperty;
 
-//bool属性访问
+//通过opaque属性函数集，获取对象obj的bool属性值
 static void property_get_bool(Object *obj, Visitor *v, const char *name,
-                              void *opaque, Error **errp)
+                              void *opaque/*boolean类型函数集*/, Error **errp)
 {
     //转为bool property
     BoolProperty *prop = opaque;
     bool value;
     Error *err = NULL;
 
-    /*通过prop的实际的get函数获得此属性的bool值*/
+    /*通过prop函数集获取到obj对应属性的bool值*/
     value = prop->get(obj, &err);
     if (err) {
         error_propagate(errp, err);
@@ -2485,8 +2485,10 @@ void object_property_add_bool(Object *obj/*要添加的对象*/, const char *nam
                               Error **errp)
 {
     Error *local_err = NULL;
+    /*构造boolean属性*/
     BoolProperty *prop = g_malloc0(sizeof(*prop));
 
+    /*设置属性函数*/
     prop->get = get;
     prop->set = set;
 
@@ -2496,7 +2498,7 @@ void object_property_add_bool(Object *obj/*要添加的对象*/, const char *nam
                         /*如果未提供set回调，则使用property_set_bool进行代理此回调*/
                         set ? property_set_bool : NULL,
                         property_release_bool,
-                        prop/*提供此属性*/, &local_err);
+                        prop/*属性函数集*/, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         g_free(prop);

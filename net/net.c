@@ -846,6 +846,7 @@ int qemu_find_net_clients_except(const char *id, NetClientState **ncs,
     return ret;
 }
 
+/*找空闲的nd_table位置*/
 static int nic_get_free_idx(void)
 {
     int index;
@@ -1000,7 +1001,7 @@ static int (* const net_client_init_fun[NET_CLIENT_DRIVER__MAX])(
 };
 
 
-static int net_client_init1(const void *object, bool is_netdev, Error **errp)
+static int net_client_init1(const void *object/*用户指定的配置*/, bool is_netdev, Error **errp)
 {
     Netdev legacy = {0};
     const Netdev *netdev;
@@ -1147,7 +1148,7 @@ static void show_netdevs(void)
     }
 }
 
-static int net_client_init(QemuOpts *opts, bool is_netdev, Error **errp)
+static int net_client_init(QemuOpts *opts/*待解析的配置选项*/, bool is_netdev, Error **errp)
 {
     gchar **substrings = NULL;
     void *object = NULL;
@@ -1196,17 +1197,19 @@ static int net_client_init(QemuOpts *opts, bool is_netdev, Error **errp)
     }
 
     if (is_netdev) {
-    	//-netdev类型配置处理(依据配置解析并填充生成对应的netdev对象)
+    	//依据-netdev配置解析并填充生成对应的Netdev对象
         visit_type_Netdev(v, NULL, (Netdev **)&object, &err);
     } else {
+        //依据配置解析并填充生成对应的NetLegacy对象
         visit_type_NetLegacy(v, NULL, (NetLegacy **)&object, &err);
     }
 
     if (!err) {
-    	//将构造好的obj传入
+    	//将依据选项配置构造好的obj传入
         ret = net_client_init1(object, is_netdev, &err);
     }
 
+    /*释放配置对象*/
     if (is_netdev) {
         qapi_free_Netdev(object);
     } else {

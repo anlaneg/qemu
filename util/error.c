@@ -32,7 +32,7 @@ Error *error_fatal;
 static void error_handle_fatal(Error **errp, Error *err)
 {
     if (errp == &error_abort) {
-    		//如果传入的errp是error_abort，特别处理
+    	//如果传入的errp是error_abort，特别处理
         fprintf(stderr, "Unexpected error in %s() at %s:%d:\n",
                 err->func, err->src, err->line);
         error_report("%s", error_get_pretty(err));
@@ -42,7 +42,7 @@ static void error_handle_fatal(Error **errp, Error *err)
         abort();
     }
     if (errp == &error_fatal) {
-    		//传入的地址为error_fatal时，特别处理为exit
+    	//传入的地址为error_fatal时，特别处理为exit
         error_report_err(err);
         exit(1);
     }
@@ -289,6 +289,7 @@ void error_free_or_abort(Error **errp)
 void error_propagate(Error **dst_errp, Error *local_err)
 {
     if (!local_err) {
+        /*无local error,直接返回*/
         return;
     }
     error_handle_fatal(dst_errp, local_err);

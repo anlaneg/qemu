@@ -37,13 +37,14 @@ void visit_free(Visitor *v)
     }
 }
 
-//调用start_struct
+//通过调用v->start_struct完成结构体访问，处理错误
 void visit_start_struct(Visitor *v, const char *name, void **obj,
                         size_t size, Error **errp)
 {
     Error *err = NULL;
 
-    trace_visit_start_struct(v, name, obj, size);//log显示
+    //log显示
+    trace_visit_start_struct(v, name, obj, size);
     if (obj) {
     	//如果要返回obj,size必须为非0
         assert(size);
@@ -303,8 +304,8 @@ void visit_type_bool(Visitor *v, const char *name, bool *obj, Error **errp)
     v->type_bool(v, name, obj, errp);
 }
 
-//调用type_str解析字符串类型
-void visit_type_str(Visitor *v, const char *name, char **obj/*出错，解析后的内容*/, Error **errp)
+//调用v->type_str解析字符串类型
+void visit_type_str(Visitor *v, const char *name/**/, char **obj/*出参，解析后的结果*/, Error **errp/*错误信息*/)
 {
     Error *err = NULL;
 
@@ -377,6 +378,7 @@ static void input_type_enum(Visitor *v, const char *name, int *obj,
         return;
     }
 
+    //将enum_str转换为枚举值
     value = qapi_enum_parse(lookup, enum_str, -1, NULL);
     if (value < 0) {
         error_setg(errp, QERR_INVALID_PARAMETER, enum_str);
@@ -384,12 +386,13 @@ static void input_type_enum(Visitor *v, const char *name, int *obj,
         return;
     }
 
+    //在string表中，使用string表的索引（即枚举值）
     g_free(enum_str);
-    *obj = value;//在string表中，使用string表的索引（即枚举值）
+    *obj = value;
 }
 
 //解析枚举类型
-void visit_type_enum(Visitor *v, const char *name, int *obj,
+void visit_type_enum(Visitor *v, const char *name, int *obj/*出参，枚举解析结果*/,
                      const QEnumLookup *lookup, Error **errp)
 {
     assert(obj && lookup);

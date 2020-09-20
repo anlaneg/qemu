@@ -108,6 +108,7 @@ def gen_struct_members(members):
     for memb in members:
         ret += gen_if(memb.ifcond)
         if memb.optional:
+            #如果此成员可选，则生成hash_$c_name成员，指针成员是否已设置值
             ret += mcgen('''
     bool has_%(c_name)s;
 ''',
