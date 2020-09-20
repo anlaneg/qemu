@@ -380,7 +380,7 @@ struct ObjectProperty
     ObjectPropertyInit *init;
     void *opaque;/*属性访问函数的参数*/
     QObject *defval;
-} ObjectProperty;
+};
 
 /**
  * ObjectUnparent:

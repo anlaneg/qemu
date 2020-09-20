@@ -707,7 +707,6 @@ int coroutine_fn bdrv_co_delete_file(BlockDriverState *bs, Error **errp)
         error_setg(errp, "Driver '%s' does not support image deletion",
                    bs->drv->format_name);
         return -ENOTSUP;
->>>>>>> upstream/master
     }
 
     ret = bs->drv->bdrv_co_delete_file(bs, &local_err);
