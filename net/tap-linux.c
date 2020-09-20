@@ -38,32 +38,38 @@
 
 #define PATH_NET_TUN "/dev/net/tun"
 
-int tap_open(char *ifname, int ifname_size, int *vnet_hdr,
-             int vnet_hdr_required, int mq_required, Error **errp)
+int tap_open(char *ifname/*接口名称*/, int ifname_size, int *vnet_hdr/*出参，是否支持vnet_hdr功能*/,
+             int vnet_hdr_required/*是否强制要vnet_hdr功能*/, int mq_required/*是否要求多队列支持*/, Error **errp)
 {
     struct ifreq ifr;
     int fd, ret;
     int len = sizeof(struct virtio_net_hdr);
     unsigned int features;
 
+    //打开tun设备
     TFR(fd = open(PATH_NET_TUN, O_RDWR));
     if (fd < 0) {
         error_setg_errno(errp, errno, "could not open %s", PATH_NET_TUN);
         return -1;
     }
+
+
     memset(&ifr, 0, sizeof(ifr));
     ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
 
+    //取当前tun设备支持的features列表
     if (ioctl(fd, TUNGETFEATURES, &features) == -1) {
         warn_report("TUNGETFEATURES failed: %s", strerror(errno));
         features = 0;
     }
 
+    //如果支持单队列，就使用单队列功能
     if (features & IFF_ONE_QUEUE) {
         ifr.ifr_flags |= IFF_ONE_QUEUE;
     }
 
     if (*vnet_hdr) {
+        //如果有vnet_hdr功能，则打开此功能
         if (features & IFF_VNET_HDR) {
             *vnet_hdr = 1;
             ifr.ifr_flags |= IFF_VNET_HDR;
@@ -71,6 +77,7 @@ int tap_open(char *ifname, int ifname_size, int *vnet_hdr,
             *vnet_hdr = 0;
         }
 
+        //如果需要vnet_hdr功能，但kernel不支持此功能，则报错
         if (vnet_hdr_required && !*vnet_hdr) {
             error_setg(errp, "vnet_hdr=1 requested, but no kernel "
                        "support for IFF_VNET_HDR available");
@@ -83,9 +90,11 @@ int tap_open(char *ifname, int ifname_size, int *vnet_hdr,
          * Ignore errors since old kernels do not support this ioctl: in this
          * case the header size implicitly has the correct value.
          */
+        //设置vnet header长度为sizeof(virtio_net_hdr)
         ioctl(fd, TUNSETVNETHDRSZ, &len);
     }
 
+    //要求多队列支持，但kernel features不支持多队列，报错
     if (mq_required) {
         if (!(features & IFF_MULTI_QUEUE)) {
             error_setg(errp, "multiqueue required, but no kernel "
@@ -93,16 +102,21 @@ int tap_open(char *ifname, int ifname_size, int *vnet_hdr,
             close(fd);
             return -1;
         } else {
+            //指明开启多队列
             ifr.ifr_flags |= IFF_MULTI_QUEUE;
         }
     }
 
+    //设置接口名称
     if (ifname[0] != '\0')
         pstrcpy(ifr.ifr_name, IFNAMSIZ, ifname);
     else
-        pstrcpy(ifr.ifr_name, IFNAMSIZ, "tap%d");
+        pstrcpy(ifr.ifr_name, IFNAMSIZ, "tap%d");//要求动态分配
+
+    //执行ioctl设置tun口
     ret = ioctl(fd, TUNSETIFF, (void *) &ifr);
     if (ret != 0) {
+        //配置tun口失败，返回
         if (ifname[0] != '\0') {
             error_setg_errno(errp, errno, "could not configure %s (%s)",
                              PATH_NET_TUN, ifr.ifr_name);
@@ -113,7 +127,11 @@ int tap_open(char *ifname, int ifname_size, int *vnet_hdr,
         close(fd);
         return -1;
     }
+
+    //更新接口名称
     pstrcpy(ifname, ifname_size, ifr.ifr_name);
+
+    //接口置为非阻塞
     fcntl(fd, F_SETFL, O_NONBLOCK);
     return fd;
 }
@@ -130,6 +148,7 @@ int tap_open(char *ifname, int ifname_size, int *vnet_hdr,
  */
 #define TAP_DEFAULT_SNDBUF 0
 
+//设置tap口发送buffer缓冲大小
 void tap_set_sndbuf(int fd, const NetdevTapOptions *tap, Error **errp)
 {
     int sndbuf;
@@ -147,6 +166,7 @@ void tap_set_sndbuf(int fd, const NetdevTapOptions *tap, Error **errp)
     }
 }
 
+//检查tap口是否支持VNET_HDR
 int tap_probe_vnet_hdr(int fd)
 {
     struct ifreq ifr;
@@ -159,6 +179,7 @@ int tap_probe_vnet_hdr(int fd)
     return ifr.ifr_flags & IFF_VNET_HDR;
 }
 
+//设置checksum offload
 int tap_probe_has_ufo(int fd)
 {
     unsigned offload;
@@ -172,12 +193,15 @@ int tap_probe_has_ufo(int fd)
 }
 
 /* Verify that we can assign given length */
+//校验是否可更改vnet_hdr长度
 int tap_probe_vnet_hdr_len(int fd, int len)
 {
     int orig;
+    //先取vnethdr长度
     if (ioctl(fd, TUNGETVNETHDRSZ, &orig) == -1) {
         return 0;
     }
+    //尝试更改vnethdr长度（这里有问题，==0时应返回，-1时应恢复）
     if (ioctl(fd, TUNSETVNETHDRSZ, &len) == -1) {
         return 0;
     }
@@ -191,6 +215,7 @@ int tap_probe_vnet_hdr_len(int fd, int len)
     return 1;
 }
 
+//设置vnet hdr长度
 void tap_fd_set_vnet_hdr_len(int fd, int len)
 {
     if (ioctl(fd, TUNSETVNETHDRSZ, &len) == -1) {
@@ -303,6 +328,7 @@ int tap_fd_disable(int fd)
     return ret;
 }
 
+//获取tap设备名称
 int tap_fd_get_ifname(int fd, char *ifname)
 {
     struct ifreq ifr;

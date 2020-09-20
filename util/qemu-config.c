@@ -33,7 +33,7 @@ static QemuOptsList *find_list(QemuOptsList **lists, const char *group,
     return lists[i];
 }
 
-//查找指定group的opt（找不到时返回NULL)
+//查找指定group的optsList（找不到时返回NULL)
 QemuOptsList *qemu_find_opts(const char *group)
 {
     QemuOptsList *ret;
@@ -53,12 +53,14 @@ QemuOpts *qemu_find_opts_singleton(const char *group)
     QemuOptsList *list;
     QemuOpts *opts;
 
+    //先找group对应的list
     list = qemu_find_opts(group);
     assert(list);
+
     //查找此group中是否有无id的opts，如果无，则创建一个无id的opts
     opts = qemu_opts_find(list, NULL);
     if (!opts) {
-    	//不存在，创建一个
+    	//不存在，创建一个无id的opts
         opts = qemu_opts_create(list, NULL, 0, &error_abort);
     }
     return opts;
@@ -295,12 +297,13 @@ CommandLineOptionInfoList *qmp_query_command_line_options(bool has_option,
     return conf_list;
 }
 
+//给定group名称查找group名称对应的optsList
 QemuOptsList *qemu_find_opts_err(const char *group, Error **errp)
 {
     return find_list(vm_config_groups, group, errp);
 }
 
-//qemu 驱动选项添加
+//qemu 驱动配置选项添加
 void qemu_add_drive_opts(QemuOptsList *list)
 {
     int entries, i;
@@ -326,7 +329,7 @@ void qemu_add_opts(QemuOptsList *list)
     entries = ARRAY_SIZE(vm_config_groups);
     entries--; /* keep list NULL terminated */
     for (i = 0; i < entries; i++) {
-    		//找一个空闲的位置，初始化此位置的值为list
+    	//找一个空闲的位置，初始化此位置的值为list
         if (vm_config_groups[i] == NULL) {
             vm_config_groups[i] = list;
             return;

@@ -804,10 +804,10 @@ static int coroutine_fn vdi_co_do_create(BlockdevCreateOptions *create_options,
         goto exit;
     }
 
-    blk = blk_new(bdrv_get_aio_context(bs_file),
-                  BLK_PERM_WRITE | BLK_PERM_RESIZE, BLK_PERM_ALL);
-    ret = blk_insert_bs(blk, bs_file, errp);
-    if (ret < 0) {
+    blk = blk_new_with_bs(bs_file, BLK_PERM_WRITE | BLK_PERM_RESIZE,
+                          BLK_PERM_ALL, errp);
+    if (!blk) {
+        ret = -EPERM;
         goto exit;
     }
 
@@ -874,8 +874,8 @@ static int coroutine_fn vdi_co_do_create(BlockdevCreateOptions *create_options,
     }
 
     if (image_type == VDI_TYPE_STATIC) {
-        ret = blk_truncate(blk, offset + blocks * block_size,
-                           PREALLOC_MODE_OFF, errp);
+        ret = blk_truncate(blk, offset + blocks * block_size, false,
+                           PREALLOC_MODE_OFF, 0, errp);
         if (ret < 0) {
             error_prepend(errp, "Failed to statically allocate file");
             goto exit;
@@ -896,7 +896,9 @@ static int coroutine_fn vdi_co_create(BlockdevCreateOptions *create_options,
     return vdi_co_do_create(create_options, DEFAULT_CLUSTER_SIZE, errp);
 }
 
-static int coroutine_fn vdi_co_create_opts(const char *filename, QemuOpts *opts,
+static int coroutine_fn vdi_co_create_opts(BlockDriver *drv,
+                                           const char *filename,
+                                           QemuOpts *opts,
                                            Error **errp)
 {
     QDict *qdict = NULL;
@@ -1055,6 +1057,7 @@ static BlockDriver bdrv_vdi = {
     .bdrv_co_check = vdi_co_check,
 };
 
+//注册vdi格式的block驱动
 static void bdrv_vdi_init(void)
 {
     logout("\n");

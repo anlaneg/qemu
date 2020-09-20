@@ -12,6 +12,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/atomic.h"
 #include "qemu/iov.h"
 #include "qemu/main-loop.h"
 #include "qemu/module.h"
@@ -21,6 +22,10 @@
 #include "net/tap.h"
 #include "qemu/error-report.h"
 #include "qemu/timer.h"
+#include "qemu/option.h"
+#include "qemu/option_int.h"
+#include "qemu/config-file.h"
+#include "qapi/qmp/qdict.h"
 #include "hw/virtio/virtio-net.h"
 #include "net/vhost_net.h"
 #include "net/announce.h"
@@ -28,11 +33,15 @@
 #include "qapi/error.h"
 #include "qapi/qapi-events-net.h"
 #include "hw/qdev-properties.h"
+#include "qapi/qapi-types-migration.h"
+#include "qapi/qapi-events-migration.h"
 #include "hw/virtio/virtio-access.h"
 #include "migration/misc.h"
 #include "standard-headers/linux/ethtool.h"
 #include "sysemu/sysemu.h"
 #include "trace.h"
+#include "monitor/qdev.h"
+#include "hw/pci/pci.h"
 
 #define VIRTIO_NET_VM_VERSION    11
 
@@ -74,6 +83,8 @@
 #define VIRTIO_NET_HDR_F_RSC_INFO  4 /* rsc_ext data in csum_ fields */
 #define VIRTIO_NET_F_RSC_EXT       61
 
+#endif
+
 static inline __virtio16 *virtio_net_rsc_ext_num_packets(
     struct virtio_net_hdr *hdr)
 {
@@ -86,19 +97,17 @@ static inline __virtio16 *virtio_net_rsc_ext_num_dupacks(
     return &hdr->csum_offset;
 }
 
-#endif
-
 static VirtIOFeature feature_sizes[] = {
     {.flags = 1ULL << VIRTIO_NET_F_MAC,
-     .end = virtio_endof(struct virtio_net_config, mac)},
+     .end = endof(struct virtio_net_config, mac)},
     {.flags = 1ULL << VIRTIO_NET_F_STATUS,
-     .end = virtio_endof(struct virtio_net_config, status)},
+     .end = endof(struct virtio_net_config, status)},
     {.flags = 1ULL << VIRTIO_NET_F_MQ,
-     .end = virtio_endof(struct virtio_net_config, max_virtqueue_pairs)},
+     .end = endof(struct virtio_net_config, max_virtqueue_pairs)},
     {.flags = 1ULL << VIRTIO_NET_F_MTU,
-     .end = virtio_endof(struct virtio_net_config, mtu)},
+     .end = endof(struct virtio_net_config, mtu)},
     {.flags = 1ULL << VIRTIO_NET_F_SPEED_DUPLEX,
-     .end = virtio_endof(struct virtio_net_config, duplex)},
+     .end = endof(struct virtio_net_config, duplex)},
     {}
 };
 
@@ -585,6 +594,7 @@ static void virtio_net_set_mrg_rx_bufs(VirtIONet *n, int mergeable_rx_bufs,
     }
 }
 
+//按后端类型，确定tx的最大值
 static int virtio_net_max_tx_queue_size(VirtIONet *n)
 {
     NetClientState *peer = n->nic_conf.peers.ncs[0];
@@ -759,9 +769,103 @@ static inline uint64_t virtio_net_supported_guest_offloads(VirtIONet *n)
     return virtio_net_guest_offloads_by_features(vdev->guest_features);
 }
 
+static void failover_add_primary(VirtIONet *n, Error **errp)
+{
+    Error *err = NULL;
+
+    if (n->primary_dev) {
+        return;
+    }
+
+    n->primary_device_opts = qemu_opts_find(qemu_find_opts("device"),
+            n->primary_device_id);
+    if (n->primary_device_opts) {
+        n->primary_dev = qdev_device_add(n->primary_device_opts, &err);
+        if (err) {
+            qemu_opts_del(n->primary_device_opts);
+        }
+        if (n->primary_dev) {
+            n->primary_bus = n->primary_dev->parent_bus;
+            if (err) {
+                qdev_unplug(n->primary_dev, &err);
+                qdev_set_id(n->primary_dev, "");
+
+            }
+        }
+    } else {
+        error_setg(errp, "Primary device not found");
+        error_append_hint(errp, "Virtio-net failover will not work. Make "
+            "sure primary device has parameter"
+            " failover_pair_id=<virtio-net-id>\n");
+}
+    if (err) {
+        error_propagate(errp, err);
+    }
+}
+
+static int is_my_primary(void *opaque, QemuOpts *opts, Error **errp)
+{
+    VirtIONet *n = opaque;
+    int ret = 0;
+
+    const char *standby_id = qemu_opt_get(opts, "failover_pair_id");
+
+    if (standby_id != NULL && (g_strcmp0(standby_id, n->netclient_name) == 0)) {
+        n->primary_device_id = g_strdup(opts->id);
+        ret = 1;
+    }
+
+    return ret;
+}
+
+static DeviceState *virtio_net_find_primary(VirtIONet *n, Error **errp)
+{
+    DeviceState *dev = NULL;
+    Error *err = NULL;
+
+    if (qemu_opts_foreach(qemu_find_opts("device"),
+                         is_my_primary, n, &err)) {
+        if (err) {
+            error_propagate(errp, err);
+            return NULL;
+        }
+        if (n->primary_device_id) {
+            dev = qdev_find_recursive(sysbus_get_default(),
+                    n->primary_device_id);
+        } else {
+            error_setg(errp, "Primary device id not found");
+            return NULL;
+        }
+    }
+    return dev;
+}
+
+
+
+static DeviceState *virtio_connect_failover_devices(VirtIONet *n,
+                                                    DeviceState *dev,
+                                                    Error **errp)
+{
+    DeviceState *prim_dev = NULL;
+    Error *err = NULL;
+
+    prim_dev = virtio_net_find_primary(n, &err);
+    if (prim_dev) {
+        n->primary_device_id = g_strdup(prim_dev->id);
+        n->primary_device_opts = prim_dev->opts;
+    } else {
+        if (err) {
+            error_propagate(errp, err);
+        }
+    }
+
+    return prim_dev;
+}
+
 static void virtio_net_set_features(VirtIODevice *vdev, uint64_t features)
 {
     VirtIONet *n = VIRTIO_NET(vdev);
+    Error *err = NULL;
     int i;
 
     if (n->mtu_bypass_backend &&
@@ -802,6 +906,28 @@ static void virtio_net_set_features(VirtIODevice *vdev, uint64_t features)
         memset(n->vlans, 0, MAX_VLAN >> 3);
     } else {
         memset(n->vlans, 0xff, MAX_VLAN >> 3);
+    }
+
+    if (virtio_has_feature(features, VIRTIO_NET_F_STANDBY)) {
+        qapi_event_send_failover_negotiated(n->netclient_name);
+        atomic_set(&n->primary_should_be_hidden, false);
+        failover_add_primary(n, &err);
+        if (err) {
+            n->primary_dev = virtio_connect_failover_devices(n, n->qdev, &err);
+            if (err) {
+                goto out_err;
+            }
+            failover_add_primary(n, &err);
+            if (err) {
+                goto out_err;
+            }
+        }
+    }
+    return;
+
+out_err:
+    if (err) {
+        warn_report_err(err);
     }
 }
 
@@ -1130,26 +1256,27 @@ static void virtio_net_handle_rx(VirtIODevice *vdev, VirtQueue *vq)
     qemu_flush_queued_packets(qemu_get_subqueue(n->nic, queue_index));
 }
 
-static int virtio_net_can_receive(NetClientState *nc)
+static bool virtio_net_can_receive(NetClientState *nc)
 {
     VirtIONet *n = qemu_get_nic_opaque(nc);
     VirtIODevice *vdev = VIRTIO_DEVICE(n);
     VirtIONetQueue *q = virtio_net_get_subqueue(nc);
 
     if (!vdev->vm_running) {
-        return 0;
+        //设备未在running,直接返回不能收
+        return false;
     }
 
     if (nc->queue_index >= n->curr_queues) {
-        return 0;
+        return false;
     }
 
     if (!virtio_queue_ready(q->rx_vq) ||
         !(vdev->status & VIRTIO_CONFIG_S_DRIVER_OK)) {
-        return 0;
+        return false;
     }
 
-    return 1;
+    return true;
 }
 
 static int virtio_net_has_buffers(VirtIONetQueue *q, int bufsize)
@@ -1198,13 +1325,17 @@ static void virtio_net_hdr_swap(VirtIODevice *vdev, struct virtio_net_hdr *hdr)
  * cache.
  */
 static void work_around_broken_dhclient(struct virtio_net_hdr *hdr,
-                                        uint8_t *buf, size_t size)
+                                        uint8_t *buf/*报文起始位置*/, size_t size)
 {
+    //这里有个小问题，buf访问已到达udp源port，但size检查却要求size > 27
+
+    //virtio指明需要计算checksum, 针对dhcp报文，计算checksum
     if ((hdr->flags & VIRTIO_NET_HDR_F_NEEDS_CSUM) && /* missing csum */
         (size > 27 && size < 1500) && /* normal sized MTU */
         (buf[12] == 0x08 && buf[13] == 0x00) && /* ethertype == IPv4 */
         (buf[23] == 17) && /* ip.protocol == UDP */
         (buf[34] == 0 && buf[35] == 67)) { /* udp.srcport == bootps */
+        //计算tcp,udp checksum
         net_checksum_calculate(buf, size);
         hdr->flags &= ~VIRTIO_NET_HDR_F_NEEDS_CSUM;
     }
@@ -1232,6 +1363,7 @@ static void receive_header(VirtIONet *n, const struct iovec *iov, int iov_cnt,
     }
 }
 
+/*检查报文是否可接受，返回0不可接受，返回1可接受*/
 static int receive_filter(VirtIONet *n, const uint8_t *buf, int size)
 {
     static const uint8_t bcast[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
@@ -1242,23 +1374,30 @@ static int receive_filter(VirtIONet *n, const uint8_t *buf, int size)
     if (n->promisc)
         return 1;
 
+    //偏移到mac头部
     ptr += n->host_hdr_len;
 
+    //检查ethtype是否为0x8100 (vlan报文）
     if (!memcmp(&ptr[12], vlan, sizeof(vlan))) {
+        //提取vlanid （12bits)
         int vid = lduw_be_p(ptr + 14) & 0xfff;
         if (!(n->vlans[vid >> 5] & (1U << (vid & 0x1f))))
             return 0;
     }
 
+    //检查目的mac地址是否为组播地址
     if (ptr[0] & 1) { // multicast
         if (!memcmp(ptr, bcast, sizeof(bcast))) {
+            //确认目的mac为组播mac,检查是否收取广播地址
             return !n->nobcast;
         } else if (n->nomulti) {
+            //不收取组播地址，返回0
             return 0;
         } else if (n->allmulti || n->mac_table.multi_overflow) {
             return 1;
         }
 
+        //检查此mac是否已配置
         for (i = n->mac_table.first_multi; i < n->mac_table.in_use; i++) {
             if (!memcmp(ptr, &n->mac_table.macs[i * ETH_ALEN], ETH_ALEN)) {
                 return 1;
@@ -1266,13 +1405,17 @@ static int receive_filter(VirtIONet *n, const uint8_t *buf, int size)
         }
     } else { // unicast
         if (n->nouni) {
+            //不收取单播地址，返回0
             return 0;
         } else if (n->alluni || n->mac_table.uni_overflow) {
+            //容许所有单播，返回1
             return 1;
         } else if (!memcmp(ptr, n->mac, ETH_ALEN)) {
+            //容许设备对应的mac地址
             return 1;
         }
 
+        //检查此mac地址是否已配置
         for (i = 0; i < n->mac_table.first_multi; i++) {
             if (!memcmp(ptr, &n->mac_table.macs[i * ETH_ALEN], ETH_ALEN)) {
                 return 1;
@@ -1294,6 +1437,7 @@ static ssize_t virtio_net_receive_rcu(NetClientState *nc, const uint8_t *buf,
     unsigned mhdr_cnt = 0;
     size_t offset, i, guest_offset;
 
+    //不能收包，直接返回
     if (!virtio_net_can_receive(nc)) {
         return -1;
     }
@@ -1303,6 +1447,7 @@ static ssize_t virtio_net_receive_rcu(NetClientState *nc, const uint8_t *buf,
         return 0;
     }
 
+    //如果报文不能收取，则返回size
     if (!receive_filter(n, buf, size))
         return size;
 
@@ -1390,12 +1535,9 @@ static ssize_t virtio_net_receive_rcu(NetClientState *nc, const uint8_t *buf,
 static ssize_t virtio_net_do_receive(NetClientState *nc, const uint8_t *buf,
                                   size_t size)
 {
-    ssize_t r;
+    RCU_READ_LOCK_GUARD();
 
-    rcu_read_lock();
-    r = virtio_net_receive_rcu(nc, buf, size);
-    rcu_read_unlock();
-    return r;
+    return virtio_net_receive_rcu(nc, buf, size);
 }
 
 static void virtio_net_rsc_extract_unit4(VirtioNetRscChain *chain,
@@ -1425,7 +1567,7 @@ static void virtio_net_rsc_extract_unit6(VirtioNetRscChain *chain,
                                  + sizeof(struct eth_header));
     unit->ip = ip6;
     unit->ip_plen = &(ip6->ip6_ctlun.ip6_un1.ip6_un1_plen);
-    unit->tcp = (struct tcp_header *)(((uint8_t *)unit->ip)\
+    unit->tcp = (struct tcp_header *)(((uint8_t *)unit->ip)
                                         + sizeof(struct ip6_header));
     unit->tcp_hdrlen = (htons(unit->tcp->th_offset_flags) & 0xF000) >> 10;
 
@@ -2030,6 +2172,8 @@ static int32_t virtio_net_flush_tx(VirtIONetQueue *q)
     VirtQueueElement *elem;
     int32_t num_packets = 0;
     int queue_index = vq2q(virtio_get_queue_index(q->tx_vq));
+
+    //设备对应的驱动还未ok,不能flush报文，返回0
     if (!(vdev->status & VIRTIO_CONFIG_S_DRIVER_OK)) {
         return num_packets;
     }
@@ -2111,10 +2255,13 @@ drop:
         virtio_notify(vdev, q->tx_vq);
         g_free(elem);
 
+        //已发送的报文数超过burst,则停止发送
         if (++num_packets >= n->tx_burst) {
             break;
         }
     }
+
+    /*本轮发送的数目*/
     return num_packets;
 }
 
@@ -2155,6 +2302,7 @@ static void virtio_net_handle_tx_bh(VirtIODevice *vdev, VirtQueue *vq)
     VirtIONetQueue *q = &n->vqs[vq2q(virtio_get_queue_index(vq))];
 
     if (unlikely((n->status & VIRTIO_NET_S_LINK_UP) == 0)) {
+        /*link down情况下，所有vq中的报文丢弃*/
         virtio_net_drop_tx_queue_data(vdev, vq);
         return;
     }
@@ -2243,10 +2391,12 @@ static void virtio_net_tx_bh(void *opaque)
     }
 }
 
+//为网络设备添加index号队列
 static void virtio_net_add_queue(VirtIONet *n, int index)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(n);
 
+    //添加index号rx队列
     n->vqs[index].rx_vq = virtio_add_queue(vdev, n->net_conf.rx_queue_size,
                                            virtio_net_handle_rx);
 
@@ -2258,6 +2408,7 @@ static void virtio_net_add_queue(VirtIONet *n, int index)
                                               virtio_net_tx_timer,
                                               &n->vqs[index]);
     } else {
+        //添加index号tx队列
         n->vqs[index].tx_vq =
             virtio_add_queue(vdev, n->net_conf.tx_queue_size,
                              virtio_net_handle_tx_bh);
@@ -2354,9 +2505,13 @@ static int virtio_net_post_load_device(void *opaque, int version_id)
         n->curr_guest_offloads = virtio_net_supported_guest_offloads(n);
     }
 
-    if (peer_has_vnet_hdr(n)) {
-        virtio_net_apply_guest_offloads(n);
-    }
+    /*
+     * curr_guest_offloads will be later overwritten by the
+     * virtio_set_features_nocheck call done from the virtio_load.
+     * Here we make sure it is preserved and restored accordingly
+     * in the virtio_net_post_load_virtio callback.
+     */
+    n->saved_guest_offloads = n->curr_guest_offloads;
 
     virtio_net_set_queues(n);
 
@@ -2386,6 +2541,22 @@ static int virtio_net_post_load_device(void *opaque, int version_id)
         } else {
             qemu_announce_timer_del(&n->announce_timer, false);
         }
+    }
+
+    return 0;
+}
+
+static int virtio_net_post_load_virtio(VirtIODevice *vdev)
+{
+    VirtIONet *n = VIRTIO_NET(vdev);
+    /*
+     * The actual needed state is now in saved_guest_offloads,
+     * see virtio_net_post_load_device for detail.
+     * Restore it back and apply the desired offloads.
+     */
+    n->curr_guest_offloads = n->saved_guest_offloads;
+    if (peer_has_vnet_hdr(n)) {
+        virtio_net_apply_guest_offloads(n);
     }
 
     return 0;
@@ -2611,6 +2782,7 @@ static NetClientInfo net_virtio_info = {
     .announce = virtio_net_announce,
 };
 
+//阻塞等待vdev的idx号队列通知
 static bool virtio_net_guest_notifier_pending(VirtIODevice *vdev, int idx)
 {
     VirtIONet *n = VIRTIO_NET(vdev);
@@ -2651,6 +2823,163 @@ void virtio_net_set_netclient_name(VirtIONet *n, const char *name,
     n->netclient_type = g_strdup(type);
 }
 
+static bool failover_unplug_primary(VirtIONet *n)
+{
+    HotplugHandler *hotplug_ctrl;
+    PCIDevice *pci_dev;
+    Error *err = NULL;
+
+    hotplug_ctrl = qdev_get_hotplug_handler(n->primary_dev);
+    if (hotplug_ctrl) {
+        pci_dev = PCI_DEVICE(n->primary_dev);
+        pci_dev->partially_hotplugged = true;
+        hotplug_handler_unplug_request(hotplug_ctrl, n->primary_dev, &err);
+        if (err) {
+            error_report_err(err);
+            return false;
+        }
+    } else {
+        return false;
+    }
+    return true;
+}
+
+static bool failover_replug_primary(VirtIONet *n, Error **errp)
+{
+    Error *err = NULL;
+    HotplugHandler *hotplug_ctrl;
+    PCIDevice *pdev = PCI_DEVICE(n->primary_dev);
+
+    if (!pdev->partially_hotplugged) {
+        return true;
+    }
+    if (!n->primary_device_opts) {
+        n->primary_device_opts = qemu_opts_from_qdict(
+                qemu_find_opts("device"),
+                n->primary_device_dict, errp);
+        if (!n->primary_device_opts) {
+            return false;
+        }
+    }
+    n->primary_bus = n->primary_dev->parent_bus;
+    if (!n->primary_bus) {
+        error_setg(errp, "virtio_net: couldn't find primary bus");
+        return false;
+    }
+    qdev_set_parent_bus(n->primary_dev, n->primary_bus);
+    n->primary_should_be_hidden = false;
+    qemu_opt_set_bool(n->primary_device_opts,
+                      "partially_hotplugged", true, &err);
+    if (err) {
+        goto out;
+    }
+    hotplug_ctrl = qdev_get_hotplug_handler(n->primary_dev);
+    if (hotplug_ctrl) {
+        hotplug_handler_pre_plug(hotplug_ctrl, n->primary_dev, &err);
+        if (err) {
+            goto out;
+        }
+        hotplug_handler_plug(hotplug_ctrl, n->primary_dev, errp);
+    }
+
+out:
+    error_propagate(errp, err);
+    return !err;
+}
+
+static void virtio_net_handle_migration_primary(VirtIONet *n,
+                                                MigrationState *s)
+{
+    bool should_be_hidden;
+    Error *err = NULL;
+
+    should_be_hidden = atomic_read(&n->primary_should_be_hidden);
+
+    if (!n->primary_dev) {
+        n->primary_dev = virtio_connect_failover_devices(n, n->qdev, &err);
+        if (!n->primary_dev) {
+            return;
+        }
+    }
+
+    if (migration_in_setup(s) && !should_be_hidden) {
+        if (failover_unplug_primary(n)) {
+            vmstate_unregister(VMSTATE_IF(n->primary_dev),
+                    qdev_get_vmsd(n->primary_dev),
+                    n->primary_dev);
+            qapi_event_send_unplug_primary(n->primary_device_id);
+            atomic_set(&n->primary_should_be_hidden, true);
+        } else {
+            warn_report("couldn't unplug primary device");
+        }
+    } else if (migration_has_failed(s)) {
+        /* We already unplugged the device let's plug it back */
+        if (!failover_replug_primary(n, &err)) {
+            if (err) {
+                error_report_err(err);
+            }
+        }
+    }
+}
+
+static void virtio_net_migration_state_notifier(Notifier *notifier, void *data)
+{
+    MigrationState *s = data;
+    VirtIONet *n = container_of(notifier, VirtIONet, migration_state);
+    virtio_net_handle_migration_primary(n, s);
+}
+
+static int virtio_net_primary_should_be_hidden(DeviceListener *listener,
+            QemuOpts *device_opts)
+{
+    VirtIONet *n = container_of(listener, VirtIONet, primary_listener);
+    bool match_found = false;
+    bool hide = false;
+
+    if (!device_opts) {
+        return -1;
+    }
+    n->primary_device_dict = qemu_opts_to_qdict(device_opts,
+            n->primary_device_dict);
+    if (n->primary_device_dict) {
+        g_free(n->standby_id);
+        n->standby_id = g_strdup(qdict_get_try_str(n->primary_device_dict,
+                    "failover_pair_id"));
+    }
+    if (g_strcmp0(n->standby_id, n->netclient_name) == 0) {
+        match_found = true;
+    } else {
+        match_found = false;
+        hide = false;
+        g_free(n->standby_id);
+        n->primary_device_dict = NULL;
+        goto out;
+    }
+
+    n->primary_device_opts = device_opts;
+
+    /* primary_should_be_hidden is set during feature negotiation */
+    hide = atomic_read(&n->primary_should_be_hidden);
+
+    if (n->primary_device_dict) {
+        g_free(n->primary_device_id);
+        n->primary_device_id = g_strdup(qdict_get_try_str(
+                    n->primary_device_dict, "id"));
+        if (!n->primary_device_id) {
+            warn_report("primary_device_id not set");
+        }
+    }
+
+out:
+    if (match_found && hide) {
+        return 1;
+    } else if (match_found && !hide) {
+        return 0;
+    } else {
+        return -1;
+    }
+}
+
 static void virtio_net_device_realize(DeviceState *dev, Error **errp)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
@@ -2662,6 +2991,7 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
         n->host_features |= (1ULL << VIRTIO_NET_F_MTU);
     }
 
+    //针对双工字符串，设置全/半双工
     if (n->net_conf.duplex_str) {
         if (strncmp(n->net_conf.duplex_str, "half", 5) == 0) {
             n->net_conf.duplex = DUPLEX_HALF;
@@ -2669,16 +2999,31 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
             n->net_conf.duplex = DUPLEX_FULL;
         } else {
             error_setg(errp, "'duplex' must be 'half' or 'full'");
+            return;
         }
         n->host_features |= (1ULL << VIRTIO_NET_F_SPEED_DUPLEX);
     } else {
         n->net_conf.duplex = DUPLEX_UNKNOWN;
     }
 
+    //设置速率
     if (n->net_conf.speed < SPEED_UNKNOWN) {
         error_setg(errp, "'speed' must be between 0 and INT_MAX");
-    } else if (n->net_conf.speed >= 0) {
+        return;
+    }
+    if (n->net_conf.speed >= 0) {
         n->host_features |= (1ULL << VIRTIO_NET_F_SPEED_DUPLEX);
+    }
+
+    //通过failover功能支持迁移
+    if (n->failover) {
+        n->primary_listener.should_be_hidden =
+            virtio_net_primary_should_be_hidden;
+        atomic_set(&n->primary_should_be_hidden, true);
+        device_listener_register(&n->primary_listener);
+        n->migration_state.notify = virtio_net_migration_state_notifier;
+        add_migration_state_change_notifier(&n->migration_state);
+        n->host_features |= (1ULL << VIRTIO_NET_F_STANDBY);
     }
 
     virtio_net_set_config_size(n, n->host_features);
@@ -2689,6 +3034,7 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
      * Guests that want a smaller ring can always resize it without
      * help from us (using virtio 1 and up).
      */
+    //rx队列长度校验
     if (n->net_conf.rx_queue_size < VIRTIO_NET_RX_QUEUE_MIN_SIZE ||
         n->net_conf.rx_queue_size > VIRTQUEUE_MAX_SIZE ||
         !is_power_of_2(n->net_conf.rx_queue_size)) {
@@ -2700,6 +3046,7 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
         return;
     }
 
+    //tx队列长度校验
     if (n->net_conf.tx_queue_size < VIRTIO_NET_TX_QUEUE_MIN_SIZE ||
         n->net_conf.tx_queue_size > VIRTQUEUE_MAX_SIZE ||
         !is_power_of_2(n->net_conf.tx_queue_size)) {
@@ -2711,6 +3058,7 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
         return;
     }
 
+    //队列总数为配直的队列数2*n+1
     n->max_queues = MAX(n->nic_conf.peers.queues, 1);
     if (n->max_queues * 2 + 1 > VIRTIO_QUEUE_MAX) {
         error_setg(errp, "Invalid number of queues (= %" PRIu32 "), "
@@ -2734,6 +3082,7 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
     n->net_conf.tx_queue_size = MIN(virtio_net_max_tx_queue_size(n),
                                     n->net_conf.tx_queue_size);
 
+    //为网卡新建max_queues个队列
     for (i = 0; i < n->max_queues; i++) {
         virtio_net_add_queue(n, i);
     }
@@ -2774,6 +3123,8 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
     n->vqs[0].tx_waiting = 0;
     n->tx_burst = n->net_conf.txburst;
     virtio_net_set_mrg_rx_bufs(n, 0, 0);
+
+    //默认开启混杂模式
     n->promisc = 1; /* for compatibility */
 
     n->mac_table.macs = g_malloc0(MAC_TABLE_ENTRIES * ETH_ALEN);
@@ -2804,11 +3155,19 @@ static void virtio_net_device_unrealize(DeviceState *dev, Error **errp)
     g_free(n->mac_table.macs);
     g_free(n->vlans);
 
+    if (n->failover) {
+        g_free(n->primary_device_id);
+        g_free(n->standby_id);
+        qobject_unref(n->primary_device_dict);
+        n->primary_device_dict = NULL;
+    }
+
     max_queues = n->multiqueue ? n->max_queues : 1;
     for (i = 0; i < max_queues; i++) {
         virtio_net_del_queue(n, i);
     }
-
+    /* delete also control vq */
+    virtio_del_queue(vdev, max_queues * 2);
     qemu_announce_timer_del(&n->announce_timer, false);
     g_free(n->vqs);
     qemu_del_nic(n->nic);
@@ -2841,6 +3200,26 @@ static int virtio_net_pre_save(void *opaque)
     return 0;
 }
 
+static bool primary_unplug_pending(void *opaque)
+{
+    DeviceState *dev = opaque;
+    VirtIODevice *vdev = VIRTIO_DEVICE(dev);
+    VirtIONet *n = VIRTIO_NET(vdev);
+
+    if (!virtio_vdev_has_feature(vdev, VIRTIO_NET_F_STANDBY)) {
+        return false;
+    }
+    return n->primary_dev ? n->primary_dev->pending_deleted_event : false;
+}
+
+static bool dev_unplug_pending(void *opaque)
+{
+    DeviceState *dev = opaque;
+    VirtioDeviceClass *vdc = VIRTIO_DEVICE_GET_CLASS(dev);
+
+    return vdc->primary_unplug_pending(dev);
+}
+
 static const VMStateDescription vmstate_virtio_net = {
     .name = "virtio-net",
     .minimum_version_id = VIRTIO_NET_VM_VERSION,
@@ -2850,6 +3229,7 @@ static const VMStateDescription vmstate_virtio_net = {
         VMSTATE_END_OF_LIST()
     },
     .pre_save = virtio_net_pre_save,
+    .dev_unplug_pending = dev_unplug_pending,
 };
 
 static Property virtio_net_properties[] = {
@@ -2911,6 +3291,7 @@ static Property virtio_net_properties[] = {
                      true),
     DEFINE_PROP_INT32("speed", VirtIONet, net_conf.speed, SPEED_UNKNOWN),
     DEFINE_PROP_STRING("duplex", VirtIONet, net_conf.duplex_str),
+    DEFINE_PROP_BOOL("failover", VirtIONet, failover, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -2919,7 +3300,7 @@ static void virtio_net_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     VirtioDeviceClass *vdc = VIRTIO_DEVICE_CLASS(klass);
 
-    dc->props = virtio_net_properties;
+    device_class_set_props(dc, virtio_net_properties);
     dc->vmsd = &vmstate_virtio_net;
     set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
     vdc->realize = virtio_net_device_realize;
@@ -2934,7 +3315,9 @@ static void virtio_net_class_init(ObjectClass *klass, void *data)
     vdc->guest_notifier_mask = virtio_net_guest_notifier_mask;
     vdc->guest_notifier_pending = virtio_net_guest_notifier_pending;
     vdc->legacy_features |= (0x1 << VIRTIO_NET_F_GSO);
+    vdc->post_load = virtio_net_post_load_virtio;
     vdc->vmsd = &vmstate_virtio_net_device;
+    vdc->primary_unplug_pending = primary_unplug_pending;
 }
 
 static const TypeInfo virtio_net_info = {

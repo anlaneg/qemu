@@ -88,6 +88,22 @@ Object *user_creatable_add_type(const char *type, const char *id,
                                 Visitor *v, Error **errp);
 
 /**
+ * user_creatable_add_dict:
+ * @qdict: the object definition
+ * @keyval: if true, use a keyval visitor for processing @qdict (i.e.
+ *          assume that all @qdict values are strings); otherwise, use
+ *          the normal QObject visitor (i.e. assume all @qdict values
+ *          have the QType expected by the QOM object type)
+ * @errp: if an error occurs, a pointer to an area to store the error
+ *
+ * Create an instance of the user creatable object that is defined by
+ * @qdict.  The object type is taken from the QDict key 'qom-type', its
+ * ID from the key 'id'. The remaining entries in @qdict are used to
+ * initialize the object properties.
+ */
+void user_creatable_add_dict(QDict *qdict, bool keyval, Error **errp);
+
+/**
  * user_creatable_add_opts:
  * @opts: the object definition
  * @errp: if an error occurs, a pointer to an area to store the error
@@ -161,5 +177,12 @@ void user_creatable_del(const char *id, Error **errp);
  * objects container.
  */
 void user_creatable_cleanup(void);
+
+/**
+ * qmp_object_add:
+ *
+ * QMP command handler for object-add. See the QAPI schema for documentation.
+ */
+void qmp_object_add(QDict *qdict, QObject **ret_data, Error **errp);
 
 #endif

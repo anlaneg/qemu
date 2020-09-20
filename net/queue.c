@@ -42,27 +42,36 @@
 
 struct NetPacket {
     QTAILQ_ENTRY(NetPacket) entry;
+    //报文所属nc
     NetClientState *sender;
     unsigned flags;
-    int size;//报文大小
+    //报文大小
+    int size;
+    //报文的发送回调
     NetPacketSent *sent_cb;
-    uint8_t data[0];//报文内容
+    //报文内容
+    uint8_t data[];
 };
 
 //队列
 struct NetQueue {
+    //网络队列私有数据
     void *opaque;
-    uint32_t nq_maxlen;//队列最大大小
-    uint32_t nq_count;//队列中缓存的报文数
+    //队列最大长度
+    uint32_t nq_maxlen;
+    //队列中缓存的报文数
+    uint32_t nq_count;
     NetQueueDeliverFunc *deliver;
 
-    QTAILQ_HEAD(, NetPacket) packets;//缓存的报文
+    //记录队列中缓存的报文
+    QTAILQ_HEAD(, NetPacket) packets;
 
+    //标明队列正在投递报文
     unsigned delivering : 1;
 };
 
-//新建一个队列
-NetQueue *qemu_new_net_queue(NetQueueDeliverFunc *deliver, void *opaque)
+//新建一个网络队列
+NetQueue *qemu_new_net_queue(NetQueueDeliverFunc *deliver/*队列投递回调*/, void *opaque)
 {
     NetQueue *queue;
 
@@ -80,59 +89,72 @@ NetQueue *qemu_new_net_queue(NetQueueDeliverFunc *deliver, void *opaque)
     return queue;
 }
 
+//移除网络队列
 void qemu_del_net_queue(NetQueue *queue)
 {
     NetPacket *packet, *next;
 
+    //先释放网络队列中缓存的报文
     QTAILQ_FOREACH_SAFE(packet, &queue->packets, entry, next) {
         QTAILQ_REMOVE(&queue->packets, packet, entry);
         g_free(packet);
     }
 
+    //再释放队列
     g_free(queue);
 }
 
+//向队列中加入一个报文（队列如果为满且没有send_cb则丢包）
 static void qemu_net_queue_append(NetQueue *queue,
-                                  NetClientState *sender,
+                                  NetClientState *sender/*报文从属的网卡*/,
                                   unsigned flags,
-                                  const uint8_t *buf,
+                                  const uint8_t *buf/*报文内容*/,
                                   size_t size,
                                   NetPacketSent *sent_cb)
 {
     NetPacket *packet;
 
+    /*队列满且没有发送回调，则丢弃*/
     if (queue->nq_count >= queue->nq_maxlen && !sent_cb) {
         return; /* drop if queue full and no callback */
     }
+
+    //申请一个net packet
     packet = g_malloc(sizeof(NetPacket) + size);
     packet->sender = sender;
     packet->flags = flags;
     packet->size = size;
     packet->sent_cb = sent_cb;
-    memcpy(packet->data, buf, size);//将报文copy进buffer
+    memcpy(packet->data, buf, size);//将报文内容copy进buffer
 
+    //将net packet串入队列
     queue->nq_count++;
     QTAILQ_INSERT_TAIL(&queue->packets, packet, entry);
 }
 
+//通过iov方式向队列中加入一个net packet（容许net packet有多个iov）
 void qemu_net_queue_append_iov(NetQueue *queue,
                                NetClientState *sender,
                                unsigned flags,
                                const struct iovec *iov,
-                               int iovcnt,
+                               int iovcnt/*iov数组长度*/,
                                NetPacketSent *sent_cb)
 {
     NetPacket *packet;
     size_t max_len = 0;
     int i;
 
+    //队列为满且没有cb，丢包
     if (queue->nq_count >= queue->nq_maxlen && !sent_cb) {
         return; /* drop if queue full and no callback */
     }
+
+    //计算报文总长度
     for (i = 0; i < iovcnt; i++) {
         max_len += iov[i].iov_len;
     }
 
+    //申请并填充net packet
     packet = g_malloc(sizeof(NetPacket) + max_len);
     packet->sender = sender;
     packet->sent_cb = sent_cb;
@@ -146,10 +168,12 @@ void qemu_net_queue_append_iov(NetQueue *queue,
         packet->size += len;
     }
 
+    //将其加入队列
     queue->nq_count++;
     QTAILQ_INSERT_TAIL(&queue->packets, packet, entry);
 }
 
+//单个报文非iov方式投递
 static ssize_t qemu_net_queue_deliver(NetQueue *queue,
                                       NetClientState *sender,
                                       unsigned flags,
@@ -163,12 +187,14 @@ static ssize_t qemu_net_queue_deliver(NetQueue *queue,
     };
 
     queue->delivering = 1;
-    ret = queue->deliver(sender, flags, &iov, 1, queue->opaque);//投递报文（返回0表示没有投递出去）
+    //将data封装成iov格式进行报文投递（返回0表示没有投递出去）
+    ret = queue->deliver(sender, flags, &iov, 1, queue->opaque);
     queue->delivering = 0;
 
     return ret;
 }
 
+//单个报文iov方式投递
 static ssize_t qemu_net_queue_deliver_iov(NetQueue *queue,
                                           NetClientState *sender,
                                           unsigned flags,
@@ -194,6 +220,7 @@ ssize_t qemu_net_queue_send(NetQueue *queue,
     ssize_t ret;
 
     if (queue->delivering || !qemu_can_send_packet(sender)) {
+        //队列正在投递报文或者当前不能发送报文，则报文被缓存进queue
         qemu_net_queue_append(queue, sender, flags, data, size, sent_cb);
         return 0;
     }
@@ -221,6 +248,7 @@ ssize_t qemu_net_queue_send_iov(NetQueue *queue,
     ssize_t ret;
 
     if (queue->delivering || !qemu_can_send_packet(sender)) {
+        //队列正在投递报文或者当前不能发送报文，则报文被缓存进queue
         qemu_net_queue_append_iov(queue, sender, flags, iov, iovcnt, sent_cb);
         return 0;
     }
@@ -252,6 +280,7 @@ void qemu_net_queue_purge(NetQueue *queue, NetClientState *from)
     }
 }
 
+//将队列中的报文投递给对端
 bool qemu_net_queue_flush(NetQueue *queue)
 {
     while (!QTAILQ_EMPTY(&queue->packets)) {
@@ -267,14 +296,14 @@ bool qemu_net_queue_flush(NetQueue *queue)
                                      packet->flags,
                                      packet->data,
                                      packet->size);
-        //没有转发出去，重新入队到队头
+        //没有转发出去，重新入队到队头并返回
         if (ret == 0) {
             queue->nq_count++;
             QTAILQ_INSERT_HEAD(&queue->packets, packet, entry);
             return false;
         }
 
-        //发成成功，调用回调
+        //发成成功，如果报文有回调，则调用回调
         if (packet->sent_cb) {
             packet->sent_cb(packet->sender, ret);
         }

@@ -32,26 +32,33 @@ void event_notifier_init_fd(EventNotifier *e, int fd)
 }
 #endif
 
+//e会创建一对pipe fd,一个负责读，一个负责写,如果active为真，则将触发e的通知
 int event_notifier_init(EventNotifier *e, int active)
 {
     int fds[2];
     int ret;
 
 #ifdef CONFIG_EVENTFD
+    //创建eventfd
     ret = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 #else
     ret = -1;
     errno = ENOSYS;
 #endif
     if (ret >= 0) {
+        /*如果支持eventfd,则使用eventfd创建的fd*/
         e->rfd = e->wfd = ret;
     } else {
         if (errno != ENOSYS) {
             return -errno;
         }
+
+        //不支持eventfd,创建pipe
         if (qemu_pipe(fds) < 0) {
             return -errno;
         }
+
+        //指定为非阻塞
         ret = fcntl_setfl(fds[0], O_NONBLOCK);
         if (ret < 0) {
             ret = -errno;
@@ -65,6 +72,8 @@ int event_notifier_init(EventNotifier *e, int active)
         e->rfd = fds[0];
         e->wfd = fds[1];
     }
+
+    //如果活跃，则向e发送通知
     if (active) {
         event_notifier_set(e);
     }
@@ -86,17 +95,20 @@ void event_notifier_cleanup(EventNotifier *e)
     e->wfd = -1;
 }
 
+//notifier的读fd
 int event_notifier_get_fd(const EventNotifier *e)
 {
     return e->rfd;
 }
 
+//向e的wfd中写数据，完成通知
 int event_notifier_set(EventNotifier *e)
 {
     static const uint64_t value = 1;
     ssize_t ret;
 
     do {
+        //向wfd中写数据
         ret = write(e->wfd, &value, sizeof(value));
     } while (ret < 0 && errno == EINTR);
 
@@ -116,6 +128,7 @@ int event_notifier_test_and_clear(EventNotifier *e)
     /* Drain the notify pipe.  For eventfd, only 8 bytes will be read.  */
     value = 0;
     do {
+        /*检查e->rfd是否可读取,如果不可读取，则阻塞*/
         len = read(e->rfd, buffer, sizeof(buffer));
         value |= (len > 0);
     } while ((len == -1 && errno == EINTR) || len == sizeof(buffer));

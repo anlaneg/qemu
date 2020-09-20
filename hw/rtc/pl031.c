@@ -149,11 +149,7 @@ static void pl031_write(void * opaque, hwaddr offset,
         pl031_update(s);
         break;
     case RTC_ICR:
-        /* The PL031 documentation (DDI0224B) states that the interrupt is
-           cleared when bit 0 of the written value is set.  However the
-           arm926e documentation (DDI0287B) states that the interrupt is
-           cleared when any value is written.  */
-        s->is = 0;
+        s->is &= ~value;
         pl031_update(s);
         break;
     case RTC_CR:
@@ -325,7 +321,7 @@ static void pl031_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->vmsd = &vmstate_pl031;
-    dc->props = pl031_properties;
+    device_class_set_props(dc, pl031_properties);
 }
 
 static const TypeInfo pl031_info = {

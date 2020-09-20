@@ -33,7 +33,6 @@ const char *get_opt_value(const char *p, char **value);
 void parse_option_size(const char *name, const char *value,
                        uint64_t *ret, Error **errp);
 bool has_help_option(const char *param);
-bool is_valid_option_list(const char *param);
 
 enum QemuOptType {
     QEMU_OPT_STRING = 0,  /* no parsing (use string as-is)                        */
@@ -46,7 +45,7 @@ typedef struct QemuOptDesc {
     const char *name;
     enum QemuOptType type;//选项值数据类型
     const char *help;
-    const char *def_value_str;//选项的默认字符串
+    const char *def_value_str;//选项的默认值（字符串）
 } QemuOptDesc;
 
 struct QemuOptsList {

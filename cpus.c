@@ -25,6 +25,7 @@
 #include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qemu/config-file.h"
+#include "qemu/cutils.h"
 #include "migration/vmstate.h"
 #include "monitor/monitor.h"
 #include "qapi/error.h"
@@ -45,6 +46,7 @@
 #include "exec/exec-all.h"
 
 #include "qemu/thread.h"
+#include "qemu/plugin.h"
 #include "sysemu/cpus.h"
 #include "sysemu/qtest.h"
 #include "qemu/main-loop.h"
@@ -52,7 +54,7 @@
 #include "qemu/bitmap.h"
 #include "qemu/seqlock.h"
 #include "qemu/guest-random.h"
-#include "tcg.h"
+#include "tcg/tcg.h"
 #include "hw/nmi.h"
 #include "sysemu/replay.h"
 #include "sysemu/runstate.h"
@@ -92,7 +94,7 @@ static unsigned int throttle_percentage;
 
 bool cpu_is_stopped(CPUState *cpu)
 {
-    return cpu->stopped || !runstate_is_running();
+    return cpu->stopped || !runstate_is_running()/*当前非运行状态*/;
 }
 
 static bool cpu_thread_is_idle(CPUState *cpu)
@@ -165,78 +167,6 @@ typedef struct TimersState {
 static TimersState timers_state;
 bool mttcg_enabled;
 
-/*
- * We default to false if we know other options have been enabled
- * which are currently incompatible with MTTCG. Otherwise when each
- * guest (target) has been updated to support:
- *   - atomic instructions
- *   - memory ordering primitives (barriers)
- * they can set the appropriate CONFIG flags in ${target}-softmmu.mak
- *
- * Once a guest architecture has been converted to the new primitives
- * there are two remaining limitations to check.
- *
- * - The guest can't be oversized (e.g. 64 bit guest on 32 bit host)
- * - The host must have a stronger memory order than the guest
- *
- * It may be possible in future to support strong guests on weak hosts
- * but that will require tagging all load/stores in a guest with their
- * implicit memory order requirements which would likely slow things
- * down a lot.
- */
-
-static bool check_tcg_memory_orders_compatible(void)
-{
-#if defined(TCG_GUEST_DEFAULT_MO) && defined(TCG_TARGET_DEFAULT_MO)
-    return (TCG_GUEST_DEFAULT_MO & ~TCG_TARGET_DEFAULT_MO) == 0;
-#else
-    return false;
-#endif
-}
-
-static bool default_mttcg_enabled(void)
-{
-    if (use_icount || TCG_OVERSIZED_GUEST) {
-        return false;
-    } else {
-#ifdef TARGET_SUPPORTS_MTTCG
-        return check_tcg_memory_orders_compatible();
-#else
-        return false;
-#endif
-    }
-}
-
-void qemu_tcg_configure(QemuOpts *opts, Error **errp)
-{
-    const char *t = qemu_opt_get(opts, "thread");
-    if (t) {
-        if (strcmp(t, "multi") == 0) {
-            if (TCG_OVERSIZED_GUEST) {
-                error_setg(errp, "No MTTCG when guest word size > hosts");
-            } else if (use_icount) {
-                error_setg(errp, "No MTTCG when icount is enabled");
-            } else {
-#ifndef TARGET_SUPPORTS_MTTCG
-                warn_report("Guest not yet converted to MTTCG - "
-                            "you may get unexpected results");
-#endif
-                if (!check_tcg_memory_orders_compatible()) {
-                    warn_report("Guest expects a stronger memory ordering "
-                                "than the host provides");
-                    error_printf("This may cause strange/hard to debug errors\n");
-                }
-                mttcg_enabled = true;
-            }
-        } else if (strcmp(t, "single") == 0) {
-            mttcg_enabled = false;
-        } else {
-            error_setg(errp, "Invalid 'thread' setting %s", t);
-        }
-    } else {
-        mttcg_enabled = default_mttcg_enabled();
-    }
-}
 
 /* The current number of executed instructions is based on what we
  * originally budgeted minus the current state of the decrementing
@@ -868,40 +798,47 @@ void cpu_ticks_init(void)
 
 void configure_icount(QemuOpts *opts, Error **errp)
 {
-    const char *option;
-    char *rem_str = NULL;
+    const char *option = qemu_opt_get(opts, "shift");
+    bool sleep = qemu_opt_get_bool(opts, "sleep", true);
+    bool align = qemu_opt_get_bool(opts, "align", false);
+    long time_shift = -1;
 
-    option = qemu_opt_get(opts, "shift");
-    if (!option) {
-        if (qemu_opt_get(opts, "align") != NULL) {
-            error_setg(errp, "Please specify shift option when using align");
-        }
+    if (!option && qemu_opt_get(opts, "align")) {
+        error_setg(errp, "Please specify shift option when using align");
         return;
     }
 
-    icount_sleep = qemu_opt_get_bool(opts, "sleep", true);
+    if (align && !sleep) {
+        error_setg(errp, "align=on and sleep=off are incompatible");
+        return;
+    }
+
+    if (strcmp(option, "auto") != 0) {
+        if (qemu_strtol(option, NULL, 0, &time_shift) < 0
+            || time_shift < 0 || time_shift > MAX_ICOUNT_SHIFT) {
+            error_setg(errp, "icount: Invalid shift value");
+            return;
+        }
+    } else if (icount_align_option) {
+        error_setg(errp, "shift=auto and align=on are incompatible");
+        return;
+    } else if (!icount_sleep) {
+        error_setg(errp, "shift=auto and sleep=off are incompatible");
+        return;
+    }
+
+    icount_sleep = sleep;
     if (icount_sleep) {
         timers_state.icount_warp_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL_RT,
                                          icount_timer_cb, NULL);
     }
 
-    icount_align_option = qemu_opt_get_bool(opts, "align", false);
+    icount_align_option = align;
 
-    if (icount_align_option && !icount_sleep) {
-        error_setg(errp, "align=on and sleep=off are incompatible");
-    }
-    if (strcmp(option, "auto") != 0) {
-        errno = 0;
-        timers_state.icount_time_shift = strtol(option, &rem_str, 0);
-        if (errno != 0 || *rem_str != '\0' || !strlen(option)) {
-            error_setg(errp, "icount: Invalid shift value");
-        }
+    if (time_shift >= 0) {
+        timers_state.icount_time_shift = time_shift;
         use_icount = 1;
         return;
-    } else if (icount_align_option) {
-        error_setg(errp, "shift=auto and align=on are incompatible");
-    } else if (!icount_sleep) {
-        error_setg(errp, "shift=auto and sleep=off are incompatible");
     }
 
     use_icount = 2;
@@ -1097,9 +1034,9 @@ static int do_vm_stop(RunState state, bool send_stop)
     int ret = 0;
 
     if (runstate_is_running()) {
+        runstate_set(state);
         cpu_disable_ticks();
         pause_all_vcpus();
-        runstate_set(state);
         vm_state_notify(0, state);
         if (send_stop) {
             qapi_event_send_stop();
@@ -1120,6 +1057,7 @@ int vm_shutdown(void)
     return do_vm_stop(RUN_STATE_SHUTDOWN, false);
 }
 
+//检查此cpu是否可继续运行
 static bool cpu_can_run(CPUState *cpu)
 {
     if (cpu->stop) {
@@ -1264,8 +1202,17 @@ static void qemu_tcg_rr_wait_io_event(void)
 
 static void qemu_wait_io_event(CPUState *cpu)
 {
+    bool slept = false;
+
     while (cpu_thread_is_idle(cpu)) {
+        if (!slept) {
+            slept = true;
+            qemu_plugin_vcpu_idle_cb(cpu);
+        }
         qemu_cond_wait(cpu->halt_cond, &qemu_global_mutex);
+    }
+    if (slept) {
+        qemu_plugin_vcpu_resume_cb(cpu);
     }
 
 #ifdef _WIN32
@@ -1306,6 +1253,7 @@ static void *qemu_kvm_cpu_thread_fn(void *arg)
 
     do {
         if (cpu_can_run(cpu)) {
+            //cpu可以继续运行，循环调用kvm_cpu_exec
             r = kvm_cpu_exec(cpu);
             if (r == EXCP_DEBUG) {
                 cpu_handle_guest_debug(cpu);
@@ -1379,6 +1327,10 @@ static int64_t tcg_get_icount_limit(void)
          */
         deadline = qemu_clock_deadline_ns_all(QEMU_CLOCK_VIRTUAL,
                                               QEMU_TIMER_ATTR_ALL);
+        /* Check realtime timers, because they help with input processing */
+        deadline = qemu_soonest_timeout(deadline,
+                qemu_clock_deadline_ns_all(QEMU_CLOCK_REALTIME,
+                                           QEMU_TIMER_ATTR_ALL));
 
         /* Maintain prior (possibly buggy) behaviour where if no deadline
          * was set (as there is no QEMU_CLOCK_VIRTUAL timer) or it is more than
@@ -1898,6 +1850,11 @@ void qemu_mutex_unlock_iothread(void)
     qemu_mutex_unlock(&qemu_global_mutex);
 }
 
+void qemu_cond_wait_iothread(QemuCond *cond)
+{
+    qemu_cond_wait(cond, &qemu_global_mutex);
+}
+
 static bool all_vcpus_paused(void)
 {
     CPUState *cpu;
@@ -1952,6 +1909,10 @@ void cpu_resume(CPUState *cpu)
 void resume_all_vcpus(void)
 {
     CPUState *cpu;
+
+    if (!runstate_is_running()) {
+        return;
+    }
 
     qemu_clock_enable(QEMU_CLOCK_VIRTUAL, true);
     CPU_FOREACH(cpu) {
@@ -2045,6 +2006,7 @@ static void qemu_hax_start_vcpu(CPUState *cpu)
 #endif
 }
 
+//启动单个vcpu的独立线程
 static void qemu_kvm_start_vcpu(CPUState *cpu)
 {
     char thread_name[VCPU_THREAD_NAME_SIZE];
@@ -2052,7 +2014,7 @@ static void qemu_kvm_start_vcpu(CPUState *cpu)
     cpu->thread = g_malloc0(sizeof(QemuThread));
     cpu->halt_cond = g_malloc0(sizeof(QemuCond));
     qemu_cond_init(cpu->halt_cond);
-    //设置线程名称
+    //设置vcpu线程名称
     snprintf(thread_name, VCPU_THREAD_NAME_SIZE, "CPU %d/KVM",
              cpu->cpu_index);
     //创建线程运行kvm cpu thread
@@ -2125,6 +2087,7 @@ void qemu_init_vcpu(CPUState *cpu)
     }
 
     if (kvm_enabled()) {
+        //qemu kvm开启vcpu
         qemu_kvm_start_vcpu(cpu);
     } else if (hax_enabled()) {
         qemu_hax_start_vcpu(cpu);

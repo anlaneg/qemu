@@ -117,31 +117,36 @@ static const char *full_name(QObjectInputVisitor *qiv, const char *name)
 
 static QObject *qobject_input_try_get_object(QObjectInputVisitor *qiv,
                                              const char *name,
-                                             bool consume)
+                                             bool consume/*是否消耗*/)
 {
     StackObject *tos;
     QObject *qobj;
     QObject *ret;
 
     if (QSLIST_EMPTY(&qiv->stack)) {
+        /*栈为空，直接返回root*/
         /* Starting at root, name is ignored. */
         assert(qiv->root);
         return qiv->root;
     }
 
+    //否则取栈顶上tos
     /* We are in a container; find the next element. */
     tos = QSLIST_FIRST(&qiv->stack);
     qobj = tos->obj;
     assert(qobj);
 
     if (qobject_type(qobj) == QTYPE_QDICT) {
+        //如果qobj是QDICT类型，自QDICT中查此name
         assert(name);
         ret = qdict_get(qobject_to(QDict, qobj), name);
         if (tos->h && consume && ret) {
+            //如果需要消耗，则移除掉
             bool removed = g_hash_table_remove(tos->h, name);
             assert(removed);
         }
     } else {
+        //否则一定为QLIST类型，返回tos
         assert(qobject_type(qobj) == QTYPE_QLIST);
         assert(!name);
         if (tos->entry) {
@@ -203,31 +208,32 @@ static const char *qobject_input_get_keyval(QObjectInputVisitor *qiv,
     return qstring_get_str(qstr);
 }
 
-static void qdict_add_key(const char *key, QObject *obj, void *opaque)
-{
-    GHashTable *h = opaque;
-    g_hash_table_insert(h, (gpointer) key, NULL);
-}
-
 static const QListEntry *qobject_input_push(QObjectInputVisitor *qiv,
                                             const char *name,
                                             QObject *obj, void *qapi)
 {
     GHashTable *h;
     StackObject *tos = g_new0(StackObject, 1);
+    QDict *qdict = qobject_to(QDict, obj);
+    QList *qlist = qobject_to(QList, obj);
+    const QDictEntry *entry;
 
     assert(obj);
     tos->name = name;
     tos->obj = obj;
     tos->qapi = qapi;
 
-    if (qobject_type(obj) == QTYPE_QDICT) {
+    if (qdict) {
         h = g_hash_table_new(g_str_hash, g_str_equal);
-        qdict_iter(qobject_to(QDict, obj), qdict_add_key, h);
+        for (entry = qdict_first(qdict);
+             entry;
+             entry = qdict_next(qdict, entry)) {
+            g_hash_table_insert(h, (void *)qdict_entry_key(entry), NULL);
+        }
         tos->h = h;
     } else {
-        assert(qobject_type(obj) == QTYPE_QLIST);
-        tos->entry = qlist_first(qobject_to(QList, obj));
+        assert(qlist);
+        tos->entry = qlist_first(qlist);
         tos->index = -1;
     }
 
@@ -517,13 +523,14 @@ static void qobject_input_type_str(Visitor *v, const char *name, char **obj,
     if (!qobj) {
         return;
     }
+    /*转为qstr*/
     qstr = qobject_to(QString, qobj);
     if (!qstr) {
         error_setg(errp, QERR_INVALID_PARAMETER_TYPE,
                    full_name(qiv, name), "string");
         return;
     }
-
+    //设置字符串取值
     *obj = g_strdup(qstring_get_str(qstr));
 }
 
@@ -658,6 +665,7 @@ static void qobject_input_free(Visitor *v)
     g_free(qiv);
 }
 
+//创建基本input vistor对象
 static QObjectInputVisitor *qobject_input_visitor_base_new(QObject *obj)
 {
     QObjectInputVisitor *v = g_malloc0(sizeof(*v));
@@ -723,6 +731,7 @@ Visitor *qobject_input_visitor_new_str(const char *str,
     Visitor *v;
 
     if (is_json) {
+        //按json格式解析
         obj = qobject_from_json(str, errp);
         if (!obj) {
             return NULL;
@@ -731,6 +740,7 @@ Visitor *qobject_input_visitor_new_str(const char *str,
         assert(args);
         v = qobject_input_visitor_new(QOBJECT(args));
     } else {
+        //按kv格式解析
         args = keyval_parse(str, implied_key, errp);
         if (!args) {
             return NULL;

@@ -68,7 +68,7 @@ void notifier_with_return_remove(NotifierWithReturn *notifier)
     QLIST_REMOVE(notifier, node);
 }
 
-//含返回值的通知回调
+//触发list上的所有notifier
 int notifier_with_return_list_notify(NotifierWithReturnList *list, void *data)
 {
     NotifierWithReturn *notifier, *next;

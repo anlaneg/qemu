@@ -288,6 +288,7 @@ static int mon_refcount;
 static mon_cmd_t mon_cmds[];
 static mon_cmd_t info_cmds[];
 
+//定义两个command list
 QmpCommandList qmp_commands, qmp_cap_negotiation_commands;
 
 Monitor *cur_mon;
@@ -1235,6 +1236,7 @@ static void monitor_init_qmp_commands(void)
 
     qmp_init_marshal(&qmp_commands);
 
+    //为qmp_commands list添加命令
     qmp_register_command(&qmp_commands, "query-qmp-schema",
                          qmp_query_qmp_schema, QCO_ALLOW_PRECONFIG);
     qmp_register_command(&qmp_commands, "device_add", qmp_device_add,
@@ -1245,6 +1247,7 @@ static void monitor_init_qmp_commands(void)
     qmp_unregister_commands_hack();
 
     QTAILQ_INIT(&qmp_cap_negotiation_commands);
+    //为qmp_cap_negotiation_commands添加命令
     qmp_register_command(&qmp_cap_negotiation_commands, "qmp_capabilities",
                          qmp_marshal_qmp_capabilities, QCO_ALLOW_PRECONFIG);
 }
@@ -4467,6 +4470,7 @@ static void monitor_event(void *opaque, int event)
     }
 }
 
+//按命令名称进行排序
 static int
 compare_mon_cmd(const void *a, const void *b)
 {
@@ -4479,6 +4483,7 @@ static void sortcmdlist(void)
     int array_num;
     int elem_size = sizeof(mon_cmd_t);
 
+    //按command名称对mon_cmds命令数组进行排序
     array_num = sizeof(mon_cmds)/elem_size-1;
     qsort((void *)mon_cmds, array_num, elem_size, compare_mon_cmd);
 
@@ -4498,6 +4503,7 @@ static AioContext *monitor_get_aio_context(void)
 
 static void monitor_iothread_init(void)
 {
+    //创建IOThread类型的object
     mon_iothread = iothread_create("mon_iothread", &error_abort);
 
     /*

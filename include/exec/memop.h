@@ -112,6 +112,7 @@ typedef enum MemOp {
 /* MemOp to size in bytes.  */
 static inline unsigned memop_size(MemOp op)
 {
+    //取要操作的内存size
     return 1 << (op & MO_SIZE);
 }
 

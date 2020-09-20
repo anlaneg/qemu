@@ -26,6 +26,7 @@ static inline uint64_t bswap64(uint64_t x)
     return bswap_64(x);
 }
 # else
+//ntohs函数实现
 static inline uint16_t bswap16(uint16_t x)
 {
     return (((x & 0x00ff) << 8) |

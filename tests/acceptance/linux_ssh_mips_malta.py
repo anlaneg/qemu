@@ -13,6 +13,7 @@ import time
 
 from avocado import skipUnless
 from avocado_qemu import Test
+from avocado_qemu import wait_for_console_pattern
 from avocado.utils import process
 from avocado.utils import archive
 from avocado.utils import ssh
@@ -69,19 +70,6 @@ class LinuxSSH(Test):
     def setUp(self):
         super(LinuxSSH, self).setUp()
 
-    def wait_for_console_pattern(self, success_message,
-                                 failure_message='Oops'):
-        console = self.vm.console_socket.makefile()
-        console_logger = logging.getLogger('console')
-        while True:
-            msg = console.readline()
-            console_logger.debug(msg.strip())
-            if success_message in msg:
-                break
-            if failure_message in msg:
-                fail = 'Failure message found in console: %s' % failure_message
-                self.fail(fail)
-
     def get_portfwd(self):
         res = self.vm.command('human-monitor-command',
                               command_line='info usernet')
@@ -111,10 +99,12 @@ class LinuxSSH(Test):
     def ssh_command(self, command, is_root=True):
         self.ssh_logger.info(command)
         result = self.ssh_session.cmd(command)
-        stdout_lines = [line.rstrip() for line in result.stdout_text.splitlines()]
+        stdout_lines = [line.rstrip() for line
+                        in result.stdout_text.splitlines()]
         for line in stdout_lines:
             self.ssh_logger.info(line)
-        stderr_lines = [line.rstrip() for line in result.stderr_text.splitlines()]
+        stderr_lines = [line.rstrip() for line
+                        in result.stderr_text.splitlines()]
         for line in stderr_lines:
             self.ssh_logger.warning(line)
         return stdout_lines, stderr_lines
@@ -123,7 +113,6 @@ class LinuxSSH(Test):
         image_url, image_hash = self.get_image_info(endianess)
         image_path = self.fetch_asset(image_url, asset_hash=image_hash)
 
-        self.vm.set_machine('malta')
         self.vm.set_console()
         kernel_command_line = (self.KERNEL_COMMON_COMMAND_LINE
                                + 'console=ttyS0 root=/dev/sda1')
@@ -137,7 +126,7 @@ class LinuxSSH(Test):
 
         self.log.info('VM launched, waiting for sshd')
         console_pattern = 'Starting OpenBSD Secure Shell server: sshd'
-        self.wait_for_console_pattern(console_pattern)
+        wait_for_console_pattern(self, console_pattern, 'Oops')
         self.log.info('sshd ready')
 
         self.ssh_connect('root', 'root')
@@ -145,7 +134,7 @@ class LinuxSSH(Test):
     def shutdown_via_ssh(self):
         self.ssh_command('poweroff')
         self.ssh_disconnect_vm()
-        self.wait_for_console_pattern('Power down')
+        wait_for_console_pattern(self, 'Power down', 'Oops')
 
     def ssh_command_output_contains(self, cmd, exp):
         stdout, _ = self.ssh_command(cmd)
@@ -227,7 +216,6 @@ class LinuxSSH(Test):
     def test_mips_malta32eb_kernel3_2_0(self):
         """
         :avocado: tags=arch:mips
-        :avocado: tags=machine:malta
         :avocado: tags=endian:big
         :avocado: tags=device:pcnet32
         """
@@ -236,7 +224,6 @@ class LinuxSSH(Test):
     def test_mips_malta32el_kernel3_2_0(self):
         """
         :avocado: tags=arch:mipsel
-        :avocado: tags=machine:malta
         :avocado: tags=endian:little
         :avocado: tags=device:pcnet32
         """
@@ -245,7 +232,6 @@ class LinuxSSH(Test):
     def test_mips_malta64eb_kernel3_2_0(self):
         """
         :avocado: tags=arch:mips64
-        :avocado: tags=machine:malta
         :avocado: tags=endian:big
         :avocado: tags=device:pcnet32
         """
@@ -254,7 +240,6 @@ class LinuxSSH(Test):
     def test_mips_malta64el_kernel3_2_0(self):
         """
         :avocado: tags=arch:mips64el
-        :avocado: tags=machine:malta
         :avocado: tags=endian:little
         :avocado: tags=device:pcnet32
         """

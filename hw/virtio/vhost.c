@@ -184,15 +184,18 @@ static uint64_t vhost_get_log_size(struct vhost_dev *dev)
     return log_size;
 }
 
+//申请size个*(log->log)
 static struct vhost_log *vhost_log_alloc(uint64_t size, bool share)
 {
     Error *err = NULL;
     struct vhost_log *log;
+    /*申请size个vhost_log_chunk_t*/
     uint64_t logsize = size * sizeof(*(log->log));
     int fd = -1;
 
     log = g_new0(struct vhost_log, 1);
     if (share) {
+        /*共享方式，通过memfd方式申请内存*/
         log->log = qemu_memfd_alloc("vhost-log", logsize,
                                     F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL,
                                     &fd, &err);
@@ -218,13 +221,16 @@ static struct vhost_log *vhost_log_get(uint64_t size, bool share)
     struct vhost_log *log = share ? vhost_log_shm : vhost_log;
 
     if (!log || log->size != size) {
+        /*完成vhost_log申请*/
         log = vhost_log_alloc(size, share);
+        /*初始化相应静态变量*/
         if (share) {
             vhost_log_shm = log;
         } else {
             vhost_log = log;
         }
     } else {
+        //增加引用计数
         ++log->refcnt;
     }
 
@@ -268,7 +274,7 @@ static bool vhost_dev_log_is_shared(struct vhost_dev *dev)
            dev->vhost_ops->vhost_requires_shm_log(dev);
 }
 
-static inline void vhost_dev_log_resize(struct vhost_dev *dev, uint64_t size)
+static inline void vhost_dev_log_resize(struct vhost_dev *dev, uint64_t size/*vhost log数目*/)
 {
     struct vhost_log *log = vhost_log_get(size, vhost_dev_log_is_shared(dev));
     uint64_t log_base = (uintptr_t)log->log;
@@ -290,16 +296,24 @@ static int vhost_dev_has_iommu(struct vhost_dev *dev)
 {
     VirtIODevice *vdev = dev->vdev;
 
-    return virtio_host_has_feature(vdev, VIRTIO_F_IOMMU_PLATFORM);
+    /*
+     * For vhost, VIRTIO_F_IOMMU_PLATFORM means the backend support
+     * incremental memory mapping API via IOTLB API. For platform that
+     * does not have IOMMU, there's no need to enable this feature
+     * which may cause unnecessary IOTLB miss/update trnasactions.
+     */
+    return vdev->dma_as != &address_space_memory &&
+           virtio_host_has_feature(vdev, VIRTIO_F_IOMMU_PLATFORM);
 }
 
 static void *vhost_memory_map(struct vhost_dev *dev, hwaddr addr,
-                              hwaddr *plen, int is_write)
+                              hwaddr *plen, bool is_write)
 {
     if (!vhost_dev_has_iommu(dev)) {
     	//无iommu时
         return cpu_physical_memory_map(addr, plen, is_write);
     } else {
+        //设备有iommu时，直接返回物理地址
         return (void *)(uintptr_t)addr;
     }
 }
@@ -550,26 +564,28 @@ static void vhost_region_add_section(struct vhost_dev *dev,
     uintptr_t mrs_host = (uintptr_t)memory_region_get_ram_ptr(section->mr) +
                          section->offset_within_region;
     RAMBlock *mrs_rb = section->mr->ram_block;
-    size_t mrs_page = qemu_ram_pagesize(mrs_rb);
 
     trace_vhost_region_add_section(section->mr->name, mrs_gpa, mrs_size,
                                    mrs_host);
 
-    /* Round the section to it's page size */
-    /* First align the start down to a page boundary */
-    uint64_t alignage = mrs_host & (mrs_page - 1);
-    if (alignage) {
-        mrs_host -= alignage;
-        mrs_size += alignage;
-        mrs_gpa  -= alignage;
+    if (dev->vhost_ops->backend_type == VHOST_BACKEND_TYPE_USER) {
+        /* Round the section to it's page size */
+        /* First align the start down to a page boundary */
+        size_t mrs_page = qemu_ram_pagesize(mrs_rb);
+        uint64_t alignage = mrs_host & (mrs_page - 1);
+        if (alignage) {
+            mrs_host -= alignage;
+            mrs_size += alignage;
+            mrs_gpa  -= alignage;
+        }
+        /* Now align the size up to a page boundary */
+        alignage = mrs_size & (mrs_page - 1);
+        if (alignage) {
+            mrs_size += mrs_page - alignage;
+        }
+        trace_vhost_region_add_section_aligned(section->mr->name, mrs_gpa,
+                                               mrs_size, mrs_host);
     }
-    /* Now align the size up to a page boundary */
-    alignage = mrs_size & (mrs_page - 1);
-    if (alignage) {
-        mrs_size += mrs_page - alignage;
-    }
-    trace_vhost_region_add_section_aligned(section->mr->name, mrs_gpa, mrs_size,
-                                           mrs_host);
 
     if (dev->n_tmp_sections) {
         /* Since we already have at least one section, lets see if
@@ -593,9 +609,10 @@ static void vhost_region_add_section(struct vhost_dev *dev,
              * match up in the same RAMBlock if they do.
              */
             if (mrs_gpa < prev_gpa_start) {
-                error_report("%s:Section rounded to %"PRIx64
-                             " prior to previous %"PRIx64,
-                             __func__, mrs_gpa, prev_gpa_start);
+                error_report("%s:Section '%s' rounded to %"PRIx64
+                             " prior to previous '%s' %"PRIx64,
+                             __func__, section->mr->name, mrs_gpa,
+                             prev_sec->mr->name, prev_gpa_start);
                 /* A way to cleanly fail here would be better */
                 return;
             }
@@ -737,6 +754,7 @@ static void vhost_iommu_region_del(MemoryListener *listener,
     }
 }
 
+/*知会vhost后端vring的地址*/
 static int vhost_virtqueue_set_addr(struct vhost_dev *dev,
                                     struct vhost_virtqueue *vq,
                                     unsigned idx, bool enable_log)
@@ -749,6 +767,7 @@ static int vhost_virtqueue_set_addr(struct vhost_dev *dev,
         .log_guest_addr = vq->used_phys,
         .flags = enable_log ? (1 << VHOST_VRING_F_LOG) : 0,
     };
+    /*知会后端vring的地址*/
     int r = dev->vhost_ops->vhost_set_vring_addr(dev, &addr);
     if (r < 0) {
         VHOST_OPS_DEBUG("vhost_set_vring_addr failed");
@@ -764,6 +783,9 @@ static int vhost_dev_set_features(struct vhost_dev *dev,
     int r;
     if (enable_log) {
         features |= 0x1ULL << VHOST_F_LOG_ALL;
+    }
+    if (!vhost_dev_has_iommu(dev)) {
+        features &= ~(0x1ULL << VIRTIO_F_IOMMU_PLATFORM);
     }
     r = dev->vhost_ops->vhost_set_features(dev, features);
     if (r < 0) {
@@ -928,7 +950,7 @@ int vhost_device_iotlb_miss(struct vhost_dev *dev, uint64_t iova, int write)
     uint64_t uaddr, len;
     int ret = -EFAULT;
 
-    rcu_read_lock();
+    RCU_READ_LOCK_GUARD();
 
     trace_vhost_iotlb_miss(dev, 1);
 
@@ -960,8 +982,6 @@ int vhost_device_iotlb_miss(struct vhost_dev *dev, uint64_t iova, int write)
     trace_vhost_iotlb_miss(dev, 2);
 
 out:
-    rcu_read_unlock();
-
     return ret;
 }
 
@@ -1017,28 +1037,34 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
         }
     }
 
+    //描述符表大小 ，物理地址，虚拟地址
     vq->desc_size = s = l = virtio_queue_get_desc_size(vdev, idx);
     vq->desc_phys = a;
-    vq->desc = vhost_memory_map(dev, a, &l, 0);
+    vq->desc = vhost_memory_map(dev, a, &l, false);
     if (!vq->desc || l != s) {
         r = -ENOMEM;
         goto fail_alloc_desc;
     }
+
+    //avail表大小 ，物理地址，虚拟地址
     vq->avail_size = s = l = virtio_queue_get_avail_size(vdev, idx);
     vq->avail_phys = a = virtio_queue_get_avail_addr(vdev, idx);
-    vq->avail = vhost_memory_map(dev, a, &l, 0);
+    vq->avail = vhost_memory_map(dev, a, &l, false);
     if (!vq->avail || l != s) {
         r = -ENOMEM;
         goto fail_alloc_avail;
     }
+
+    //use表大小 ，物理地址，虚拟地址
     vq->used_size = s = l = virtio_queue_get_used_size(vdev, idx);
     vq->used_phys = a = virtio_queue_get_used_addr(vdev, idx);
-    vq->used = vhost_memory_map(dev, a, &l, 1);
+    vq->used = vhost_memory_map(dev, a, &l, true);
     if (!vq->used || l != s) {
         r = -ENOMEM;
         goto fail_alloc_used;
     }
 
+    //知会后端开始设置vring地址
     r = vhost_virtqueue_set_addr(dev, vq, vhost_vq_index, dev->log_enabled);
     if (r < 0) {
         r = -errno;
@@ -1067,6 +1093,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
     if (k->query_guest_notifiers &&
         k->query_guest_notifiers(qbus->parent) &&
         virtio_queue_vector(vdev, idx) == VIRTIO_NO_VECTOR) {
+        /*设置vring call为NULL*/
         file.fd = -1;
         r = dev->vhost_ops->vhost_set_vring_call(dev, &file);
         if (r) {
@@ -1180,6 +1207,7 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
     struct vhost_vring_file file = {
         .index = vhost_vq_index,
     };
+    //创建eventfd
     int r = event_notifier_init(&vq->masked_notifier, 0);
     if (r < 0) {
         return r;
@@ -1206,8 +1234,9 @@ static void vhost_virtqueue_cleanup(struct vhost_virtqueue *vq)
     event_notifier_cleanup(&vq->masked_notifier);
 }
 
+//vhost类型设备初始化
 int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
-                   VhostBackendType backend_type, uint32_t busyloop_timeout)
+                   VhostBackendType backend_type/*vhost后端类型*/, uint32_t busyloop_timeout)
 {
     uint64_t features;
     int i, r, n_initialized_vqs = 0;
@@ -1220,7 +1249,8 @@ int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
     r = vhost_set_backend_type(hdev, backend_type);
     assert(r >= 0);
 
-    //后端初始化（例如vhost-user.c提供的vhost_backend_init)
+    //后端初始化
+    //例如vhost-backend.c中提供的kernel_ops->vhost_backend_init
     r = hdev->vhost_ops->vhost_backend_init(hdev, opaque);
     if (r < 0) {
         goto fail;
@@ -1427,8 +1457,10 @@ void vhost_dev_disable_notifiers(struct vhost_dev *hdev, VirtIODevice *vdev)
  */
 bool vhost_virtqueue_pending(struct vhost_dev *hdev, int n)
 {
+    //取n号vq
     struct vhost_virtqueue *vq = hdev->vqs + n - hdev->vq_index;
     assert(n >= hdev->vq_index && n < hdev->vq_index + hdev->nvqs);
+    //等待接收vq队列通知
     return event_notifier_test_and_clear(&vq->masked_notifier);
 }
 
@@ -1517,7 +1549,7 @@ void vhost_dev_set_config_notifier(struct vhost_dev *hdev,
 
 void vhost_dev_free_inflight(struct vhost_inflight *inflight)
 {
-    if (inflight->addr) {
+    if (inflight && inflight->addr) {
         qemu_memfd_free(inflight->addr, inflight->size, inflight->fd);
         inflight->addr = NULL;
         inflight->fd = -1;
@@ -1717,6 +1749,7 @@ void vhost_dev_stop(struct vhost_dev *hdev, VirtIODevice *vdev)
     hdev->vdev = NULL;
 }
 
+/*设置vhost-net对应的后端socket*/
 int vhost_net_set_backend(struct vhost_dev *hdev,
                           struct vhost_vring_file *file)
 {

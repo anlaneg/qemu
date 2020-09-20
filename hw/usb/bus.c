@@ -328,6 +328,7 @@ static USBDevice *usb_try_create_simple(USBBus *bus, const char *name,
     Error *err = NULL;
     USBDevice *dev;
 
+    //创建一个usb设备
     dev = USB_DEVICE(qdev_try_create(&bus->qbus, name));
     if (!dev) {
         error_setg(errp, "Failed to create USB device '%s'", name);
@@ -768,7 +769,7 @@ static void usb_device_class_init(ObjectClass *klass, void *data)
     k->bus_type = TYPE_USB_BUS;
     k->realize  = usb_qdev_realize;
     k->unrealize = usb_qdev_unrealize;
-    k->props    = usb_props;
+    device_class_set_props(k, usb_props);
 }
 
 static const TypeInfo usb_device_type_info = {

@@ -43,7 +43,8 @@ typedef struct SpaprInterruptController SpaprInterruptController;
 typedef struct SpaprInterruptControllerClass {
     InterfaceClass parent;
 
-    int (*activate)(SpaprInterruptController *intc, Error **errp);
+    int (*activate)(SpaprInterruptController *intc, uint32_t nr_servers,
+                    Error **errp);
     void (*deactivate)(SpaprInterruptController *intc);
 
     /*
@@ -53,6 +54,7 @@ typedef struct SpaprInterruptControllerClass {
     int (*cpu_intc_create)(SpaprInterruptController *intc,
                             PowerPCCPU *cpu, Error **errp);
     void (*cpu_intc_reset)(SpaprInterruptController *intc, PowerPCCPU *cpu);
+    void (*cpu_intc_destroy)(SpaprInterruptController *intc, PowerPCCPU *cpu);
     int (*claim_irq)(SpaprInterruptController *intc, int irq, bool lsi,
                      Error **errp);
     void (*free_irq)(SpaprInterruptController *intc, int irq);
@@ -70,6 +72,7 @@ void spapr_irq_update_active_intc(SpaprMachineState *spapr);
 int spapr_irq_cpu_intc_create(SpaprMachineState *spapr,
                               PowerPCCPU *cpu, Error **errp);
 void spapr_irq_cpu_intc_reset(SpaprMachineState *spapr, PowerPCCPU *cpu);
+void spapr_irq_cpu_intc_destroy(SpaprMachineState *spapr, PowerPCCPU *cpu);
 void spapr_irq_print_info(SpaprMachineState *spapr, Monitor *mon);
 void spapr_irq_dt(SpaprMachineState *spapr, uint32_t nr_servers,
                   void *fdt, uint32_t phandle);
@@ -96,8 +99,13 @@ qemu_irq spapr_qirq(SpaprMachineState *spapr, int irq);
 int spapr_irq_post_load(SpaprMachineState *spapr, int version_id);
 void spapr_irq_reset(SpaprMachineState *spapr, Error **errp);
 int spapr_irq_get_phandle(SpaprMachineState *spapr, void *fdt, Error **errp);
-int spapr_irq_init_kvm(int (*fn)(SpaprInterruptController *, Error **),
+
+typedef int (*SpaprInterruptControllerInitKvm)(SpaprInterruptController *,
+                                               uint32_t, Error **);
+
+int spapr_irq_init_kvm(SpaprInterruptControllerInitKvm fn,
                        SpaprInterruptController *intc,
+                       uint32_t nr_servers,
                        Error **errp);
 
 /*

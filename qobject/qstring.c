@@ -63,6 +63,7 @@ QString *qstring_from_substr(const char *str, size_t start, size_t end)
  */
 QString *qstring_from_str(const char *str)
 {
+    //通过字符串创建Qstring对象
     return qstring_from_substr(str, 0, strlen(str));
 }
 
@@ -150,15 +151,32 @@ bool qstring_is_equal(const QObject *x, const QObject *y)
 }
 
 /**
+ * qstring_free(): Free the memory allocated by a QString object
+ *
+ * Return: if @return_str, return the underlying string, to be
+ * g_free(), otherwise NULL is returned.
+ */
+char *qstring_free(QString *qstring, bool return_str)
+{
+    char *rv = NULL;
+
+    if (return_str) {
+        rv = qstring->string;
+    } else {
+        g_free(qstring->string);
+    }
+
+    g_free(qstring);
+
+    return rv;
+}
+
+/**
  * qstring_destroy_obj(): Free all memory allocated by a QString
  * object
  */
 void qstring_destroy_obj(QObject *obj)
 {
-    QString *qs;
-
     assert(obj != NULL);
-    qs = qobject_to(QString, obj);
-    g_free(qs->string);
-    g_free(qs);
+    qstring_free(qobject_to(QString, obj), FALSE);
 }

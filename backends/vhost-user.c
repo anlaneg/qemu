@@ -27,6 +27,7 @@ ioeventfd_enabled(void)
     return kvm_enabled() && kvm_eventfds_enabled();
 }
 
+/*vhost user后端设备初始化*/
 int
 vhost_user_backend_dev_init(VhostUserBackend *b, VirtIODevice *vdev,
                             unsigned nvqs, Error **errp)
@@ -48,6 +49,7 @@ vhost_user_backend_dev_init(VhostUserBackend *b, VirtIODevice *vdev,
     b->dev.nvqs = nvqs;
     b->dev.vqs = g_new0(struct vhost_virtqueue, nvqs);
 
+    /*vhost user类型的vhost设备初始化*/
     ret = vhost_dev_init(&b->dev, &b->vhost_user, VHOST_BACKEND_TYPE_USER, 0);
     if (ret < 0) {
         error_setg_errno(errp, -ret, "vhost initialization failed");

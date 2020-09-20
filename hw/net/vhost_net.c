@@ -36,7 +36,7 @@
 struct vhost_net {
     struct vhost_dev dev;
     struct vhost_virtqueue vqs[2];
-    int backend;
+    int backend;/*后端对应的信息，例如tap口时tap对应的fd*/
     NetClientState *nc;
 };
 
@@ -49,6 +49,7 @@ static const int kernel_feature_bits[] = {
     VIRTIO_F_VERSION_1,
     VIRTIO_NET_F_MTU,
     VIRTIO_F_IOMMU_PLATFORM,
+    VIRTIO_F_RING_PACKED,
     VHOST_INVALID_FEATURE_BIT
 };
 
@@ -74,6 +75,7 @@ static const int user_feature_bits[] = {
     VIRTIO_NET_F_MRG_RXBUF,
     VIRTIO_NET_F_MTU,
     VIRTIO_F_IOMMU_PLATFORM,
+    VIRTIO_F_RING_PACKED,
 
     /* This bit implies RARP isn't sent by QEMU out of band */
     VIRTIO_NET_F_GUEST_ANNOUNCE,
@@ -136,7 +138,7 @@ static int vhost_net_get_fd(NetClientState *backend)
     }
 }
 
-//vhost_net初始化
+//vhost_net设备初始化
 struct vhost_net *vhost_net_init(VhostNetOptions *options)
 {
     int r;
@@ -146,26 +148,31 @@ struct vhost_net *vhost_net_init(VhostNetOptions *options)
     uint64_t features = 0;
 
     if (!options->net_backend) {
+        /*vhost后端目前有两种，一种是vhost-user,一种是kernel实现的vhost-net*/
         fprintf(stderr, "vhost-net requires net backend to be setup\n");
         goto fail;
     }
     net->nc = options->net_backend;
 
-    net->dev.max_queues = 1;//最大队列数为1
-    net->dev.nvqs = 2;//默认初始化2个队列（读＋写）
+    //最大队列数为1
+    net->dev.max_queues = 1;
+    //默认初始化2个队列（读＋写）
+    net->dev.nvqs = 2;
     net->dev.vqs = net->vqs;
 
     if (backend_kernel) {
-    		//kernel vhost处理
+    	//kernel vhost处理
         r = vhost_net_get_fd(options->net_backend);
         if (r < 0) {
             goto fail;
         }
         net->dev.backend_features = qemu_has_vnet_hdr(options->net_backend)
             ? 0 : (1ULL << VHOST_NET_F_VIRTIO_NET_HDR);
+        /*设置后端tap/tun等口对应的fd*/
         net->backend = r;
         net->dev.protocol_features = 0;
     } else {
+        /*vhost-user时，初始化*/
         net->dev.backend_features = 0;
         net->dev.protocol_features = 0;
         net->backend = -1;
@@ -404,6 +411,7 @@ int vhost_net_notify_migration_done(struct vhost_net *net, char* mac_addr)
     return vhost_ops->vhost_migration_done(&net->dev, mac_addr);
 }
 
+//阻塞等待idx号队列通知
 bool vhost_net_virtqueue_pending(VHostNetState *net, int idx)
 {
     return vhost_virtqueue_pending(&net->dev, idx);

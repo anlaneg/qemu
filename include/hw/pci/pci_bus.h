@@ -38,6 +38,7 @@ struct PCIBus {
     pci_map_irq_fn map_irq;
     pci_route_irq_fn route_intx_to_irq;
     void *irq_opaque;
+    //对应32个device及每个device有8个function
     PCIDevice *devices[PCI_SLOT_MAX * PCI_FUNC_MAX];
     PCIDevice *parent_dev;
     MemoryRegion *address_space_mem;

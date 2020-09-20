@@ -45,7 +45,7 @@ Object *container_get(Object *root, const char *path)
     	//按路径名称查找子OBJ
         child = object_resolve_path_component(obj, parts[i]);
         if (!child) {
-        	//添加新的child('container')，并添加parts[i]属性
+        	//parts[i]不存在，添加新的child('container')，并添加parts[i]属性
         	child = object_new("container");
             object_property_add_child(obj, parts[i], child, NULL);
             object_unref(child);

@@ -28,13 +28,7 @@
 #include "hw/boards.h"
 #include "sysemu/arch_init.h"
 #include "sysemu/sysemu.h"
-#include "sysemu/kvm.h"
-#include "sysemu/qtest.h"
-#include "hw/xen/xen.h"
 #include "qom/object.h"
-#include "qemu/error-report.h"
-#include "qemu/option.h"
-#include "qapi/error.h"
 
 static const TypeInfo accel_type = {
     .name = TYPE_ACCEL,
@@ -44,7 +38,7 @@ static const TypeInfo accel_type = {
 };
 
 /* Lookup AccelClass from opt_name. Returns NULL if not found */
-static AccelClass *accel_find(const char *opt_name)
+AccelClass *accel_find(const char *opt_name)
 {
 	//取accelClass名称，并实例化其对象
     char *class_name = g_strdup_printf(ACCEL_CLASS_NAME("%s"), opt_name);
@@ -53,15 +47,13 @@ static AccelClass *accel_find(const char *opt_name)
     return ac;
 }
 
-static int accel_init_machine(AccelClass *acc, MachineState *ms)
+int accel_init_machine(AccelState *accel, MachineState *ms)
 {
-    ObjectClass *oc = OBJECT_CLASS(acc);
-    const char *cname = object_class_get_name(oc);
-    AccelState *accel = ACCEL(object_new(cname));
+    AccelClass *acc = ACCEL_GET_CLASS(accel);
     int ret;
     ms->accelerator = accel;
     *(acc->allowed) = true;
-    //初始化instance
+    //创建并初始化 vm instance
     ret = acc->init_machine(ms);
     if (ret < 0) {
         ms->accelerator = NULL;
@@ -73,68 +65,9 @@ static int accel_init_machine(AccelClass *acc, MachineState *ms)
     return ret;
 }
 
-void configure_accelerator(MachineState *ms, const char *progname)
+AccelState *current_accel(void)
 {
-    const char *accel;
-    char **accel_list, **tmp;
-    int ret;
-    bool accel_initialised = false;
-    bool init_failed = false;
-    AccelClass *acc = NULL;
-
-    //取machine中的accel，例如kvm
-    accel = qemu_opt_get(qemu_get_machine_opts(), "accel");
-    if (accel == NULL) {
-        /* Select the default accelerator */
-    		//如果未配置accel,则检查程序结尾，如果以kvm结尾，则使用kvm及tcg
-        int pnlen = strlen(progname);
-        if (pnlen >= 3 && g_str_equal(&progname[pnlen - 3], "kvm")) {
-            /* If the program name ends with "kvm", we prefer KVM */
-            accel = "kvm:tcg";
-        } else {
-        	//按不同配置，优先使用kvm
-#if defined(CONFIG_TCG)
-            accel = "tcg";
-#elif defined(CONFIG_KVM)
-            accel = "kvm";
-#else
-            error_report("No accelerator selected and"
-                         " no default accelerator available");
-            exit(1);
-#endif
-        }
-    }
-
-    //将accel按':'号分割，并遍历accel_list（取首个可成功初始化machie的accel)
-    accel_list = g_strsplit(accel, ":", 0);
-
-    for (tmp = accel_list; !accel_initialised/*如果machine已初始化成功，则跳出*/ && tmp && *tmp; tmp++) {
-        acc = accel_find(*tmp);//针对一种accel，用其初始化machie
-        if (!acc) {
-        		//如果不存在，则尝试下一个
-            continue;
-        }
-        ret = accel_init_machine(acc, ms);
-        if (ret < 0) {
-            init_failed = true;
-            error_report("failed to initialize %s: %s",
-                         acc->name, strerror(-ret));
-        } else {
-            accel_initialised = true;/*machine初始化成功*/
-        }
-    }
-    g_strfreev(accel_list);
-
-    if (!accel_initialised) {
-        if (!init_failed) {
-            error_report("-machine accel=%s: No accelerator found", accel);
-        }
-        exit(1);
-    }
-
-    if (init_failed) {
-        error_report("Back to %s accelerator", acc->name);
-    }
+    return current_machine->accelerator;
 }
 
 void accel_setup_post(MachineState *ms)

@@ -65,6 +65,8 @@
 #include "qemu/range.h"
 #include "exec/address-spaces.h"
 
+bool has_igd_gfx_passthru;
+
 #define XEN_PT_NR_IRQS (256)
 static uint8_t xen_pt_mapped_machine_irq[XEN_PT_NR_IRQS] = {0};
 
@@ -856,8 +858,8 @@ static void xen_pt_realize(PCIDevice *d, Error **errp)
 
     rc = xc_physdev_map_pirq(xen_xc, xen_domid, machine_irq, &pirq);
     if (rc < 0) {
-        error_setg_errno(errp, errno, "Mapping machine irq %u to"
-                         " pirq %i failed", machine_irq, pirq);
+        XEN_PT_ERR(d, "Mapping machine irq %u to pirq %i failed, (err: %d)\n",
+                   machine_irq, pirq, errno);
 
         /* Disable PCI intx assertion (turn on bit10 of devctl) */
         cmd |= PCI_COMMAND_INTX_DISABLE;
@@ -878,8 +880,8 @@ static void xen_pt_realize(PCIDevice *d, Error **errp)
                                        PCI_SLOT(d->devfn),
                                        e_intx);
         if (rc < 0) {
-            error_setg_errno(errp, errno, "Binding of interrupt %u failed",
-                             e_intx);
+            XEN_PT_ERR(d, "Binding of interrupt %i failed! (err: %d)\n",
+                       e_intx, errno);
 
             /* Disable PCI intx assertion (turn on bit10 of devctl) */
             cmd |= PCI_COMMAND_INTX_DISABLE;
@@ -887,8 +889,8 @@ static void xen_pt_realize(PCIDevice *d, Error **errp)
 
             if (xen_pt_mapped_machine_irq[machine_irq] == 0) {
                 if (xc_physdev_unmap_pirq(xen_xc, xen_domid, machine_irq)) {
-                    error_setg_errno(errp, errno, "Unmapping of machine"
-                            " interrupt %u failed", machine_irq);
+                    XEN_PT_ERR(d, "Unmapping of machine interrupt %i failed!"
+                               " (err: %d)\n", machine_irq, errno);
                 }
             }
             s->machine_irq = 0;
@@ -962,7 +964,7 @@ static void xen_pci_passthrough_class_init(ObjectClass *klass, void *data)
     k->config_write = xen_pt_pci_write_config;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     dc->desc = "Assign an host PCI device with Xen";
-    dc->props = xen_pci_passthrough_properties;
+    device_class_set_props(dc, xen_pci_passthrough_properties);
 };
 
 static void xen_pci_passthrough_finalize(Object *obj)

@@ -61,6 +61,7 @@ struct AddrRange {
     Int128 size;
 };
 
+//构造地址范围
 static AddrRange addrrange_make(Int128 start, Int128 size)
 {
     return (AddrRange) { start, size };
@@ -71,6 +72,7 @@ static bool addrrange_equal(AddrRange r1, AddrRange r2)
     return int128_eq(r1.start, r2.start) && int128_eq(r1.size, r2.size);
 }
 
+//取地址范围的结尾地址r.start+r.size
 static Int128 addrrange_end(AddrRange r)
 {
     return int128_add(r.start, r.size);
@@ -82,18 +84,21 @@ static AddrRange addrrange_shift(AddrRange range, Int128 delta)
     return range;
 }
 
+//检查addr是否在range范围以内
 static bool addrrange_contains(AddrRange range, Int128 addr)
 {
     return int128_ge(addr, range.start)
         && int128_lt(addr, addrrange_end(range));
 }
 
+//检查范围r1,r2是否相交
 static bool addrrange_intersects(AddrRange r1, AddrRange r2)
 {
     return addrrange_contains(r1, r2.start)
         || addrrange_contains(r2, r1.start);
 }
 
+//当r1,r2相交时，返回两者相交的部分（也是range)
 static AddrRange addrrange_intersection(AddrRange r1, AddrRange r2)
 {
     Int128 start = int128_max(r1.start, r2.start);
@@ -133,7 +138,8 @@ enum ListenerDirection { Forward, Reverse };
                                                                         \
         switch (_direction) {                                           \
         case Forward:                                                   \
-            QTAILQ_FOREACH(_listener, &(_as)->listeners, link_as) {     \
+            /*遍历_as->listeners队列，针对每个元素调用_callback回调*/\
+            QTAILQ_FOREACH(_listener, &(_as)->listeners/*队列*/, link_as) {     \
                 if (_listener->_callback) {                             \
                     _listener->_callback(_listener, _section, ##_args); \
                 }                                                       \
@@ -248,6 +254,7 @@ static bool flatrange_equal(FlatRange *a, FlatRange *b)
 
 static FlatView *flatview_new(MemoryRegion *mr_root)
 {
+    //新建flatview
     FlatView *view;
 
     view = g_new0(FlatView, 1);
@@ -264,13 +271,17 @@ static FlatView *flatview_new(MemoryRegion *mr_root)
  */
 static void flatview_insert(FlatView *view, unsigned pos, FlatRange *range)
 {
+    //ranges已用满，需要扩充，扩大为原来的两倍
     if (view->nr == view->nr_allocated) {
         view->nr_allocated = MAX(2 * view->nr, 10);
         view->ranges = g_realloc(view->ranges,
                                     view->nr_allocated * sizeof(*view->ranges));
     }
+
+    //range需要放在pos位置，故post位置向后所有其它range均需要移动一格，空出pos位置
     memmove(view->ranges + pos + 1, view->ranges + pos,
             (view->nr - pos) * sizeof(FlatRange));
+    //当range放在pos位置
     view->ranges[pos] = *range;
     memory_region_ref(range->mr);
     ++view->nr;
@@ -342,6 +353,7 @@ static void flatview_simplify(FlatView *view)
     }
 }
 
+//查看内存区域是否为大端顺序
 static bool memory_region_big_endian(MemoryRegion *mr)
 {
 #ifdef TARGET_WORDS_BIGENDIAN
@@ -351,7 +363,8 @@ static bool memory_region_big_endian(MemoryRegion *mr)
 #endif
 }
 
-static void adjust_endianness(MemoryRegion *mr, uint64_t *data, MemOp op)
+//实现字节序统一
+static void adjust_endianness(MemoryRegion *mr, uint64_t *data/*入参，出参*/, MemOp op)
 {
     if ((op & MO_BSWAP) != devend_memop(mr->ops->endianness)) {
         switch (op & MO_SIZE) {
@@ -373,11 +386,12 @@ static void adjust_endianness(MemoryRegion *mr, uint64_t *data, MemOp op)
 }
 
 static inline void memory_region_shift_read_access(uint64_t *value,
-                                                   signed shift,
+                                                   signed shift/*左移的位数（>0),右移的位数(<0)*/,
                                                    uint64_t mask,
                                                    uint64_t tmp)
 {
     if (shift >= 0) {
+        //加上掩码，左移后给value
         *value |= (tmp & mask) << shift;
     } else {
         *value |= (tmp & mask) >> -shift;
@@ -421,20 +435,22 @@ static int get_cpu_index(void)
     return -1;
 }
 
+//对指定内存区域执行hw地址addr读访问
 static MemTxResult  memory_region_read_accessor(MemoryRegion *mr,
-                                                hwaddr addr,
-                                                uint64_t *value,
-                                                unsigned size,
-                                                signed shift,
-                                                uint64_t mask,
+                                                hwaddr addr/*要访问的地址*/,
+                                                uint64_t *value/*出参，读取到的值*/,
+                                                unsigned size/*要访问的字节数*/,
+                                                signed shift/*左移，右移位数*/,
+                                                uint64_t mask/*掩码情况*/,
                                                 MemTxAttrs attrs)
 {
     uint64_t tmp;
 
+    /*通过read回调，完成addr地址读取*/
     tmp = mr->ops->read(mr->opaque, addr, size);
     if (mr->subpage) {
         trace_memory_region_subpage_read(get_cpu_index(), mr, addr, tmp, size);
-    } else if (TRACE_MEMORY_REGION_OPS_READ_ENABLED) {
+    } else if (trace_event_get_state_backends(TRACE_MEMORY_REGION_OPS_READ)) {
         hwaddr abs_addr = memory_region_to_absolute_addr(mr, addr);
         trace_memory_region_ops_read(get_cpu_index(), mr, abs_addr, tmp, size);
     }
@@ -456,7 +472,7 @@ static MemTxResult memory_region_read_with_attrs_accessor(MemoryRegion *mr,
     r = mr->ops->read_with_attrs(mr->opaque, addr, &tmp, size, attrs);
     if (mr->subpage) {
         trace_memory_region_subpage_read(get_cpu_index(), mr, addr, tmp, size);
-    } else if (TRACE_MEMORY_REGION_OPS_READ_ENABLED) {
+    } else if (trace_event_get_state_backends(TRACE_MEMORY_REGION_OPS_READ)) {
         hwaddr abs_addr = memory_region_to_absolute_addr(mr, addr);
         trace_memory_region_ops_read(get_cpu_index(), mr, abs_addr, tmp, size);
     }
@@ -476,7 +492,7 @@ static MemTxResult memory_region_write_accessor(MemoryRegion *mr,
 
     if (mr->subpage) {
         trace_memory_region_subpage_write(get_cpu_index(), mr, addr, tmp, size);
-    } else if (TRACE_MEMORY_REGION_OPS_WRITE_ENABLED) {
+    } else if (trace_event_get_state_backends(TRACE_MEMORY_REGION_OPS_WRITE)) {
         hwaddr abs_addr = memory_region_to_absolute_addr(mr, addr);
         trace_memory_region_ops_write(get_cpu_index(), mr, abs_addr, tmp, size);
     }
@@ -496,18 +512,19 @@ static MemTxResult memory_region_write_with_attrs_accessor(MemoryRegion *mr,
 
     if (mr->subpage) {
         trace_memory_region_subpage_write(get_cpu_index(), mr, addr, tmp, size);
-    } else if (TRACE_MEMORY_REGION_OPS_WRITE_ENABLED) {
+    } else if (trace_event_get_state_backends(TRACE_MEMORY_REGION_OPS_WRITE)) {
         hwaddr abs_addr = memory_region_to_absolute_addr(mr, addr);
         trace_memory_region_ops_write(get_cpu_index(), mr, abs_addr, tmp, size);
     }
     return mr->ops->write_with_attrs(mr->opaque, addr, tmp, size, attrs);
 }
 
-static MemTxResult access_with_adjusted_size(hwaddr addr,
-                                      uint64_t *value,
-                                      unsigned size,
-                                      unsigned access_size_min,
-                                      unsigned access_size_max,
+/*读取mr中指定addr地址，并value返回读取到的值*/
+static MemTxResult access_with_adjusted_size(hwaddr addr/*要读取的物理地址*/,
+                                      uint64_t *value/*出参，读取到的值*/,
+                                      unsigned size/*要读取的长度*/,
+                                      unsigned access_size_min/*每次访问的小size*/,
+                                      unsigned access_size_max/*每次访问的最大size*/,
                                       MemTxResult (*access_fn)
                                                   (MemoryRegion *mr,
                                                    hwaddr addr,
@@ -516,7 +533,7 @@ static MemTxResult access_with_adjusted_size(hwaddr addr,
                                                    signed shift,
                                                    uint64_t mask,
                                                    MemTxAttrs attrs),
-                                      MemoryRegion *mr,
+                                      MemoryRegion *mr/*地址所属的memory region*/,
                                       MemTxAttrs attrs)
 {
     uint64_t access_mask;
@@ -532,12 +549,14 @@ static MemTxResult access_with_adjusted_size(hwaddr addr,
     }
 
     /* FIXME: support unaligned access? */
+    /*确定一定访问的大小*/
     access_size = MAX(MIN(size, access_size_max), access_size_min);
     access_mask = MAKE_64BIT_MASK(0, access_size * 8);
     if (memory_region_big_endian(mr)) {
+        //通过access_fn获取区间[addr，addr+size]范围内内存中记录的数据
         for (i = 0; i < size; i += access_size) {
             r |= access_fn(mr, addr + i, value, access_size,
-                        (size - access_size - i) * 8, access_mask, attrs);
+                        (size - access_size - i) * 8/*大端，低地址存低位*/, access_mask, attrs);
         }
     } else {
         for (i = 0; i < size; i += access_size) {
@@ -568,7 +587,7 @@ static AddressSpace *memory_region_to_address_space(MemoryRegion *mr)
  */
 static void render_memory_region(FlatView *view,
                                  MemoryRegion *mr,
-                                 Int128 base,
+                                 Int128 base/*基准地址*/,
                                  AddrRange clip,
                                  bool readonly,
                                  bool nonvolatile)
@@ -581,20 +600,24 @@ static void render_memory_region(FlatView *view,
     FlatRange fr;
     AddrRange tmp;
 
+    //mr必须已开启
     if (!mr->enabled) {
         return;
     }
 
+    //取得mr->addr对应的地址
     int128_addto(&base, int128_make64(mr->addr));
     readonly |= mr->readonly;
     nonvolatile |= mr->nonvolatile;
 
     tmp = addrrange_make(base, mr->size);
 
+    //如果tmp与clip不相交，则直接返回
     if (!addrrange_intersects(tmp, clip)) {
         return;
     }
 
+    //取两者相交部分
     clip = addrrange_intersection(tmp, clip);
 
     if (mr->alias) {
@@ -721,6 +744,7 @@ static FlatView *generate_memory_topology(MemoryRegion *mr)
         flatview_add_to_dispatch(view, &mrs);
     }
     address_space_dispatch_compact(view->dispatch);
+    //更新mr对应的view
     g_hash_table_replace(flat_views, mr, view);
 
     return view;
@@ -794,9 +818,18 @@ static void address_space_update_ioeventfds(AddressSpace *as)
     FlatView *view;
     FlatRange *fr;
     unsigned ioeventfd_nb = 0;
-    MemoryRegionIoeventfd *ioeventfds = NULL;
+    unsigned ioeventfd_max;
+    MemoryRegionIoeventfd *ioeventfds;
     AddrRange tmp;
     unsigned i;
+
+    /*
+     * It is likely that the number of ioeventfds hasn't changed much, so use
+     * the previous size as the starting value, with some headroom to avoid
+     * gratuitous reallocations.
+     */
+    ioeventfd_max = QEMU_ALIGN_UP(as->ioeventfd_nb, 4);
+    ioeventfds = g_new(MemoryRegionIoeventfd, ioeventfd_max);
 
     view = address_space_get_flatview(as);
     FOR_EACH_FLAT_RANGE(fr, view) {
@@ -806,8 +839,11 @@ static void address_space_update_ioeventfds(AddressSpace *as)
                                              int128_make64(fr->offset_in_region)));
             if (addrrange_intersects(fr->addr, tmp)) {
                 ++ioeventfd_nb;
-                ioeventfds = g_realloc(ioeventfds,
-                                          ioeventfd_nb * sizeof(*ioeventfds));
+                if (ioeventfd_nb > ioeventfd_max) {
+                    ioeventfd_max = MAX(ioeventfd_max * 2, 4);
+                    ioeventfds = g_realloc(ioeventfds,
+                            ioeventfd_max * sizeof(*ioeventfds));
+                }
                 ioeventfds[ioeventfd_nb-1] = fr->mr->ioeventfds[i];
                 ioeventfds[ioeventfd_nb-1].addr = tmp;
             }
@@ -949,16 +985,20 @@ static void flatviews_init(void)
     static FlatView *empty_view;
 
     if (flat_views) {
+        //如果flat_view已初始化，则直接返回
         return;
     }
 
+    //初始化flag_views
     flat_views = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL,
                                        (GDestroyNotify) flatview_unref);
     if (!empty_view) {
+        //如果empty_view未初始化，则初始化
         empty_view = generate_memory_topology(NULL);
         /* We keep it alive forever in the global variable.  */
         flatview_ref(empty_view);
     } else {
+        //替换key=null的value为empty_view
         g_hash_table_replace(flat_views, NULL, empty_view);
         flatview_ref(empty_view);
     }
@@ -969,6 +1009,7 @@ static void flatviews_reset(void)
     AddressSpace *as;
 
     if (flat_views) {
+        //减引用
         g_hash_table_unref(flat_views);
         flat_views = NULL;
     }
@@ -990,6 +1031,7 @@ static void address_space_set_flatview(AddressSpace *as)
 {
     FlatView *old_view = address_space_to_flatview(as);
     MemoryRegion *physmr = memory_region_get_flatview_root(as->root);
+    /*在flat_views中用physmr做key查找view,*/
     FlatView *new_view = g_hash_table_lookup(flat_views, physmr);
 
     assert(new_view);
@@ -1042,6 +1084,7 @@ static void address_space_update_topology(AddressSpace *as)
     address_space_set_flatview(as);
 }
 
+//开启mr事务
 void memory_region_transaction_begin(void)
 {
     qemu_flush_coalesced_mmio_buffer();
@@ -1056,8 +1099,11 @@ void memory_region_transaction_commit(void)
     assert(qemu_mutex_iothread_locked());
 
     --memory_region_transaction_depth;
+    //只有memory_region_transaction_depth为0时才进行commit
+    //故只有最外层begin对应的commit被调用时才进入
     if (!memory_region_transaction_depth) {
         if (memory_region_update_pending) {
+            //mr有变更
             flatviews_reset();
 
             MEMORY_LISTENER_CALL_GLOBAL(begin, Forward);
@@ -1087,11 +1133,13 @@ static void memory_region_destructor_ram(MemoryRegion *mr)
     qemu_ram_free(mr->ram_block);
 }
 
+//检查c是否转义字符
 static bool memory_region_need_escape(char c)
 {
     return c == '/' || c == '[' || c == '\\' || c == ']';
 }
 
+//对name中的转义字符，进行编码
 static char *memory_region_escape_name(const char *name)
 {
     const char *p;
@@ -1099,13 +1147,17 @@ static char *memory_region_escape_name(const char *name)
     uint8_t c;
     size_t bytes = 0;
 
+    //一个escap字符按4字节算
     for (p = name; *p; p++) {
         bytes += memory_region_need_escape(*p) ? 4 : 1;
     }
+
+    //如果没有escap字符，则copy一份name后直接返回
     if (bytes == p - name) {
        return g_memdup(name, bytes + 1);
     }
 
+    //遇到转义字符，将其转换为16进制‘\xaa’格式
     escaped = g_malloc(bytes + 1);
     for (p = name, q = escaped; *p; p++) {
         c = *p;
@@ -1128,20 +1180,25 @@ static void memory_region_do_init(MemoryRegion *mr,
 {
     mr->size = int128_make64(size);
     if (size == UINT64_MAX) {
+        //更正int128
         mr->size = int128_2_64();
     }
+    /*设置memory region名称*/
     mr->name = g_strdup(name);
     mr->owner = owner;
     mr->ram_block = NULL;
 
     if (name) {
+        //获得转义后名称
         char *escaped_name = memory_region_escape_name(name);
+        //设置数组名称
         char *name_array = g_strdup_printf("%s[*]", escaped_name);
 
         if (!owner) {
             owner = container_get(qdev_get_machine(), "/unattached");
         }
 
+        //添加child属性
         object_property_add_child(owner, name_array, OBJECT(mr), &error_abort);
         object_unref(OBJECT(mr));
         g_free(name_array);
@@ -1154,17 +1211,9 @@ void memory_region_init(MemoryRegion *mr,
                         const char *name,
                         uint64_t size)
 {
+    //初始化object MemoryRegion
     object_initialize(mr, sizeof(*mr), TYPE_MEMORY_REGION);
     memory_region_do_init(mr, owner, name, size);
-}
-
-static void memory_region_get_addr(Object *obj, Visitor *v, const char *name,
-                                   void *opaque, Error **errp)
-{
-    MemoryRegion *mr = MEMORY_REGION(obj);
-    uint64_t value = mr->addr;
-
-    visit_type_uint64(v, name, &value, errp);
 }
 
 static void memory_region_get_container(Object *obj, Visitor *v,
@@ -1230,10 +1279,8 @@ static void memory_region_initfn(Object *obj)
                              NULL, NULL, &error_abort);
     op->resolve = memory_region_resolve_container;
 
-    object_property_add(OBJECT(mr), "addr", "uint64",
-                        memory_region_get_addr,
-                        NULL, /* memory_region_set_addr */
-                        NULL, NULL, &error_abort);
+    object_property_add_uint64_ptr(OBJECT(mr), "addr",
+                                   &mr->addr, OBJ_PROP_FLAG_READ, &error_abort);
     object_property_add(OBJECT(mr), "priority", "uint32",
                         memory_region_get_priority,
                         NULL, /* memory_region_set_priority */
@@ -1257,10 +1304,6 @@ static uint64_t unassigned_mem_read(void *opaque, hwaddr addr,
 #ifdef DEBUG_UNASSIGNED
     printf("Unassigned mem read " TARGET_FMT_plx "\n", addr);
 #endif
-    if (current_cpu != NULL) {
-        bool is_exec = current_cpu->mem_io_access_type == MMU_INST_FETCH;
-        cpu_unassigned_access(current_cpu, addr, false, is_exec, 0, size);
-    }
     return 0;
 }
 
@@ -1270,11 +1313,9 @@ static void unassigned_mem_write(void *opaque, hwaddr addr,
 #ifdef DEBUG_UNASSIGNED
     printf("Unassigned mem write " TARGET_FMT_plx " = 0x%"PRIx64"\n", addr, val);
 #endif
-    if (current_cpu != NULL) {
-        cpu_unassigned_access(current_cpu, addr, true, false, 0, size);
-    }
 }
 
+//返回失败，表示不容许访问
 static bool unassigned_mem_accepts(void *opaque, hwaddr addr,
                                    unsigned size, bool is_write,
                                    MemTxAttrs attrs)
@@ -1282,6 +1323,7 @@ static bool unassigned_mem_accepts(void *opaque, hwaddr addr,
     return false;
 }
 
+//默认mr操作集（如果用户未给定ops,则使用此ops)
 const MemoryRegionOps unassigned_mem_ops = {
     .valid.accepts = unassigned_mem_accepts,
     .endianness = DEVICE_NATIVE_ENDIAN,
@@ -1354,21 +1396,24 @@ static const MemoryRegionOps ram_device_mem_ops = {
 
 bool memory_region_access_valid(MemoryRegion *mr,
                                 hwaddr addr,
-                                unsigned size,
-                                bool is_write,
+                                unsigned size/*要访问的长度*/,
+                                bool is_write/*是否写操作*/,
                                 MemTxAttrs attrs)
 {
     int access_size_min, access_size_max;
     int access_size, i;
 
+    //要求对齐访问，但访问时未对齐
     if (!mr->ops->valid.unaligned && (addr & (size - 1))) {
         return false;
     }
 
+    //无accepts回调，放通
     if (!mr->ops->valid.accepts) {
         return true;
     }
 
+    //执行accepts检查
     access_size_min = mr->ops->valid.min_access_size;
     if (!mr->ops->valid.min_access_size) {
         access_size_min = 1;
@@ -1391,9 +1436,9 @@ bool memory_region_access_valid(MemoryRegion *mr,
 }
 
 static MemTxResult memory_region_dispatch_read1(MemoryRegion *mr,
-                                                hwaddr addr,
-                                                uint64_t *pval,
-                                                unsigned size,
+                                                hwaddr addr/*要读取的位置*/,
+                                                uint64_t *pval/*出参，读取到的内容*/,
+                                                unsigned size/*读取的字节数*/,
                                                 MemTxAttrs attrs)
 {
     *pval = 0;
@@ -1402,31 +1447,33 @@ static MemTxResult memory_region_dispatch_read1(MemoryRegion *mr,
         return access_with_adjusted_size(addr, pval, size,
                                          mr->ops->impl.min_access_size,
                                          mr->ops->impl.max_access_size,
-                                         memory_region_read_accessor,
+                                         memory_region_read_accessor,//通过read读取
                                          mr, attrs);
     } else {
         return access_with_adjusted_size(addr, pval, size,
                                          mr->ops->impl.min_access_size,
                                          mr->ops->impl.max_access_size,
-                                         memory_region_read_with_attrs_accessor,
+                                         memory_region_read_with_attrs_accessor,//含属性read
                                          mr, attrs);
     }
 }
 
 MemTxResult memory_region_dispatch_read(MemoryRegion *mr,
-                                        hwaddr addr,
-                                        uint64_t *pval,
-                                        MemOp op,
+                                        hwaddr addr/*要访问的内存*/,
+                                        uint64_t *pval/*出参*/,
+                                        MemOp op/*要访问的大小*/,
                                         MemTxAttrs attrs)
 {
     unsigned size = memop_size(op);
     MemTxResult r;
 
+    //检查是否容许访问
     if (!memory_region_access_valid(mr, addr, size, false, attrs)) {
         *pval = unassigned_mem_read(mr, addr, size);
         return MEMTX_DECODE_ERROR;
     }
 
+    //完成内容读取
     r = memory_region_dispatch_read1(mr, addr, pval, size, attrs);
     adjust_endianness(mr, pval, op);
     return r;
@@ -1494,12 +1541,13 @@ MemTxResult memory_region_dispatch_write(MemoryRegion *mr,
     }
 }
 
+//申明一个mmio region,并初始化mr
 void memory_region_init_io(MemoryRegion *mr,
                            Object *owner,
-                           const MemoryRegionOps *ops,
+                           const MemoryRegionOps *ops/*操作集*/,
                            void *opaque,
                            const char *name,
-                           uint64_t size)
+                           uint64_t size/*内存大小*/)
 {
     memory_region_init(mr, owner, name, size);
     mr->ops = ops ? ops : &unassigned_mem_ops;
@@ -1525,7 +1573,7 @@ void memory_region_init_ram_shared_nomigrate(MemoryRegion *mr,
 {
     Error *err = NULL;
     memory_region_init(mr, owner, name, size);
-    mr->ram = true;
+    mr->ram = true;//标记此mr会进行ram申请
     mr->terminates = true;
     mr->destructor = memory_region_destructor_ram;
     mr->ram_block = qemu_ram_alloc(size, share, mr, &err);
@@ -1666,19 +1714,8 @@ void memory_region_init_rom_nomigrate(MemoryRegion *mr,
                                       uint64_t size,
                                       Error **errp)
 {
-    Error *err = NULL;
-    memory_region_init(mr, owner, name, size);
-    mr->ram = true;
+    memory_region_init_ram_shared_nomigrate(mr, owner, name, size, false, errp);
     mr->readonly = true;
-    mr->terminates = true;
-    mr->destructor = memory_region_destructor_ram;
-    mr->ram_block = qemu_ram_alloc(size, false, mr, &err);
-    mr->dirty_log_mask = tcg_enabled() ? (1 << DIRTY_MEMORY_CODE) : 0;
-    if (err) {
-        mr->size = int128_zero();
-        object_unparent(OBJECT(mr));
-        error_propagate(errp, err);
-    }
 }
 
 void memory_region_init_rom_device_nomigrate(MemoryRegion *mr,
@@ -2214,6 +2251,18 @@ void memory_region_ram_resize(MemoryRegion *mr, ram_addr_t newsize, Error **errp
     qemu_ram_resize(mr->ram_block, newsize, errp);
 }
 
+
+void memory_region_do_writeback(MemoryRegion *mr, hwaddr addr, hwaddr size)
+{
+    /*
+     * Might be extended case needed to cover
+     * different types of memory regions
+     */
+    if (mr->ram_block && mr->dirty_log_mask) {
+        qemu_ram_writeback(mr->ram_block, addr, size);
+    }
+}
+
 /*
  * Call proper memory listeners about the change on the newly
  * added/removed CoalescedMemoryRange.
@@ -2379,18 +2428,23 @@ static void memory_region_update_container_subregions(MemoryRegion *subregion)
     memory_region_transaction_begin();
 
     memory_region_ref(subregion);
+    //遍历从属于自身的sub mr
     QTAILQ_FOREACH(other, &mr->subregions, subregions_link) {
+        //使此链按优先级大小排序
         if (subregion->priority >= other->priority) {
             QTAILQ_INSERT_BEFORE(other, subregion, subregions_link);
             goto done;
         }
     }
+    //当前subregion优先级最小，将其加在结尾
     QTAILQ_INSERT_TAIL(&mr->subregions, subregion, subregions_link);
 done:
+    //mr待更新的条件取决于：1。mr是否被开启；2。此subregion是否被开启
     memory_region_update_pending |= mr->enabled && subregion->enabled;
     memory_region_transaction_commit();
 }
 
+//将subregion加入到mr中
 static void memory_region_add_subregion_common(MemoryRegion *mr,
                                                hwaddr offset,
                                                MemoryRegion *subregion)
@@ -2398,9 +2452,11 @@ static void memory_region_add_subregion_common(MemoryRegion *mr,
     assert(!subregion->container);
     subregion->container = mr;
     subregion->addr = offset;
+    //更新子mr
     memory_region_update_container_subregions(subregion);
 }
 
+//mr添加subregion
 void memory_region_add_subregion(MemoryRegion *mr,
                                  hwaddr offset,
                                  MemoryRegion *subregion)
@@ -2666,6 +2722,7 @@ static void listener_add_address_space(MemoryListener *listener,
     FlatView *view;
     FlatRange *fr;
 
+    //listener被加入as时，由begin开启事务
     if (listener->begin) {
         listener->begin(listener);
     }
@@ -2686,6 +2743,8 @@ static void listener_add_address_space(MemoryListener *listener,
             listener->log_start(listener, &section, 0, fr->dirty_log_mask);
         }
     }
+
+    //提交事务
     if (listener->commit) {
         listener->commit(listener);
     }
@@ -2718,6 +2777,7 @@ static void listener_del_address_space(MemoryListener *listener,
     flatview_unref(view);
 }
 
+//为as注册listener
 void memory_listener_register(MemoryListener *listener, AddressSpace *as)
 {
     MemoryListener *other = NULL;
@@ -2725,8 +2785,10 @@ void memory_listener_register(MemoryListener *listener, AddressSpace *as)
     listener->address_space = as;
     if (QTAILQ_EMPTY(&memory_listeners)
         || listener->priority >= QTAILQ_LAST(&memory_listeners)->priority) {
+        //memory_listeners为空或者要加入的listener优先级最大，则加入链尾
         QTAILQ_INSERT_TAIL(&memory_listeners, listener, link);
     } else {
+        //否则按优先级升序排列
         QTAILQ_FOREACH(other, &memory_listeners, link) {
             if (listener->priority < other->priority) {
                 break;
@@ -2737,8 +2799,10 @@ void memory_listener_register(MemoryListener *listener, AddressSpace *as)
 
     if (QTAILQ_EMPTY(&as->listeners)
         || listener->priority >= QTAILQ_LAST(&as->listeners)->priority) {
+        //as->listeners为空，或者要加入的优先级大于priority，则加入链表尾部
         QTAILQ_INSERT_TAIL(&as->listeners, listener, link_as);
     } else {
+        //否则按优先级升序排列
         QTAILQ_FOREACH(other, &as->listeners, link_as) {
             if (listener->priority < other->priority) {
                 break;
@@ -2813,6 +2877,9 @@ void address_space_destroy(AddressSpace *as)
 
 static const char *memory_region_type(MemoryRegion *mr)
 {
+    if (mr->alias) {
+        return memory_region_type(mr->alias);
+    }
     if (memory_region_is_ram_device(mr)) {
         return "ramd";
     } else if (memory_region_is_romd(mr)) {
@@ -2986,7 +3053,6 @@ struct FlatViewInfo {
     bool dispatch_tree;
     bool owner;
     AccelClass *ac;
-    const char *ac_name;
 };
 
 static void mtree_print_flatview(gpointer key, gpointer value,
@@ -3056,7 +3122,7 @@ static void mtree_print_flatview(gpointer key, gpointer value,
                 if (fvi->ac->has_memory(current_machine, as,
                                         int128_get64(range->addr.start),
                                         MR_SIZE(range->addr.size) + 1)) {
-                    qemu_printf(" %s", fvi->ac_name);
+                    qemu_printf(" %s", fvi->ac->name);
                 }
             }
         }
@@ -3100,12 +3166,10 @@ void mtree_info(bool flatview, bool dispatch_tree, bool owner)
         };
         GArray *fv_address_spaces;
         GHashTable *views = g_hash_table_new(g_direct_hash, g_direct_equal);
-        AccelClass *ac = ACCEL_GET_CLASS(current_machine->accelerator);
+        AccelClass *ac = ACCEL_GET_CLASS(current_accel());
 
         if (ac->has_memory) {
             fvi.ac = ac;
-            fvi.ac_name = current_machine->accel ? current_machine->accel :
-                object_class_get_name(OBJECT_CLASS(ac));
         }
 
         /* Gather all FVs in one table */
@@ -3246,8 +3310,10 @@ static const TypeInfo iommu_memory_region_info = {
 
 static void memory_register_types(void)
 {
+    //静态注册两个memory类型
     type_register_static(&memory_region_info);
     type_register_static(&iommu_memory_region_info);
 }
 
+//memory类型初始化
 type_init(memory_register_types)

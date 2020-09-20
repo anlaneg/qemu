@@ -108,18 +108,18 @@ typedef struct VirtioPCIClass {
 } VirtioPCIClass;
 
 typedef struct VirtIOPCIRegion {
-    MemoryRegion mr;
-    uint32_t offset;
-    uint32_t size;
+    MemoryRegion mr;//所属的mr
+    uint32_t offset;//pci内存区间起始地址
+    uint32_t size;//内存区域的大小
     uint32_t type;
 } VirtIOPCIRegion;
 
 typedef struct VirtIOPCIQueue {
-  uint16_t num;
-  bool enabled;
-  uint32_t desc[2];
-  uint32_t avail[2];
-  uint32_t used[2];
+  uint16_t num;/*队列长度*/
+  bool enabled;/*队列是否开启*/
+  uint32_t desc[2];/*描述符表起始地址*/
+  uint32_t avail[2];/*avail表起始地址*/
+  uint32_t used[2];/*used表起 始地址*/
 } VirtIOPCIQueue;
 
 struct VirtIOPCIProxy {
@@ -201,7 +201,7 @@ typedef struct VirtioPCIDeviceTypeInfo {
      * 2) generic_name has the "disable-legacy" and "disable-modern"
      *    properties, transitional_name and non_transitional name don't.
      */
-    const char *base_name;
+    const char *base_name;//base Type名称
     /*
      * Generic device type.  Optional.
      *
@@ -215,7 +215,7 @@ typedef struct VirtioPCIDeviceTypeInfo {
      *
      * The only type implemented by QEMU 3.1 and older.
      */
-    const char *generic_name;
+    const char *generic_name;//generic Type名称
     /*
      * The transitional device type.  Optional.
      *

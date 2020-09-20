@@ -200,8 +200,14 @@ typedef struct InterfaceInfo InterfaceInfo;
  *
  * Interfaces allow a limited form of multiple inheritance.  Instances are
  * similar to normal types except for the fact that are only defined by
- * their classes and never carry any state.  You can dynamically cast an object
- * to one of its #Interface types and vice versa.
+ * their classes and never carry any state.  As a consequence, a pointer to
+ * an interface instance should always be of incomplete type in order to be
+ * sure it cannot be dereferenced.  That is, you should define the
+ * 'typedef struct SomethingIf SomethingIf' so that you can pass around
+ * 'SomethingIf *si' arguments, but not define a 'struct SomethingIf { ... }'.
+ * The only things you can validly do with a 'SomethingIf *' are to pass it as
+ * an argument to a method on its corresponding SomethingIfClass, or to
+ * dynamically cast it to an object that implements the interface.
  *
  * # Methods #
  *
@@ -303,6 +309,8 @@ typedef struct InterfaceInfo InterfaceInfo;
  */
 
 
+typedef struct ObjectProperty ObjectProperty;
+
 /**
  * ObjectPropertyAccessor:
  * @obj: the object that owns the property
@@ -313,10 +321,10 @@ typedef struct InterfaceInfo InterfaceInfo;
  *
  * Called when trying to get/set a property.
  */
-typedef void (ObjectPropertyAccessor)(Object *obj,
-                                      Visitor *v,
-                                      const char *name,
-                                      void *opaque,
+typedef void (ObjectPropertyAccessor)(Object *obj/*待设置属性的obj*/,
+                                      Visitor *v/*包含属性值的解析器*/,
+                                      const char *name/*属性名称*/,
+                                      void *opaque/*属性*/,
                                       Error **errp);
 
 /**
@@ -350,17 +358,28 @@ typedef void (ObjectPropertyRelease)(Object *obj,
                                      const char *name,
                                      void *opaque);
 
-typedef struct ObjectProperty
+/**
+ * ObjectPropertyInit:
+ * @obj: the object that owns the property
+ * @prop: the property to set
+ *
+ * Called when a property is initialized.
+ */
+typedef void (ObjectPropertyInit)(Object *obj, ObjectProperty *prop);
+
+struct ObjectProperty
 {
     gchar *name;/*对象属性名称*/
     gchar *type;/*对象属性类型*/
-    gchar *description;
-    ObjectPropertyAccessor *get;
-    ObjectPropertyAccessor *set;
+    gchar *description;//属性描述信息
+    ObjectPropertyAccessor *get;//属性值get函数
+    ObjectPropertyAccessor *set;//属性值set函数
     ObjectPropertyResolve *resolve;
     /*属性值释放函数*/
     ObjectPropertyRelease *release;
-    void *opaque;
+    ObjectPropertyInit *init;
+    void *opaque;/*属性访问函数的参数*/
+    QObject *defval;
 } ObjectProperty;
 
 /**
@@ -387,11 +406,12 @@ typedef void (ObjectFree)(void *obj);
  *
  * The base for all classes.  The only thing that #ObjectClass contains is an
  * integer type handle.
+ * 所有class的基类，每个type都有一个关联的class
  */
 struct ObjectClass
 {
     /*< private >*/
-    Type type;//类的类型
+    Type type;//ObjectClass对应的TypeImpl
     GSList *interfaces;//按顺序存入各接口的type class
 
     const char *object_cast_cache[OBJECT_CLASS_CAST_CACHE];
@@ -399,7 +419,8 @@ struct ObjectClass
 
     ObjectUnparent *unparent;
 
-    GHashTable *properties;//属性表
+    //属性表（成员为ObjectProperty类型，由object_class_property_add函数加入）
+    GHashTable *properties;
 };
 
 /**
@@ -417,10 +438,10 @@ struct ObjectClass
 struct Object
 {
     /*< private >*/
-    ObjectClass *class;//对象所属的class
-    ObjectFree *free;//对象内存释放函数
-    GHashTable *properties;//对象的属性表
-    uint32_t ref;//对象的引用计数
+    ObjectClass *class;//所属的class
+    ObjectFree *free;//内存释放函数
+    GHashTable *properties;//属性表（以属性名索引）
+    uint32_t ref;//引用计数
     Object *parent;//如果此值不为NULL,则此对象已被接管
 };
 
@@ -467,26 +488,39 @@ struct Object
  *   should point to a static array that's terminated with a zero filled
  *   element. 本类型的一组接口，此指定应指向一个以0结尾的静态数组
  */
+//定义类型的元数据（类型信息）
 struct TypeInfo
 {
     const char *name;//类型名称
-    const char *parent;//父类型名称
+    const char *parent;//对应的父类型名称
 
-    size_t instance_size;//类型大小
+    //类型对象大小，如果其为0，则其大小为父类型instance_size
+    size_t instance_size;
+    //实例的构造函数,对象初始化时会调用本函数，调用本函数时，父对象将已经被初始化，
+    //故本类型仅仅初始化自有成员即可
     void (*instance_init)(Object *obj);
+    //实例初始化完成后此函数将被调用，在所有@instance_init调用之后
     void (*instance_post_init)(Object *obj);
+    //此函数在对象销毁期间被调用。在所有父类@instance_finalized调用之前调用，一个
+    //对象仅仅需要稍毁此类型中的成员
     void (*instance_finalize)(Object *obj);
 
-    bool abstract;//是否抽象类型
-    size_t class_size;//类元数据大小
+    //如果此字段为True,则此class不能被实附化。
+    bool abstract;
+    //此object对应objectclass大小，如果@class_size为0，那么这个objectclass数据大小将等于
+    //其父objectclass大小，这将容许某此类型可以不增加新的虚函数，而仅仅做明确的函数实现
+    size_t class_size;
 
-    //构造函数
+    //此函数在所有父类初始化之后调用，以便容许设置默认的虚函数指针，当然也容许子类override
+    //父类的虚方法。
     void (*class_init)(ObjectClass *klass, void *data);
+    //在本类型构造函数完成后调用，依注释是为了消除memcopy对类型的影响
     void (*class_base_init)(ObjectClass *klass, void *data);
-    //class_init,class_base_init,class_finalize的函数参数
+    //用于回调instance_init,instance_post_init,instance_finalize回调的参数
+    //可用于构建动态class
     void *class_data;
 
-    //类型的接口信息
+    //本type的一组接口，此指定应指向一个以0结尾的静态数组
     InterfaceInfo *interfaces;
 };
 
@@ -497,6 +531,7 @@ struct TypeInfo
  * Converts an object to a #Object.  Since all objects are #Objects,
  * this function will always succeed.
  */
+//将obj转换为Object类型，所有obj均为Object类型的子类
 #define OBJECT(obj) \
     ((Object *)(obj))
 
@@ -524,7 +559,8 @@ struct TypeInfo
  * If an invalid object is passed to this function, a run time assert will be
  * generated.
  */
-#define OBJECT_CHECK(type, obj, name) \
+#define OBJECT_CHECK(type/*类型结构体*/, obj/*对象*/, name/*类型名称*/) \
+    /*检查obj是否为type类型的obj,是否为name的子类型*/\
     ((type *)object_dynamic_cast_assert(OBJECT(obj), (name), \
                                         __FILE__, __LINE__, __func__))
 
@@ -562,7 +598,7 @@ struct TypeInfo
  * The information associated with an interface.
  */
 struct InterfaceInfo {
-    const char *type;
+    const char *type;//接口类型名称
 };
 
 /**
@@ -572,12 +608,13 @@ struct InterfaceInfo {
  * The class for all interfaces.  Subclasses of this class should only add
  * virtual methods.
  */
+//interfaceClass是所有interface的Class
 struct InterfaceClass
 {
-    ObjectClass parent_class;
+    ObjectClass parent_class;//父ObjectClass
     /*< private >*/
     ObjectClass *concrete_class;
-    Type interface_type;
+    Type interface_type;//interface对应的Type
 };
 
 #define TYPE_INTERFACE "interface"
@@ -601,6 +638,18 @@ struct InterfaceClass
 #define INTERFACE_CHECK(interface, obj, name) \
     ((interface *)object_dynamic_cast_assert(OBJECT((obj)), (name), \
                                              __FILE__, __LINE__, __func__))
+
+/**
+ * object_new_with_class:
+ * @klass: The class to instantiate.
+ *
+ * This function will initialize a new object using heap allocated memory.
+ * The returned object has a reference count of 1, and will be freed when
+ * the last reference is dropped.
+ *
+ * Returns: The newly allocated and instantiated object.
+ */
+Object *object_new_with_class(ObjectClass *klass);
 
 /**
  * object_new:
@@ -689,6 +738,7 @@ void object_apply_global_props(Object *obj, const GPtrArray *props,
                                Error **errp);
 void object_set_machine_compat_props(GPtrArray *compat_props);
 void object_set_accelerator_compat_props(GPtrArray *compat_props);
+void object_register_sugar_prop(const char *driver, const char *prop, const char *value);
 void object_apply_compat_props(Object *obj);
 
 /**
@@ -983,8 +1033,9 @@ GSList *object_class_get_list_sorted(const char *implements_type,
  *
  * Increase the reference count of a object.  A object cannot be freed as long
  * as its reference count is greater than zero.
+ * Returns: @obj
  */
-void object_ref(Object *obj);
+Object *object_ref(Object *obj);
 
 /**
  * object_unref:
@@ -1035,6 +1086,42 @@ ObjectProperty *object_class_property_add(ObjectClass *klass, const char *name,
                                           void *opaque, Error **errp);
 
 /**
+ * object_property_set_default_bool:
+ * @prop: the property to set
+ * @value: the value to be written to the property
+ *
+ * Set the property default value.
+ */
+void object_property_set_default_bool(ObjectProperty *prop, bool value);
+
+/**
+ * object_property_set_default_str:
+ * @prop: the property to set
+ * @value: the value to be written to the property
+ *
+ * Set the property default value.
+ */
+void object_property_set_default_str(ObjectProperty *prop, const char *value);
+
+/**
+ * object_property_set_default_int:
+ * @prop: the property to set
+ * @value: the value to be written to the property
+ *
+ * Set the property default value.
+ */
+void object_property_set_default_int(ObjectProperty *prop, int64_t value);
+
+/**
+ * object_property_set_default_uint:
+ * @prop: the property to set
+ * @value: the value to be written to the property
+ *
+ * Set the property default value.
+ */
+void object_property_set_default_uint(ObjectProperty *prop, uint64_t value);
+
+/**
  * object_property_find:
  * @obj: the object
  * @name: the name of the property
@@ -1048,7 +1135,7 @@ ObjectProperty *object_class_property_find(ObjectClass *klass, const char *name,
                                            Error **errp);
 
 typedef struct ObjectPropertyIterator {
-    ObjectClass *nextclass;
+    ObjectClass *nextclass;//待迭代的下一级class
     GHashTableIter iter;
 } ObjectPropertyIterator;
 
@@ -1453,6 +1540,10 @@ void object_property_add_child(Object *obj, const char *name,
 typedef enum {
     /* Unref the link pointer when the property is deleted */
     OBJ_PROP_LINK_STRONG = 0x1,
+
+    /* private */
+    OBJ_PROP_LINK_DIRECT = 0x2,
+    OBJ_PROP_LINK_CLASS = 0x4,
 } ObjectPropertyLinkFlags;
 
 /**
@@ -1470,7 +1561,7 @@ void object_property_allow_set_link(const Object *, const char *,
  * @obj: the object to add a property to
  * @name: the name of the property
  * @type: the qobj type of the link
- * @child: a pointer to where the link object reference is stored
+ * @targetp: a pointer to where the link object reference is stored
  * @check: callback to veto setting or NULL if the property is read-only
  * @flags: additional options for the link
  * @errp: if an error occurs, a pointer to an area to store the error
@@ -1495,7 +1586,15 @@ void object_property_allow_set_link(const Object *, const char *,
  * modified.
  */
 void object_property_add_link(Object *obj, const char *name,
-                              const char *type, Object **child,
+                              const char *type, Object **targetp,
+                              void (*check)(const Object *obj, const char *name,
+                                            Object *val, Error **errp),
+                              ObjectPropertyLinkFlags flags,
+                              Error **errp);
+
+ObjectProperty *object_class_property_add_link(ObjectClass *oc,
+                              const char *name,
+                              const char *type, ptrdiff_t offset,
                               void (*check)(const Object *obj, const char *name,
                                             Object *val, Error **errp),
                               ObjectPropertyLinkFlags flags,
@@ -1518,7 +1617,8 @@ void object_property_add_str(Object *obj, const char *name,
                              void (*set)(Object *, const char *, Error **),
                              Error **errp);
 
-void object_class_property_add_str(ObjectClass *klass, const char *name,
+ObjectProperty *object_class_property_add_str(ObjectClass *klass,
+                                   const char *name,
                                    char *(*get)(Object *, Error **),
                                    void (*set)(Object *, const char *,
                                                Error **),
@@ -1540,7 +1640,8 @@ void object_property_add_bool(Object *obj, const char *name,
                               void (*set)(Object *, bool, Error **),
                               Error **errp);
 
-void object_class_property_add_bool(ObjectClass *klass, const char *name,
+ObjectProperty *object_class_property_add_bool(ObjectClass *klass,
+                                    const char *name,
                                     bool (*get)(Object *, Error **),
                                     void (*set)(Object *, bool, Error **),
                                     Error **errp);
@@ -1564,7 +1665,8 @@ void object_property_add_enum(Object *obj, const char *name,
                               void (*set)(Object *, int, Error **),
                               Error **errp);
 
-void object_class_property_add_enum(ObjectClass *klass, const char *name,
+ObjectProperty *object_class_property_add_enum(ObjectClass *klass,
+                                    const char *name,
                                     const char *typename,
                                     const QEnumLookup *lookup,
                                     int (*get)(Object *, Error **),
@@ -1585,69 +1687,106 @@ void object_property_add_tm(Object *obj, const char *name,
                             void (*get)(Object *, struct tm *, Error **),
                             Error **errp);
 
-void object_class_property_add_tm(ObjectClass *klass, const char *name,
+ObjectProperty *object_class_property_add_tm(ObjectClass *klass,
+                                  const char *name,
                                   void (*get)(Object *, struct tm *, Error **),
                                   Error **errp);
+
+typedef enum {
+    /* Automatically add a getter to the property */
+    OBJ_PROP_FLAG_READ = 1 << 0,
+    /* Automatically add a setter to the property */
+    OBJ_PROP_FLAG_WRITE = 1 << 1,
+    /* Automatically add a getter and a setter to the property */
+    OBJ_PROP_FLAG_READWRITE = (OBJ_PROP_FLAG_READ | OBJ_PROP_FLAG_WRITE),
+} ObjectPropertyFlags;
 
 /**
  * object_property_add_uint8_ptr:
  * @obj: the object to add a property to
  * @name: the name of the property
  * @v: pointer to value
+ * @flags: bitwise-or'd ObjectPropertyFlags
  * @errp: if an error occurs, a pointer to an area to store the error
  *
  * Add an integer property in memory.  This function will add a
  * property of type 'uint8'.
  */
 void object_property_add_uint8_ptr(Object *obj, const char *name,
-                                   const uint8_t *v, Error **errp);
-void object_class_property_add_uint8_ptr(ObjectClass *klass, const char *name,
-                                         const uint8_t *v, Error **errp);
+                                   const uint8_t *v, ObjectPropertyFlags flags,
+                                   Error **errp);
+
+ObjectProperty *object_class_property_add_uint8_ptr(ObjectClass *klass,
+                                         const char *name,
+                                         const uint8_t *v,
+                                         ObjectPropertyFlags flags,
+                                         Error **errp);
 
 /**
  * object_property_add_uint16_ptr:
  * @obj: the object to add a property to
  * @name: the name of the property
  * @v: pointer to value
+ * @flags: bitwise-or'd ObjectPropertyFlags
  * @errp: if an error occurs, a pointer to an area to store the error
  *
  * Add an integer property in memory.  This function will add a
  * property of type 'uint16'.
  */
 void object_property_add_uint16_ptr(Object *obj, const char *name,
-                                    const uint16_t *v, Error **errp);
-void object_class_property_add_uint16_ptr(ObjectClass *klass, const char *name,
-                                          const uint16_t *v, Error **errp);
+                                    const uint16_t *v,
+                                    ObjectPropertyFlags flags,
+                                    Error **errp);
+
+ObjectProperty *object_class_property_add_uint16_ptr(ObjectClass *klass,
+                                          const char *name,
+                                          const uint16_t *v,
+                                          ObjectPropertyFlags flags,
+                                          Error **errp);
 
 /**
  * object_property_add_uint32_ptr:
  * @obj: the object to add a property to
  * @name: the name of the property
  * @v: pointer to value
+ * @flags: bitwise-or'd ObjectPropertyFlags
  * @errp: if an error occurs, a pointer to an area to store the error
  *
  * Add an integer property in memory.  This function will add a
  * property of type 'uint32'.
  */
 void object_property_add_uint32_ptr(Object *obj, const char *name,
-                                    const uint32_t *v, Error **errp);
-void object_class_property_add_uint32_ptr(ObjectClass *klass, const char *name,
-                                          const uint32_t *v, Error **errp);
+                                    const uint32_t *v,
+                                    ObjectPropertyFlags flags,
+                                    Error **errp);
+
+ObjectProperty *object_class_property_add_uint32_ptr(ObjectClass *klass,
+                                          const char *name,
+                                          const uint32_t *v,
+                                          ObjectPropertyFlags flags,
+                                          Error **errp);
 
 /**
  * object_property_add_uint64_ptr:
  * @obj: the object to add a property to
  * @name: the name of the property
  * @v: pointer to value
+ * @flags: bitwise-or'd ObjectPropertyFlags
  * @errp: if an error occurs, a pointer to an area to store the error
  *
  * Add an integer property in memory.  This function will add a
  * property of type 'uint64'.
  */
 void object_property_add_uint64_ptr(Object *obj, const char *name,
-                                    const uint64_t *v, Error **Errp);
-void object_class_property_add_uint64_ptr(ObjectClass *klass, const char *name,
-                                          const uint64_t *v, Error **Errp);
+                                    const uint64_t *v,
+                                    ObjectPropertyFlags flags,
+                                    Error **Errp);
+
+ObjectProperty *object_class_property_add_uint64_ptr(ObjectClass *klass,
+                                          const char *name,
+                                          const uint64_t *v,
+                                          ObjectPropertyFlags flags,
+                                          Error **Errp);
 
 /**
  * object_property_add_alias:
@@ -1757,4 +1896,20 @@ Object *container_get(Object *root, const char *path);
  * Returns the instance_size of the given @typename.
  */
 size_t object_type_get_instance_size(const char *typename);
+
+/**
+ * object_property_help:
+ * @name: the name of the property
+ * @type: the type of the property
+ * @defval: the default value
+ * @description: description of the property
+ *
+ * Returns: a user-friendly formatted string describing the property
+ * for help purposes.
+ */
+char *object_property_help(const char *name, const char *type,
+                           QObject *defval, const char *description);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(Object, object_unref)
+
 #endif

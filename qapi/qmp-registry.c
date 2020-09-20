@@ -25,11 +25,11 @@ void qmp_register_command(QmpCommandList *cmds, const char *name,
     cmd->fn = fn;
     cmd->enabled = true;
     cmd->options = options;
-    //将其加入到cmds中
+    //将cmd加入到cmdlist中
     QTAILQ_INSERT_TAIL(cmds, cmd, node);
 }
 
-QmpCommand *qmp_find_command(QmpCommandList *cmds, const char *name)
+const QmpCommand *qmp_find_command(const QmpCommandList *cmds, const char *name)
 {
     QmpCommand *cmd;
 
@@ -79,10 +79,10 @@ bool qmp_has_success_response(const QmpCommand *cmd)
     return !(cmd->options & QCO_NO_SUCCESS_RESP);
 }
 
-void qmp_for_each_command(QmpCommandList *cmds, qmp_cmd_callback_fn fn,
+void qmp_for_each_command(const QmpCommandList *cmds, qmp_cmd_callback_fn fn,
                           void *opaque)
 {
-    QmpCommand *cmd;
+    const QmpCommand *cmd;
 
     QTAILQ_FOREACH(cmd, cmds, node) {
         fn(cmd, opaque);

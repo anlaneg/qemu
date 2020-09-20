@@ -67,6 +67,7 @@ QEMU_BUILD_BUG_MSG(QTYPE__MAX != 7,
 /* Initialize an object to default values */
 static inline void qobject_init(QObject *obj, QType type)
 {
+    //设置引用计数及object类型
     assert(QTYPE_NONE < type && type < QTYPE__MAX);
     obj->base.refcnt = 1;
     obj->base.type = type;
@@ -124,6 +125,7 @@ static inline void qobject_unref_impl(QObject *obj)
  */
 static inline QType qobject_type(const QObject *obj)
 {
+    //返回qobject类型
     assert(QTYPE_NONE < obj->base.type && obj->base.type < QTYPE__MAX);
     return obj->base.type;
 }

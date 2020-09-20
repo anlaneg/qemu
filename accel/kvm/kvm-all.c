@@ -41,6 +41,9 @@
 #include "hw/irq.h"
 #include "sysemu/sev.h"
 #include "sysemu/balloon.h"
+#include "qapi/visitor.h"
+#include "qapi/qapi-types-common.h"
+#include "qapi/qapi-visit-common.h"
 
 #include "hw/boards.h"
 
@@ -52,7 +55,7 @@
 /* KVM uses PAGE_SIZE in its definition of KVM_COALESCED_MMIO_MAX. We
  * need to use the real host PAGE_SIZE, as that's what KVM will use.
  */
-#define PAGE_SIZE getpagesize()
+#define PAGE_SIZE qemu_real_host_page_size
 
 //#define DEBUG_KVM
 
@@ -77,11 +80,12 @@ struct KVMState
     AccelState parent_obj;
 
     int nr_slots;//memory slots的数目
-    int fd;/* /dev/kvm对应的fd */
+    int fd;/* kvm_dev对应的fd */
     int vmfd;/*vm对应的fd*/
-    int coalesced_mmio;
-    int coalesced_pio;
+    int coalesced_mmio;//返回mmio_page_offset情况
+    int coalesced_pio;//是否支持pio
     struct kvm_coalesced_mmio_ring *coalesced_mmio_ring;
+    //标记 coalesced_flush正在处理
     bool coalesced_flush_in_progress;
     int vcpu_events;
     int robust_singlestep;
@@ -92,6 +96,10 @@ struct KVMState
     int max_nested_state_len;
     int many_ioeventfds;
     int intx_set_mask;
+    int kvm_shadow_mem;
+    bool kernel_irqchip_allowed;
+    bool kernel_irqchip_required;
+    OnOffAuto kernel_irqchip_split;
     bool sync_mmu;
     bool manual_dirty_log_protect;
     /* The man page (and posix) say ioctl numbers are signed int, but
@@ -149,12 +157,15 @@ static const KVMCapabilityInfo kvm_required_capabilites[] = {
     KVM_CAP_LAST_INFO
 };
 
+static NotifierList kvm_irqchip_change_notifiers =
+    NOTIFIER_LIST_INITIALIZER(kvm_irqchip_change_notifiers);
+
 #define kvm_slots_lock(kml)      qemu_mutex_lock(&(kml)->slots_lock)
 #define kvm_slots_unlock(kml)    qemu_mutex_unlock(&(kml)->slots_lock)
 
 int kvm_get_max_memslots(void)
 {
-    KVMState *s = KVM_STATE(current_machine->accelerator);
+    KVMState *s = KVM_STATE(current_accel());
 
     return s->nr_slots;
 }
@@ -294,17 +305,30 @@ static int kvm_set_user_memory_region(KVMMemoryListener *kml, KVMSlot *slot, boo
     mem.userspace_addr = (unsigned long)slot->ram;
     mem.flags = slot->flags;
 
+    //KVM_SET_USER_MEMORY_REGION用于用户创建，删除，修改guest物理内存slot
+    //memory变更时，需要先将其移除掉，故先将此memory设置为0，相当于移除掉内存条
     if (slot->memory_size && !new && (mem.flags ^ slot->old_flags) & KVM_MEM_READONLY) {
         /* Set the slot size to 0 before setting the slot to the desired
          * value. This is needed based on KVM commit 75d61fbc. */
         mem.memory_size = 0;
-        kvm_vm_ioctl(s, KVM_SET_USER_MEMORY_REGION, &mem);
+        ret = kvm_vm_ioctl(s, KVM_SET_USER_MEMORY_REGION, &mem);
+        if (ret < 0) {
+            goto err;
+        }
     }
+    //再设置slot内存大小，相当于增加内存条
     mem.memory_size = slot->memory_size;
     ret = kvm_vm_ioctl(s, KVM_SET_USER_MEMORY_REGION, &mem);
     slot->old_flags = mem.flags;
+err:
     trace_kvm_set_user_memory(mem.slot, mem.flags, mem.guest_phys_addr,
                               mem.memory_size, mem.userspace_addr, ret);
+    if (ret < 0) {
+        error_report("%s: KVM_SET_USER_MEMORY_REGION failed, slot=%d,"
+                     " start=0x%" PRIx64 ", size=0x%" PRIx64 ": %s",
+                     __func__, mem.slot, slot->start_addr,
+                     (uint64_t)mem.memory_size, strerror(errno));
+    }
     return ret;
 }
 
@@ -346,6 +370,7 @@ static int kvm_get_vcpu(KVMState *s, unsigned long vcpu_id)
 {
     struct KVMParkedVcpu *cpu;
 
+    //如果vcpu_id已存在，则直接返回对应的kvm_fd
     QLIST_FOREACH(cpu, &s->kvm_parked_vcpus, node) {
         if (cpu->vcpu_id == vcpu_id) {
             int kvm_fd;
@@ -357,6 +382,7 @@ static int kvm_get_vcpu(KVMState *s, unsigned long vcpu_id)
         }
     }
 
+    //创建vcpu并返回对应的kvm_fd
     return kvm_vm_ioctl(s, KVM_CREATE_VCPU, (void *)vcpu_id);
 }
 
@@ -393,6 +419,7 @@ int kvm_init_vcpu(CPUState *cpu)
         goto err;
     }
 
+    //初始化coalesced_mmio_ring
     if (s->coalesced_mmio && !s->coalesced_mmio_ring) {
         s->coalesced_mmio_ring =
             (void *)cpu->kvm_run + s->coalesced_mmio * PAGE_SIZE;
@@ -507,13 +534,34 @@ static int kvm_get_dirty_pages_log_range(MemoryRegionSection *section,
 {
     ram_addr_t start = section->offset_within_region +
                        memory_region_get_ram_addr(section->mr);
-    ram_addr_t pages = int128_get64(section->size) / getpagesize();
+    ram_addr_t pages = int128_get64(section->size) / qemu_real_host_page_size;
 
     cpu_physical_memory_set_dirty_lebitmap(bitmap, start, pages);
     return 0;
 }
 
 #define ALIGN(x, y)  (((x)+(y)-1) & ~((y)-1))
+
+/* Allocate the dirty bitmap for a slot  */
+static void kvm_memslot_init_dirty_bitmap(KVMSlot *mem)
+{
+    /*
+     * XXX bad kernel interface alert
+     * For dirty bitmap, kernel allocates array of size aligned to
+     * bits-per-long.  But for case when the kernel is 64bits and
+     * the userspace is 32bits, userspace can't align to the same
+     * bits-per-long, since sizeof(long) is different between kernel
+     * and user space.  This way, userspace will provide buffer which
+     * may be 4 bytes less than the kernel will use, resulting in
+     * userspace memory corruption (which is not detectable by valgrind
+     * too, in most cases).
+     * So for now, let's align to 64 instead of HOST_LONG_BITS here, in
+     * a hope that sizeof(long) won't become >8 any time soon.
+     */
+    hwaddr bitmap_size = ALIGN(((mem->memory_size) >> TARGET_PAGE_BITS),
+                                        /*HOST_LONG_BITS*/ 64) / 8;
+    mem->dirty_bmap = g_malloc0(bitmap_size);
+}
 
 /**
  * kvm_physical_sync_dirty_bitmap - Sync dirty bitmap from kernel space
@@ -547,23 +595,9 @@ static int kvm_physical_sync_dirty_bitmap(KVMMemoryListener *kml,
             goto out;
         }
 
-        /* XXX bad kernel interface alert
-         * For dirty bitmap, kernel allocates array of size aligned to
-         * bits-per-long.  But for case when the kernel is 64bits and
-         * the userspace is 32bits, userspace can't align to the same
-         * bits-per-long, since sizeof(long) is different between kernel
-         * and user space.  This way, userspace will provide buffer which
-         * may be 4 bytes less than the kernel will use, resulting in
-         * userspace memory corruption (which is not detectable by valgrind
-         * too, in most cases).
-         * So for now, let's align to 64 instead of HOST_LONG_BITS here, in
-         * a hope that sizeof(long) won't become >8 any time soon.
-         */
         if (!mem->dirty_bmap) {
-            hwaddr bitmap_size = ALIGN(((mem->memory_size) >> TARGET_PAGE_BITS),
-                                        /*HOST_LONG_BITS*/ 64) / 8;
             /* Allocate on the first log_sync, once and for all */
-            mem->dirty_bmap = g_malloc0(bitmap_size);
+            kvm_memslot_init_dirty_bitmap(mem);
         }
 
         d.dirty_bitmap = mem->dirty_bmap;
@@ -831,12 +865,14 @@ static MemoryListener kvm_coalesced_pio_listener = {
     .coalesced_io_del = kvm_coalesce_pio_del,
 };
 
+//检查extension扩展的支持情况
 int kvm_check_extension(KVMState *s, unsigned int extension)
 {
     int ret;
 
     ret = kvm_ioctl(s, KVM_CHECK_EXTENSION, extension);
     if (ret < 0) {
+        //不支持
         ret = 0;
     }
 
@@ -981,10 +1017,12 @@ kvm_check_extension_list(KVMState *s, const KVMCapabilityInfo *list)
 {
     while (list->name) {
         if (!kvm_check_extension(s, list->value)) {
+            /*返回不支持扩展*/
             return list;
         }
         list++;
     }
+    /*全部支持*/
     return NULL;
 }
 
@@ -1001,6 +1039,7 @@ static void kvm_set_phys_mem(KVMMemoryListener *kml,
 {
     KVMSlot *mem;
     int err;
+    //获得此section对应的mr
     MemoryRegion *mr = section->mr;
     bool writeable = !mr->readonly && !mr->rom_device;
     hwaddr start_addr, size, slot_size;
@@ -1064,6 +1103,13 @@ static void kvm_set_phys_mem(KVMMemoryListener *kml,
         mem->ram = ram;
         mem->flags = kvm_mem_flags(mr);
 
+        if (mem->flags & KVM_MEM_LOG_DIRTY_PAGES) {
+            /*
+             * Reallocate the bmap; it means it doesn't disappear in
+             * middle of a migrate.
+             */
+            kvm_memslot_init_dirty_bitmap(mem);
+        }
         err = kvm_set_user_memory_region(kml, mem, true);
         if (err) {
             fprintf(stderr, "%s: error registering slot: %s\n", __func__,
@@ -1079,9 +1125,11 @@ out:
     kvm_slots_unlock(kml);
 }
 
+//当我们向kvm提交这个secion对应的mr时，此函数将被调用
 static void kvm_region_add(MemoryListener *listener,
                            MemoryRegionSection *section)
 {
+    //由listener获得 kvm memory listener
     KVMMemoryListener *kml = container_of(listener, KVMMemoryListener, listener);
 
     memory_region_ref(section->mr);
@@ -1396,6 +1444,21 @@ void kvm_irqchip_release_virq(KVMState *s, int virq)
     trace_kvm_irqchip_release_virq(virq);
 }
 
+void kvm_irqchip_add_change_notifier(Notifier *n)
+{
+    notifier_list_add(&kvm_irqchip_change_notifiers, n);
+}
+
+void kvm_irqchip_remove_change_notifier(Notifier *n)
+{
+    notifier_remove(n);
+}
+
+void kvm_irqchip_change_notify(void)
+{
+    notifier_list_notify(&kvm_irqchip_change_notifiers, NULL);
+}
+
 static unsigned int kvm_hash_msi(uint32_t data)
 {
     /* This is optimized for IA32 MSI layout. However, no other arch shall
@@ -1579,8 +1642,8 @@ int kvm_irqchip_update_msi_route(KVMState *s, int virq, MSIMessage msg,
     return kvm_update_routing_entry(s, &kroute);
 }
 
-static int kvm_irqchip_assign_irqfd(KVMState *s, int fd, int rfd, int virq,
-                                    bool assign)
+static int kvm_irqchip_assign_irqfd(KVMState *s, int fd/*中断源fd*/, int rfd/*如果此值为-1,则resample*/, int virq,
+                                    bool assign/*是否assign操作*/)
 {
     struct kvm_irqfd irqfd = {
         .fd = fd,
@@ -1593,10 +1656,12 @@ static int kvm_irqchip_assign_irqfd(KVMState *s, int fd, int rfd, int virq,
         irqfd.resamplefd = rfd;
     }
 
+    //检查是否开启了irqfds
     if (!kvm_irqfds_enabled()) {
         return -ENOSYS;
     }
 
+    //向kvm配置irqfd,完成中断事件监听并注入中断给vcpu
     return kvm_vm_ioctl(s, KVM_IRQFD, &irqfd);
 }
 
@@ -1700,6 +1765,7 @@ int kvm_irqchip_update_msi_route(KVMState *s, int virq, MSIMessage msg)
 int kvm_irqchip_add_irqfd_notifier_gsi(KVMState *s, EventNotifier *n,
                                        EventNotifier *rn, int virq)
 {
+    //添加中断fd通知
     return kvm_irqchip_assign_irqfd(s, event_notifier_get_fd(n),
            rn ? event_notifier_get_fd(rn) : -1, virq, true);
 }
@@ -1740,10 +1806,11 @@ void kvm_irqchip_set_qemuirq_gsi(KVMState *s, qemu_irq irq, int gsi)
     g_hash_table_insert(s->gsimap, irq, GINT_TO_POINTER(gsi));
 }
 
-static void kvm_irqchip_create(MachineState *machine, KVMState *s)
+static void kvm_irqchip_create(KVMState *s)
 {
     int ret;
 
+    assert(s->kernel_irqchip_split != ON_OFF_AUTO_AUTO);
     if (kvm_check_extension(s, KVM_CAP_IRQCHIP)) {
         ;
     } else if (kvm_check_extension(s, KVM_CAP_S390_IRQCHIP)) {
@@ -1758,9 +1825,9 @@ static void kvm_irqchip_create(MachineState *machine, KVMState *s)
 
     /* First probe and see if there's a arch-specific hook to create the
      * in-kernel irqchip for us */
-    ret = kvm_arch_irqchip_create(machine, s);
+    ret = kvm_arch_irqchip_create(s);
     if (ret == 0) {
-        if (machine_kernel_irqchip_split(machine)) {
+        if (s->kernel_irqchip_split == ON_OFF_AUTO_ON) {
             perror("Split IRQ chip mode not supported.");
             exit(1);
         } else {
@@ -1808,10 +1875,11 @@ static int kvm_max_vcpu_id(KVMState *s)
 
 bool kvm_vcpu_id_is_valid(int vcpu_id)
 {
-    KVMState *s = KVM_STATE(current_machine->accelerator);
+    KVMState *s = KVM_STATE(current_accel());
     return vcpu_id >= 0 && vcpu_id < kvm_max_vcpu_id(s);
 }
 
+//kvm初始化
 static int kvm_init(MachineState *ms)
 {
     MachineClass *mc = MACHINE_GET_CLASS(ms);
@@ -1841,7 +1909,7 @@ static int kvm_init(MachineState *ms)
      * even with KVM.  TARGET_PAGE_SIZE is assumed to be the minimum
      * page size for the system though.
      */
-    assert(TARGET_PAGE_SIZE <= getpagesize());
+    assert(TARGET_PAGE_SIZE <= qemu_real_host_page_size);
 
     s->sigmask_len = 8;
 
@@ -1861,7 +1929,7 @@ static int kvm_init(MachineState *ms)
     /*获得kvm api版本*/
     ret = kvm_ioctl(s, KVM_GET_API_VERSION, 0);
     if (ret < KVM_API_VERSION) {
-    		//不支持小于此version的kvm
+    	//不支持小于此version的kvm
         if (ret >= 0) {
             ret = -EINVAL;
         }
@@ -1870,7 +1938,7 @@ static int kvm_init(MachineState *ms)
     }
 
     if (ret > KVM_API_VERSION) {
-    		//不支持大于此version的kvm
+    	//不支持大于此version的kvm
         ret = -EINVAL;
         fprintf(stderr, "kvm version not supported\n");
         goto err;
@@ -1882,7 +1950,7 @@ static int kvm_init(MachineState *ms)
 
     /* If unspecified, use the default value */
     if (!s->nr_slots) {
-    		//如果未指定，则使用默认值32
+    	//如果未指定，则使用默认值32
         s->nr_slots = 32;
     }
 
@@ -1902,12 +1970,12 @@ static int kvm_init(MachineState *ms)
     }
 
     do {
-    		//执行vm创建
+    	//执行vm创建
         ret = kvm_ioctl(s, KVM_CREATE_VM, type);
     } while (ret == -EINTR);
 
     if (ret < 0) {
-    		//创建vm失败
+    	//创建vm失败
         fprintf(stderr, "ioctl(KVM_CREATE_VM) failed: %d %s\n", -ret,
                 strerror(-ret));
 
@@ -1927,6 +1995,7 @@ static int kvm_init(MachineState *ms)
         goto err;
     }
 
+    /*记录vm对应的fd*/
     s->vmfd = ret;
 
     /* check the vcpu limits */
@@ -1951,10 +2020,12 @@ static int kvm_init(MachineState *ms)
 
     missing_cap = kvm_check_extension_list(s, kvm_required_capabilites);
     if (!missing_cap) {
+        /*kvm_required_capabilites列出的功能均支持，查看arch指定折cap是否支持*/
         missing_cap =
             kvm_check_extension_list(s, kvm_arch_required_capabilities);
     }
     if (missing_cap) {
+        /*存在水支持的扩展，报错*/
         ret = -EINVAL;
         fprintf(stderr, "kvm does not support %s\n%s",
                 missing_cap->name, upgrade_note);
@@ -2034,13 +2105,18 @@ static int kvm_init(MachineState *ms)
         kvm_state->memcrypt_encrypt_data = sev_encrypt_data;
     }
 
+    //各体系结构自已的init
     ret = kvm_arch_init(ms, s);
     if (ret < 0) {
         goto err;
     }
 
-    if (machine_kernel_irqchip_allowed(ms)) {
-        kvm_irqchip_create(ms, s);
+    if (s->kernel_irqchip_split == ON_OFF_AUTO_AUTO) {
+        s->kernel_irqchip_split = mc->default_kernel_irqchip_split ? ON_OFF_AUTO_ON : ON_OFF_AUTO_OFF;
+    }
+
+    if (s->kernel_irqchip_allowed) {
+        kvm_irqchip_create(s);
     }
 
     if (kvm_eventfds_allowed) {
@@ -2129,9 +2205,11 @@ void kvm_flush_coalesced_mmio_buffer(void)
     KVMState *s = kvm_state;
 
     if (s->coalesced_flush_in_progress) {
+        //如果已在处理，则直接返回
         return;
     }
 
+    //标记正在处理
     s->coalesced_flush_in_progress = true;
 
     if (s->coalesced_mmio_ring) {
@@ -2139,15 +2217,18 @@ void kvm_flush_coalesced_mmio_buffer(void)
         while (ring->first != ring->last) {
             struct kvm_coalesced_mmio *ent;
 
+            //取队列中元素
             ent = &ring->coalesced_mmio[ring->first];
 
+            //确认是io写还是物理内存写
             if (ent->pio == 1) {
-                address_space_rw(&address_space_io, ent->phys_addr,
-                                 MEMTXATTRS_UNSPECIFIED, ent->data,
-                                 ent->len, true);
+                address_space_write(&address_space_io, ent->phys_addr,
+                                    MEMTXATTRS_UNSPECIFIED, ent->data,
+                                    ent->len);
             } else {
                 cpu_physical_memory_write(ent->phys_addr, ent->data, ent->len);
             }
+            //跳到下一个元素
             smp_wmb();
             ring->first = (ring->first + 1) % KVM_COALESCED_MMIO_MAX;
         }
@@ -2297,6 +2378,7 @@ int kvm_cpu_exec(CPUState *cpu)
          */
         smp_rmb();
 
+        //qemu进程获得cpu,通过ioctl切换到guest
         run_ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
 
         attrs = kvm_arch_post_run(cpu, run);
@@ -2432,6 +2514,7 @@ int kvm_ioctl(KVMState *s, int type, ...)
     return ret;
 }
 
+//通过ioctl与vm通信
 int kvm_vm_ioctl(KVMState *s, int type, ...)
 {
     int ret;
@@ -2456,11 +2539,13 @@ int kvm_vcpu_ioctl(CPUState *cpu, int type, ...)
     void *arg;
     va_list ap;
 
+    //构造调用参数
     va_start(ap, type);
     arg = va_arg(ap, void *);
     va_end(ap);
 
     trace_kvm_vcpu_ioctl(cpu->cpu_index, type, arg);
+    //执行vcpu的ioctl
     ret = ioctl(cpu->kvm_fd, type, arg);
     if (ret == -1) {
         ret = -errno;
@@ -2931,19 +3016,121 @@ static bool kvm_accel_has_memory(MachineState *ms, AddressSpace *as,
     return false;
 }
 
+static void kvm_get_kvm_shadow_mem(Object *obj, Visitor *v,
+                                   const char *name, void *opaque,
+                                   Error **errp)
+{
+    KVMState *s = KVM_STATE(obj);
+    int64_t value = s->kvm_shadow_mem;
+
+    visit_type_int(v, name, &value, errp);
+}
+
+static void kvm_set_kvm_shadow_mem(Object *obj, Visitor *v,
+                                   const char *name, void *opaque,
+                                   Error **errp)
+{
+    KVMState *s = KVM_STATE(obj);
+    Error *error = NULL;
+    int64_t value;
+
+    visit_type_int(v, name, &value, &error);
+    if (error) {
+        error_propagate(errp, error);
+        return;
+    }
+
+    s->kvm_shadow_mem = value;
+}
+
+static void kvm_set_kernel_irqchip(Object *obj, Visitor *v,
+                                   const char *name, void *opaque,
+                                   Error **errp)
+{
+    Error *err = NULL;
+    KVMState *s = KVM_STATE(obj);
+    OnOffSplit mode;
+
+    visit_type_OnOffSplit(v, name, &mode, &err);
+    if (err) {
+        error_propagate(errp, err);
+        return;
+    } else {
+        switch (mode) {
+        case ON_OFF_SPLIT_ON:
+            s->kernel_irqchip_allowed = true;
+            s->kernel_irqchip_required = true;
+            s->kernel_irqchip_split = ON_OFF_AUTO_OFF;
+            break;
+        case ON_OFF_SPLIT_OFF:
+            s->kernel_irqchip_allowed = false;
+            s->kernel_irqchip_required = false;
+            s->kernel_irqchip_split = ON_OFF_AUTO_OFF;
+            break;
+        case ON_OFF_SPLIT_SPLIT:
+            s->kernel_irqchip_allowed = true;
+            s->kernel_irqchip_required = true;
+            s->kernel_irqchip_split = ON_OFF_AUTO_ON;
+            break;
+        default:
+            /* The value was checked in visit_type_OnOffSplit() above. If
+             * we get here, then something is wrong in QEMU.
+             */
+            abort();
+        }
+    }
+}
+
+bool kvm_kernel_irqchip_allowed(void)
+{
+    return kvm_state->kernel_irqchip_allowed;
+}
+
+bool kvm_kernel_irqchip_required(void)
+{
+    return kvm_state->kernel_irqchip_required;
+}
+
+bool kvm_kernel_irqchip_split(void)
+{
+    return kvm_state->kernel_irqchip_split == ON_OFF_AUTO_ON;
+}
+
+static void kvm_accel_instance_init(Object *obj)
+{
+    KVMState *s = KVM_STATE(obj);
+
+    s->kvm_shadow_mem = -1;
+    s->kernel_irqchip_allowed = true;
+    s->kernel_irqchip_split = ON_OFF_AUTO_AUTO;
+}
+
 static void kvm_accel_class_init(ObjectClass *oc, void *data)
 {
     AccelClass *ac = ACCEL_CLASS(oc);
     ac->name = "KVM";
-    ac->init_machine = kvm_init;/*kvm初始化*/
+    ac->init_machine = kvm_init;/*vm创建，初始化*/
     ac->has_memory = kvm_accel_has_memory;
     ac->allowed = &kvm_allowed;
+
+    object_class_property_add(oc, "kernel-irqchip", "on|off|split",
+        NULL, kvm_set_kernel_irqchip,
+        NULL, NULL, &error_abort);
+    object_class_property_set_description(oc, "kernel-irqchip",
+        "Configure KVM in-kernel irqchip", &error_abort);
+
+    object_class_property_add(oc, "kvm-shadow-mem", "int",
+        kvm_get_kvm_shadow_mem, kvm_set_kvm_shadow_mem,
+        NULL, NULL, &error_abort);
+    object_class_property_set_description(oc, "kvm-shadow-mem",
+        "KVM shadow MMU size", &error_abort);
 }
 
 //kvm的accel类型
 static const TypeInfo kvm_accel_type = {
     .name = TYPE_KVM_ACCEL,
     .parent = TYPE_ACCEL,
+    .instance_init = kvm_accel_instance_init,
     .class_init = kvm_accel_class_init,
     .instance_size = sizeof(KVMState),
 };

@@ -76,10 +76,12 @@ void net_checksum_calculate(uint8_t *data, int length)
     /* Handle the optionnal VLAN headers */
     switch (lduw_be_p(&PKT_GET_ETH_HDR(data)->h_proto)) {
     case ETH_P_VLAN:
+        //单层vlan头
         mac_hdr_len = sizeof(struct eth_header) +
                      sizeof(struct vlan_header);
         break;
     case ETH_P_DVLAN:
+        //双层vlan
         if (lduw_be_p(&PKT_GET_VLAN_HDR(data)->h_proto) == ETH_P_VLAN) {
             mac_hdr_len = sizeof(struct eth_header) +
                          2 * sizeof(struct vlan_header);
@@ -89,6 +91,7 @@ void net_checksum_calculate(uint8_t *data, int length)
         }
         break;
     default:
+        //普通mac头
         mac_hdr_len = sizeof(struct eth_header);
         break;
     }
@@ -97,11 +100,13 @@ void net_checksum_calculate(uint8_t *data, int length)
 
     /* Now check we have an IP header (with an optionnal VLAN header) */
     if (length < sizeof(struct ip_header)) {
+        //长度小于ip头，退出
         return;
     }
 
     ip = (struct ip_header *)(data + mac_hdr_len);
 
+    //只支持ipv4
     if (IP_HEADER_VERSION(ip) != IP_HEADER_VERSION_4) {
         return; /* not IPv4 */
     }
@@ -115,6 +120,7 @@ void net_checksum_calculate(uint8_t *data, int length)
 
     ip_len -= IP_HDR_GET_LEN(ip);
 
+    //针对tcp,udp完成checksum更新
     switch (ip->ip_p) {
     case IP_PROTO_TCP:
     {

@@ -47,18 +47,28 @@
 
 #include "net/vhost_net.h"
 
+//用于描述tap设备
 typedef struct TAPState {
     NetClientState nc;
-    int fd;//tap口fd
+    //tap口设备对应的fd
+    int fd;
+    //用于定义tap设备被移除时，需要调用的脚本及参数
     char down_script[1024];
     char down_script_arg[128];
+    //提供自tap设备读取报文时的buffer
     uint8_t buf[NET_BUFSIZE];
+    //是否需要进行read poll检测
     bool read_poll;
+    //是否需要进行write poll检测
     bool write_poll;
+    /*是否使用vnet_hdr*/
     bool using_vnet_hdr;
+    /*是否支持ufo*/
     bool has_ufo;
+    /*此tap设备是否被使能*/
     bool enabled;
     VHostNetState *vhost_net;
+    //指明vnet header长度
     unsigned host_vnet_hdr_len;
     Notifier exit;
 } TAPState;
@@ -69,9 +79,11 @@ static void launch_script(const char *setup_script, const char *ifname,
 static void tap_send(void *opaque);
 static void tap_writable(void *opaque);
 
+//将fd注册到aio框架中
 static void tap_update_fd_handler(TAPState *s)
 {
     qemu_set_fd_handler(s->fd,
+                        /*设备使能，且s->read_poll为true，则注册读函数*/
                         s->read_poll && s->enabled ? tap_send : NULL,
                         s->write_poll && s->enabled ? tap_writable : NULL,
                         s);
@@ -95,22 +107,27 @@ static void tap_writable(void *opaque)
 
     tap_write_poll(s, false);
 
+    //完成tap收到的incoming报文的投递
     qemu_flush_queued_packets(&s->nc);
 }
 
+//向tap设备发送iov格式的buffer
 static ssize_t tap_write_packet(TAPState *s, const struct iovec *iov, int iovcnt)
 {
     ssize_t len;
 
     do {
+        //向tap口发送报文
         len = writev(s->fd, iov, iovcnt);
     } while (len == -1 && errno == EINTR);
 
+    //发送出错，且出错原因为需要again时，返回0
     if (len == -1 && errno == EAGAIN) {
         tap_write_poll(s, true);
         return 0;
     }
 
+    /*返回发送的长度*/
     return len;
 }
 
@@ -122,6 +139,7 @@ static ssize_t tap_receive_iov(NetClientState *nc, const struct iovec *iov,
     struct iovec iov_copy[iovcnt + 1];
     struct virtio_net_hdr_mrg_rxbuf hdr = { };
 
+    //构造空的hdr_mrg内容，并自tap口发出
     if (s->host_vnet_hdr_len && !s->using_vnet_hdr) {
         iov_copy[0].iov_base = &hdr;
         iov_copy[0].iov_len =  s->host_vnet_hdr_len;
@@ -133,11 +151,13 @@ static ssize_t tap_receive_iov(NetClientState *nc, const struct iovec *iov,
     return tap_write_packet(s, iovp, iovcnt);
 }
 
+//当前构造空的net_hdr_mrg头及buffer并将其发送tap设备
 static ssize_t tap_receive_raw(NetClientState *nc, const uint8_t *buf, size_t size)
 {
     TAPState *s = DO_UPCAST(TAPState, nc, nc);
     struct iovec iov[2];
     int iovcnt = 0;
+    //构造空的net_hdr_mrg,并将其发出
     struct virtio_net_hdr_mrg_rxbuf hdr = { };
 
     if (s->host_vnet_hdr_len) {
@@ -153,12 +173,15 @@ static ssize_t tap_receive_raw(NetClientState *nc, const uint8_t *buf, size_t si
     return tap_write_packet(s, iov, iovcnt);
 }
 
+//将收到的buffer通过tap发送出去
 static ssize_t tap_receive(NetClientState *nc, const uint8_t *buf, size_t size)
 {
+    //获得tap类设备
     TAPState *s = DO_UPCAST(TAPState, nc, nc);
     struct iovec iov[1];
 
     if (s->host_vnet_hdr_len && !s->using_vnet_hdr) {
+        /*处理raw格式的packet*/
         return tap_receive_raw(nc, buf, size);
     }
 
@@ -177,10 +200,12 @@ ssize_t tap_read_packet(int tapfd, uint8_t *buf, int maxlen)
 
 static void tap_send_completed(NetClientState *nc, ssize_t len)
 {
+    //之前发送失败，将read_pool改为false,现在异步处理完成，改正为true
     TAPState *s = DO_UPCAST(TAPState, nc, nc);
     tap_read_poll(s, true);
 }
 
+//自tap设备中异步读取报文并发送给对端
 static void tap_send(void *opaque)
 {
     TAPState *s = opaque;
@@ -190,19 +215,22 @@ static void tap_send(void *opaque)
     while (true) {
         uint8_t *buf = s->buf;
 
-        //自tap口中读取报文
+        //自tap口中读取报文,存入s->buf中
         size = tap_read_packet(s->fd, s->buf, sizeof(s->buf));
         if (size <= 0) {
             break;
         }
 
+        //跳过vnet_hdr
         if (s->host_vnet_hdr_len && !s->using_vnet_hdr) {
             buf  += s->host_vnet_hdr_len;
             size -= s->host_vnet_hdr_len;
         }
 
+        //异步完成向s->nc对端报文投递（需要过filter)
         size = qemu_send_packet_async(&s->nc, buf, size, tap_send_completed);
         if (size == 0) {
+            //采用异步发送方式，这里关闭read_poll,等待tap_send_completed完成后再调用
             tap_read_poll(s, false);
             break;
         } else if (size < 0) {
@@ -297,6 +325,7 @@ static void tap_set_offload(NetClientState *nc, int csum, int tso4,
     tap_fd_set_offload(s->fd, csum, tso4, tso6, ecn, ufo);
 }
 
+//如果配置了down_script,则触发down_script脚本调用
 static void tap_exit_notify(Notifier *notifier, void *data)
 {
     TAPState *s = container_of(notifier, TAPState, exit);
@@ -310,6 +339,7 @@ static void tap_exit_notify(Notifier *notifier, void *data)
     }
 }
 
+//执行TAP设备的移除时的清理工作
 static void tap_cleanup(NetClientState *nc)
 {
     TAPState *s = DO_UPCAST(TAPState, nc, nc);
@@ -325,8 +355,10 @@ static void tap_cleanup(NetClientState *nc)
     tap_exit_notify(&s->exit, NULL);
     qemu_remove_exit_notifier(&s->exit);
 
+    //停止tap口的读写
     tap_read_poll(s, false);
     tap_write_poll(s, false);
+    //关闭fd
     close(s->fd);
     s->fd = -1;
 }
@@ -338,6 +370,7 @@ static void tap_poll(NetClientState *nc, bool enable)
     tap_write_poll(s, enable);
 }
 
+/*取tap口对应的fd*/
 int tap_get_fd(NetClientState *nc)
 {
     TAPState *s = DO_UPCAST(TAPState, nc, nc);
@@ -350,10 +383,14 @@ int tap_get_fd(NetClientState *nc)
 static NetClientInfo net_tap_info = {
     .type = NET_CLIENT_DRIVER_TAP,
     .size = sizeof(TAPState),
+    //将收到的报文自tap发出
     .receive = tap_receive,
+    //raw格式的报文自tap发出
     .receive_raw = tap_receive_raw,
+    //iov格式的buffer自tap发出
     .receive_iov = tap_receive_iov,
     .poll = tap_poll,
+    //指明tap类设备在nc移除时，需要执行清理工作
     .cleanup = tap_cleanup,
     .has_ufo = tap_has_ufo,
     .has_vnet_hdr = tap_has_vnet_hdr,
@@ -365,32 +402,38 @@ static NetClientInfo net_tap_info = {
     .set_vnet_be = tap_set_vnet_be,
 };
 
+//利用fd创建TAPstate
 static TAPState *net_tap_fd_init(NetClientState *peer,
                                  const char *model,
                                  const char *name,
-                                 int fd,
-                                 int vnet_hdr)
+                                 int fd/*tap设备fd*/,
+                                 int vnet_hdr/*是否包含vnet_hdr结构*/)
 {
     NetClientState *nc;
     TAPState *s;
 
-    nc = qemu_new_net_client(&net_tap_info, peer, model, name);
+    //申请TAPState,并先初始化其成员nc
+    nc = qemu_new_net_client(&net_tap_info/*指为tap类info*/, peer, model, name);
 
     s = DO_UPCAST(TAPState, nc, nc);
 
+    /*设置tap对应的fd*/
     s->fd = fd;
     s->host_vnet_hdr_len = vnet_hdr ? sizeof(struct virtio_net_hdr) : 0;
     s->using_vnet_hdr = false;
     s->has_ufo = tap_probe_has_ufo(s->fd);
     s->enabled = true;
+    /*默认关闭offload功能*/
     tap_set_offload(&s->nc, 0, 0, 0, 0, 0);
     /*
      * Make sure host header length is set correctly in tap:
      * it might have been modified by another instance of qemu.
      */
     if (tap_probe_vnet_hdr_len(s->fd, s->host_vnet_hdr_len)) {
+        //更改tap口的vnet_hdr
         tap_fd_set_vnet_hdr_len(s->fd, s->host_vnet_hdr_len);
     }
+    //指明容许自tap口读取报文
     tap_read_poll(s, true);
     s->vhost_net = NULL;
 
@@ -426,6 +469,7 @@ static void launch_script(const char *setup_script, const char *ifname,
         *parg++ = (char *)setup_script;
         *parg++ = (char *)ifname;
         *parg = NULL;
+        //执行脚本
         execv(setup_script, args);
         _exit(1);
     } else {
@@ -621,9 +665,10 @@ int net_init_bridge(const Netdev *netdev, const char *name,
     return 0;
 }
 
+//打开一个tap设备，并运行指定的脚本
 static int net_tap_init(const NetdevTapOptions *tap, int *vnet_hdr,
-                        const char *setup_script, char *ifname,
-                        size_t ifname_sz, int mq_required, Error **errp)
+                        const char *setup_script/*启动脚本*/, char *ifname/*接口名称*/,
+                        size_t ifname_sz/*接口名称长度*/, int mq_required, Error **errp)
 {
     Error *err = NULL;
     int fd, vnet_hdr_required;
@@ -636,15 +681,18 @@ static int net_tap_init(const NetdevTapOptions *tap, int *vnet_hdr,
         vnet_hdr_required = 0;
     }
 
+    //打开tap设备
     TFR(fd = tap_open(ifname, ifname_sz, vnet_hdr, vnet_hdr_required,
                       mq_required, errp));
     if (fd < 0) {
         return -1;
     }
 
+    //如有必要，运行setup脚本
     if (setup_script &&
         setup_script[0] != '\0' &&
         strcmp(setup_script, "no") != 0) {
+        //装载运行脚本
         launch_script(setup_script, ifname, fd, &err);
         if (err) {
             error_propagate(errp, err);
@@ -658,28 +706,31 @@ static int net_tap_init(const NetdevTapOptions *tap, int *vnet_hdr,
 
 #define MAX_TAP_QUEUES 1024
 
-static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer,
+static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer/*tap的对端nc*/,
                              const char *model, const char *name,
-                             const char *ifname, const char *script,
-                             const char *downscript, const char *vhostfdname,
+                             const char *ifname/*接口名称*/, const char *script/*tap设备up时需要执行的脚本*/,
+                             const char *downscript/*设备移除时需执行的脚本*/, const char *vhostfdname/*vhost设备对应的fd名称*/,
                              int vnet_hdr, int fd, Error **errp)
 {
     Error *err = NULL;
     TAPState *s = net_tap_fd_init(peer, model, name, fd, vnet_hdr);
     int vhostfd;
 
+    //设置发送缓冲大小
     tap_set_sndbuf(s->fd, tap, &err);
     if (err) {
         error_propagate(errp, err);
         return;
     }
 
+    //填充info_str
     if (tap->has_fd || tap->has_fds) {
         snprintf(s->nc.info_str, sizeof(s->nc.info_str), "fd=%d", fd);
     } else if (tap->has_helper) {
         snprintf(s->nc.info_str, sizeof(s->nc.info_str), "helper=%s",
                  tap->helper);
     } else {
+        /*设备移除时需执行脚本，参数为ifname*/
         snprintf(s->nc.info_str, sizeof(s->nc.info_str),
                  "ifname=%s,script=%s,downscript=%s", ifname, script,
                  downscript);
@@ -695,6 +746,7 @@ static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer,
         vhostfdname || (tap->has_vhostforce && tap->vhostforce)) {
         VhostNetOptions options;
 
+        /*使用vhost-net做为后端*/
         options.backend_type = VHOST_BACKEND_TYPE_KERNEL;
         options.net_backend = &s->nc;
         if (tap->has_poll_us) {
@@ -704,6 +756,7 @@ static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer,
         }
 
         if (vhostfdname) {
+            /*通过vhostfd字符串，获得vhostfd*/
             vhostfd = monitor_fd_param(cur_mon, vhostfdname, &err);
             if (vhostfd == -1) {
                 if (tap->has_vhostforce && tap->vhostforce) {
@@ -715,6 +768,7 @@ static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer,
             }
             qemu_set_nonblock(vhostfd);
         } else {
+            /*打开vhost-net字符设备，获得对应的fd*/
             vhostfd = open("/dev/vhost-net", O_RDWR);
             if (vhostfd < 0) {
                 if (tap->has_vhostforce && tap->vhostforce) {
@@ -730,6 +784,7 @@ static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer,
         }
         options.opaque = (void *)(uintptr_t)vhostfd;
 
+        /*初始化vhost-net*/
         s->vhost_net = vhost_net_init(&options);
         if (!s->vhost_net) {
             if (tap->has_vhostforce && tap->vhostforce) {
@@ -750,6 +805,7 @@ static int get_fds(char *str, char *fds[], int max)
     size_t len = strlen(str);
     int i = 0;
 
+    //将ptr按':'划开，将每个元素存入fds中，并返回
     while (i < max && ptr < str + len) {
         this = strchr(ptr, ':');
 
@@ -770,7 +826,8 @@ static int get_fds(char *str, char *fds[], int max)
     return i;
 }
 
-int net_init_tap(const Netdev *netdev, const char *name,
+//创建tap类net client
+int net_init_tap(const Netdev *netdev, const char *name/*net client唯一标识*/,
                  NetClientState *peer, Error **errp)
 {
     const NetdevTapOptions *tap;
@@ -782,6 +839,7 @@ int net_init_tap(const Netdev *netdev, const char *name,
     const char *vhostfdname;
     char ifname[128];
 
+    //此时由于创建的tap类net client,故netdev类型为tap
     assert(netdev->type == NET_CLIENT_DRIVER_TAP);
     tap = &netdev->u.tap;
     queues = tap->has_queues ? tap->queues : 1;
@@ -795,6 +853,7 @@ int net_init_tap(const Netdev *netdev, const char *name,
     }
 
     if (tap->has_fd) {
+        /*如果指供了fd,则以下参数不得提供*/
         if (tap->has_ifname || tap->has_script || tap->has_downscript ||
             tap->has_vnet_hdr || tap->has_helper || tap->has_queues ||
             tap->has_fds || tap->has_vhostfds) {
@@ -804,6 +863,7 @@ int net_init_tap(const Netdev *netdev, const char *name,
             return -1;
         }
 
+        //获得tap->fd指定的tap设备fd描述符
         fd = monitor_fd_param(cur_mon, tap->fd, &err);
         if (fd == -1) {
             error_propagate(errp, err);
@@ -814,19 +874,22 @@ int net_init_tap(const Netdev *netdev, const char *name,
 
         vnet_hdr = tap_probe_vnet_hdr(fd);
 
+        //通过以上参数创始TapState
         net_init_tap_one(tap, peer, "tap", name, NULL,
                          script, downscript,
-                         vhostfdname, vnet_hdr, fd, &err);
+                         vhostfdname, vnet_hdr/*是否使能了vnet_hdr*/, fd/*tap设备fd*/, &err);
         if (err) {
             error_propagate(errp, err);
             return -1;
         }
     } else if (tap->has_fds) {
+        //如果提供了fds，多队列情况
         char **fds;
         char **vhost_fds;
         int nfds = 0, nvhosts = 0;
         int ret = 0;
 
+        //与以下参数相冲突
         if (tap->has_ifname || tap->has_script || tap->has_downscript ||
             tap->has_vnet_hdr || tap->has_helper || tap->has_queues ||
             tap->has_vhostfd) {
@@ -839,8 +902,10 @@ int net_init_tap(const Netdev *netdev, const char *name,
         fds = g_new0(char *, MAX_TAP_QUEUES);
         vhost_fds = g_new0(char *, MAX_TAP_QUEUES);
 
+        //分隔tap->fds中配置了多少个fd,存入到fds中
         nfds = get_fds(tap->fds, fds, MAX_TAP_QUEUES);
         if (tap->has_vhostfds) {
+            //如果还配置了vhostfds,则split并存入vhost_fds中
             nvhosts = get_fds(tap->vhostfds, vhost_fds, MAX_TAP_QUEUES);
             if (nfds != nvhosts) {
                 error_setg(errp, "The number of fds passed does not match "
@@ -850,6 +915,7 @@ int net_init_tap(const Netdev *netdev, const char *name,
             }
         }
 
+        //针对每个nfds,创建一个TAPState
         for (i = 0; i < nfds; i++) {
             fd = monitor_fd_param(cur_mon, fds[i], &err);
             if (fd == -1) {
@@ -869,9 +935,10 @@ int net_init_tap(const Netdev *netdev, const char *name,
                 goto free_fail;
             }
 
+            //创建此TAPState
             net_init_tap_one(tap, peer, "tap", name, ifname,
                              script, downscript,
-                             tap->has_vhostfds ? vhost_fds[i] : NULL,
+                             tap->has_vhostfds ? vhost_fds[i] : NULL/*传入此tap对应的vhostfd*/,
                              vnet_hdr, fd, &err);
             if (err) {
                 error_propagate(errp, err);
@@ -891,6 +958,7 @@ free_fail:
         g_free(vhost_fds);
         return ret;
     } else if (tap->has_helper) {
+        /*如果提供了helper,则以下参数与之冲突*/
         if (tap->has_ifname || tap->has_script || tap->has_downscript ||
             tap->has_vnet_hdr || tap->has_queues || tap->has_vhostfds) {
             error_setg(errp, "ifname=, script=, downscript=, vnet_hdr=, "
@@ -909,6 +977,7 @@ free_fail:
         qemu_set_nonblock(fd);
         vnet_hdr = tap_probe_vnet_hdr(fd);
 
+        /*创建TAPState*/
         net_init_tap_one(tap, peer, "bridge", name, ifname,
                          script, downscript, vhostfdname,
                          vnet_hdr, fd, &err);
@@ -918,10 +987,12 @@ free_fail:
             return -1;
         }
     } else {
+        /*其它方式，与hash_vhostfds相冲突*/
         if (tap->has_vhostfds) {
             error_setg(errp, "vhostfds= is invalid if fds= wasn't specified");
             return -1;
         }
+        //接口up/down脚本
         script = tap->has_script ? tap->script : DEFAULT_NETWORK_SCRIPT;
         downscript = tap->has_downscript ? tap->downscript :
             DEFAULT_NETWORK_DOWN_SCRIPT;
@@ -932,9 +1003,10 @@ free_fail:
             ifname[0] = '\0';
         }
 
+        //针对每个queues，创建一个tap设备
         for (i = 0; i < queues; i++) {
             fd = net_tap_init(tap, &vnet_hdr, i >= 1 ? "no" : script,
-                              ifname, sizeof ifname, queues > 1, errp);
+                              ifname/*tap接口名称*/, sizeof ifname, queues > 1, errp);
             if (fd == -1) {
                 return -1;
             }
@@ -947,10 +1019,11 @@ free_fail:
                 }
             }
 
+            /*创建TAPState*/
             net_init_tap_one(tap, peer, "tap", name, ifname,
                              i >= 1 ? "no" : script,
                              i >= 1 ? "no" : downscript,
-                             vhostfdname, vnet_hdr, fd, &err);
+                             vhostfdname, vnet_hdr, fd/*tap设备对应的fd*/, &err);
             if (err) {
                 error_propagate(errp, err);
                 close(fd);

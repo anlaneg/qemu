@@ -16,24 +16,20 @@
 
 import os
 import re
-import sys
 from collections import OrderedDict
 
 from qapi.error import QAPIParseError, QAPISemError
 from qapi.source import QAPISourceInfo
 
 
-class QAPISchemaParser(object):
+class QAPISchemaParser:
 
     def __init__(self, fname, previously_included=None, incl_info=None):
         previously_included = previously_included or set()
         previously_included.add(os.path.abspath(fname))
 
         try:
-            if sys.version_info[0] >= 3:
-                fp = open(fname, 'r', encoding='utf-8')
-            else:
-                fp = open(fname, 'r')
+            fp = open(fname, 'r', encoding='utf-8')
             self.src = fp.read()
         except IOError as e:
             raise QAPISemError(incl_info or QAPISourceInfo(None, None, None),
@@ -286,14 +282,13 @@ class QAPISchemaParser(object):
                 doc.end_comment()
                 self.accept()
                 return doc
-            else:
-                doc.append(self.val)
+            doc.append(self.val)
             self.accept(False)
 
         raise QAPIParseError(self, "documentation comment must end with '##'")
 
 
-class QAPIDoc(object):
+class QAPIDoc:
     """
     A documentation comment block, either definition or free-form
 
@@ -312,7 +307,7 @@ class QAPIDoc(object):
     Free-form documentation blocks consist only of a body section.
     """
 
-    class Section(object):
+    class Section:
         def __init__(self, name=None):
             # optional section name (argument/member or section name)
             self.name = name
@@ -324,7 +319,7 @@ class QAPIDoc(object):
 
     class ArgSection(Section):
         def __init__(self, name):
-            QAPIDoc.Section.__init__(self, name)
+            super().__init__(name)
             self.member = None
 
         def connect(self, member):
@@ -496,7 +491,7 @@ class QAPIDoc(object):
             raise QAPIParseError(self._parser,
                                  "'%s' can't follow '%s' section"
                                  % (name, self.sections[0].name))
-        elif self._is_section_tag(name):
+        if self._is_section_tag(name):
             line = line[len(name)+1:]
             self._start_section(name[:-1])
 
@@ -555,16 +550,30 @@ class QAPIDoc(object):
             self.args[member.name] = QAPIDoc.ArgSection(member.name)
         self.args[member.name].connect(member)
 
+    def connect_feature(self, feature):
+        if feature.name not in self.features:
+            raise QAPISemError(feature.info,
+                               "feature '%s' lacks documentation"
+                               % feature.name)
+        self.features[feature.name].connect(feature)
+
     def check_expr(self, expr):
         if self.has_section('Returns') and 'command' not in expr:
             raise QAPISemError(self.info,
                                "'Returns:' is only valid for commands")
 
     def check(self):
-        bogus = [name for name, section in self.args.items()
-                 if not section.member]
-        if bogus:
-            raise QAPISemError(
-                self.info,
-                "the following documented members are not in "
-                "the declaration: %s" % ", ".join(bogus))
+
+        def check_args_section(args, info, what):
+            bogus = [name for name, section in args.items()
+                     if not section.member]
+            if bogus:
+                raise QAPISemError(
+                    self.info,
+                    "documented member%s '%s' %s not exist"
+                    % ("s" if len(bogus) > 1 else "",
+                       "', '".join(bogus),
+                       "do" if len(bogus) > 1 else "does"))
+
+        check_args_section(self.args, self.info, 'members')
+        check_args_section(self.features, self.info, 'features')

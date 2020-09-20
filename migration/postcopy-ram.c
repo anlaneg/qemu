@@ -51,21 +51,25 @@ struct PostcopyDiscardState {
 
 static NotifierWithReturnList postcopy_notifier_list;
 
+//通知链初始化
 void postcopy_infrastructure_init(void)
 {
     notifier_with_return_list_init(&postcopy_notifier_list);
 }
 
+//添加notifier
 void postcopy_add_notifier(NotifierWithReturn *nn)
 {
     notifier_with_return_list_add(&postcopy_notifier_list, nn);
 }
 
+//移除notifier
 void postcopy_remove_notifier(NotifierWithReturn *n)
 {
     notifier_with_return_remove(n);
 }
 
+//触发通知
 int postcopy_notify(enum PostcopyNotifyReason reason, Error **errp)
 {
     struct PostcopyNotifyData pnd;
@@ -308,7 +312,7 @@ static bool ufd_check_and_apply(int ufd, MigrationIncomingState *mis)
         return false;
     }
 
-    if (getpagesize() != ram_pagesize_summary()) {
+    if (qemu_real_host_page_size != ram_pagesize_summary()) {
         bool have_hp = false;
         /* We've got a huge page */
 #ifdef UFFD_FEATURE_MISSING_HUGETLBFS
@@ -346,7 +350,7 @@ static int test_ramblock_postcopiable(RAMBlock *rb, void *opaque)
  */
 bool postcopy_ram_supported_by_host(MigrationIncomingState *mis)
 {
-    long pagesize = getpagesize();
+    long pagesize = qemu_real_host_page_size;
     int ufd = -1;
     bool ret = false; /* Error unless we change it */
     void *testarea = NULL;

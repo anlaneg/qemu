@@ -22,10 +22,13 @@
  */
 QNum *qnum_from_int(int64_t value)
 {
+    //申请一个QNum对象
     QNum *qn = g_new(QNum, 1);
 
     qobject_init(QOBJECT(qn), QTYPE_QNUM);
+    //指明类型为int64
     qn->kind = QNUM_I64;
+    //设置他对应的值
     qn->u.i64 = value;
 
     return qn;

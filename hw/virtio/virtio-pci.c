@@ -501,6 +501,7 @@ static MemoryRegion *virtio_address_space_lookup(VirtIOPCIProxy *proxy,
         if (*off >= reg->offset &&
             *off + len <= reg->offset + reg->size) {
             *off -= reg->offset;
+            //按地址查找到对应的mr
             return &reg->mr;
         }
     }
@@ -559,8 +560,8 @@ void virtio_address_space_write(VirtIOPCIProxy *proxy, hwaddr addr,
 }
 
 static void
-virtio_address_space_read(VirtIOPCIProxy *proxy, hwaddr addr,
-                          uint8_t *buf, int len)
+virtio_address_space_read(VirtIOPCIProxy *proxy, hwaddr addr/*要访问的地址*/,
+                          uint8_t *buf/*出参，读取到的内容*/, int len/*要访问的长度*/)
 {
     uint64_t val;
     MemoryRegion *mr;
@@ -570,6 +571,7 @@ virtio_address_space_read(VirtIOPCIProxy *proxy, hwaddr addr,
      */
     addr &= ~(len - 1);
 
+    //查找到addr对应的memory region
     mr = virtio_address_space_lookup(proxy, &addr, len);
     if (!mr) {
         return;
@@ -578,8 +580,10 @@ virtio_address_space_read(VirtIOPCIProxy *proxy, hwaddr addr,
     /* Make sure caller aligned buf properly */
     assert(!(((uintptr_t)buf) & (len - 1)));
 
+    //完成内存region的访问
     memory_region_dispatch_read(mr, addr, &val, size_memop(len) | MO_LE,
                                 MEMTXATTRS_UNSPECIFIED);
+    //按读取的长度，填充buf
     switch (len) {
     case 1:
         pci_set_byte(buf, val);
@@ -609,10 +613,14 @@ static void virtio_write_config(PCIDevice *pci_dev, uint32_t address,
         pcie_cap_flr_write_config(pci_dev, address, val, len);
     }
 
-    if (range_covers_byte(address, len, PCI_COMMAND) &&
-        !(pci_dev->config[PCI_COMMAND] & PCI_COMMAND_MASTER)) {
-        virtio_pci_stop_ioeventfd(proxy);
-        virtio_set_status(vdev, vdev->status & ~VIRTIO_CONFIG_S_DRIVER_OK);
+    if (range_covers_byte(address, len, PCI_COMMAND)) {
+        if (!(pci_dev->config[PCI_COMMAND] & PCI_COMMAND_MASTER)) {
+            virtio_set_disabled(vdev, true);
+            virtio_pci_stop_ioeventfd(proxy);
+            virtio_set_status(vdev, vdev->status & ~VIRTIO_CONFIG_S_DRIVER_OK);
+        } else {
+            virtio_set_disabled(vdev, false);
+        }
     }
 
     if (proxy->config_cap &&
@@ -651,6 +659,7 @@ static uint32_t virtio_read_config(PCIDevice *pci_dev,
         len = le32_to_cpu(cfg->cap.length);
 
         if (len == 1 || len == 2 || len == 4) {
+            //读取proxy对应的off地址的数据，将结果存在cfg->pci_cfg_data中
             assert(len <= sizeof cfg->pci_cfg_data);
             virtio_address_space_read(proxy, off, cfg->pci_cfg_data, len);
         }
@@ -914,6 +923,7 @@ static void virtio_pci_vector_poll(PCIDevice *dev,
         if (!virtio_queue_get_num(vdev, queue_no)) {
             break;
         }
+        //取queue_no对应的中断号
         vector = virtio_queue_vector(vdev, queue_no);
         if (vector < vector_start || vector >= vector_end ||
             !msix_is_masked(dev, vector)) {
@@ -923,6 +933,7 @@ static void virtio_pci_vector_poll(PCIDevice *dev,
         notifier = virtio_queue_get_guest_notifier(vq);
         if (k->guest_notifier_pending) {
             if (k->guest_notifier_pending(vdev, queue_no)) {
+                /*设置中断触发*/
                 msix_set_pending(dev, vector);
             }
         } else if (event_notifier_test_and_clear(notifier)) {
@@ -1211,7 +1222,7 @@ static uint64_t virtio_pci_common_read(void *opaque, hwaddr addr,
 }
 
 //virtio_pci硬件信息设置函数
-static void virtio_pci_common_write(void *opaque, hwaddr addr,
+static void virtio_pci_common_write(void *opaque, hwaddr addr/*设备地址*/,
                                     uint64_t val, unsigned size)
 {
     VirtIOPCIProxy *proxy = opaque;
@@ -1257,26 +1268,29 @@ static void virtio_pci_common_write(void *opaque, hwaddr addr,
 
         break;
     case VIRTIO_PCI_COMMON_Q_SELECT:
-    	//系统指明使能val号queue
+    	//指明队列上下文，明确待操作的队列id
         if (val < VIRTIO_QUEUE_MAX) {
             vdev->queue_sel = val;
         }
         break;
     case VIRTIO_PCI_COMMON_Q_SIZE:
-    	//指明vdev->queue_sel号queue中队列大小
+    	//指定队列大小
         proxy->vqs[vdev->queue_sel].num = val;
+        virtio_queue_set_num(vdev, vdev->queue_sel,
+                             proxy->vqs[vdev->queue_sel].num);
         break;
     case VIRTIO_PCI_COMMON_Q_MSIX:
+        //移除掉此队列的旧中断向量
         msix_vector_unuse(&proxy->pci_dev,
                           virtio_queue_vector(vdev, vdev->queue_sel));
         /* Make it possible for guest to discover an error took place. */
+        //检查此向量是否可使用，如不可使用，修改val为no_vector
         if (msix_vector_use(&proxy->pci_dev, val) < 0) {
             val = VIRTIO_NO_VECTOR;
         }
         virtio_queue_set_vector(vdev, vdev->queue_sel, val);
         break;
-    case VIRTIO_PCI_COMMON_Q_ENABLE:
-    	//设置vdev->queue_sel号队列使能
+    case VIRTIO_PCI_COMMON_Q_ENABLE://使能队列
         virtio_queue_set_num(vdev, vdev->queue_sel,
                              proxy->vqs[vdev->queue_sel].num);//设置队列大小
         //设置队列的desc,avail,used指针
@@ -1296,16 +1310,16 @@ static void virtio_pci_common_write(void *opaque, hwaddr addr,
     case VIRTIO_PCI_COMMON_Q_DESCHI://设置desc地址高32位
         proxy->vqs[vdev->queue_sel].desc[1] = val;
         break;
-    case VIRTIO_PCI_COMMON_Q_AVAILLO:
+    case VIRTIO_PCI_COMMON_Q_AVAILLO://设置avail表的低32位
         proxy->vqs[vdev->queue_sel].avail[0] = val;
         break;
-    case VIRTIO_PCI_COMMON_Q_AVAILHI:
+    case VIRTIO_PCI_COMMON_Q_AVAILHI://设置avail表的高32位
         proxy->vqs[vdev->queue_sel].avail[1] = val;
         break;
-    case VIRTIO_PCI_COMMON_Q_USEDLO:
+    case VIRTIO_PCI_COMMON_Q_USEDLO://设置used表的低32位
         proxy->vqs[vdev->queue_sel].used[0] = val;
         break;
-    case VIRTIO_PCI_COMMON_Q_USEDHI:
+    case VIRTIO_PCI_COMMON_Q_USEDHI://设置used表的高32位
         proxy->vqs[vdev->queue_sel].used[1] = val;
         break;
     default:
@@ -1328,6 +1342,7 @@ static void virtio_pci_notify_write(void *opaque, hwaddr addr,
     unsigned queue = addr / virtio_pci_queue_mem_mult(proxy);
 
     if (queue < VIRTIO_QUEUE_MAX) {
+        //知会queue队列
         virtio_queue_notify(vdev, queue);
     }
 }
@@ -1400,7 +1415,7 @@ static void virtio_pci_modern_regions_init(VirtIOPCIProxy *proxy)
 {
     static const MemoryRegionOps common_ops = {
         .read = virtio_pci_common_read,
-        .write = virtio_pci_common_write,
+        .write = virtio_pci_common_write,/*注册virtio-pci设备的write函数回调*/
         .impl = {
             .min_access_size = 1,
             .max_access_size = 4,
@@ -1464,6 +1479,7 @@ static void virtio_pci_modern_regions_init(VirtIOPCIProxy *proxy)
                           "virtio-pci-device",
                           proxy->device.size);
 
+    /*注册pci-notify的处理ops*/
     memory_region_init_io(&proxy->notify.mr, OBJECT(proxy),
                           &notify_ops,
                           virtio_bus_get_device(&proxy->bus),
@@ -1660,6 +1676,7 @@ static void virtio_pci_device_plugged(DeviceState *d, Error **errp)
     }
 
     proxy->pci_dev.config_write = virtio_write_config;
+    //注册pci_dev配置区间的读函数
     proxy->pci_dev.config_read = virtio_read_config;
 
     if (legacy) {
@@ -1712,6 +1729,7 @@ static void virtio_pci_realize(PCIDevice *pci_dev, Error **errp)
      *
      *   region 0   --  virtio legacy io bar
      *   region 1   --  msi-x bar
+     *   region 2   --  virtio modern io bar (off by default)
      *   region 4+5 --  virtio modern memory (64bit) bar
      *
      */
@@ -1893,7 +1911,7 @@ static void virtio_pci_class_init(ObjectClass *klass, void *data)
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
     VirtioPCIClass *vpciklass = VIRTIO_PCI_CLASS(klass);
 
-    dc->props = virtio_pci_properties;
+    device_class_set_props(dc, virtio_pci_properties);
     k->realize = virtio_pci_realize;
     k->exit = virtio_pci_exit;
     k->vendor_id = PCI_VENDOR_ID_REDHAT_QUMRANET;
@@ -1904,6 +1922,7 @@ static void virtio_pci_class_init(ObjectClass *klass, void *data)
     dc->reset = virtio_pci_reset;
 }
 
+//定义virtio-pci类型设备
 static const TypeInfo virtio_pci_info = {
     .name          = TYPE_VIRTIO_PCI,
     .parent        = TYPE_PCI_DEVICE,
@@ -1932,7 +1951,7 @@ static void virtio_pci_generic_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->props = virtio_pci_generic_properties;
+    device_class_set_props(dc, virtio_pci_generic_properties);
 }
 
 static void virtio_pci_transitional_instance_init(Object *obj)
@@ -1951,11 +1970,14 @@ static void virtio_pci_non_transitional_instance_init(Object *obj)
     proxy->disable_modern = false;
 }
 
+//virtio_pci设备类型注册
 void virtio_pci_types_register(const VirtioPCIDeviceTypeInfo *t)
 {
     char *base_name = NULL;
+    //动态定义base类型
     TypeInfo base_type_info = {
         .name          = t->base_name,
+        //如果有parent，则使用parent类型，否则使用‘virtio-pci’类型
         .parent        = t->parent ? t->parent : TYPE_VIRTIO_PCI,
         .instance_size = t->instance_size,
         .instance_init = t->instance_init,
@@ -1963,9 +1985,11 @@ void virtio_pci_types_register(const VirtioPCIDeviceTypeInfo *t)
         .abstract      = true,
         .interfaces    = t->interfaces,
     };
+
+    //定义generic类型
     TypeInfo generic_type_info = {
         .name = t->generic_name,
-        .parent = base_type_info.name,
+        .parent = base_type_info.name,/*定义其父类型为base_type*/
         .class_init = virtio_pci_generic_class_init,
         .interfaces = (InterfaceInfo[]) {
             { INTERFACE_PCIE_DEVICE },
@@ -1992,6 +2016,7 @@ void virtio_pci_types_register(const VirtioPCIDeviceTypeInfo *t)
         base_type_info.class_data = (void *)t;
     }
 
+    //注册base类型及generic类型
     type_register(&base_type_info);
     if (generic_type_info.name) {
         type_register(&generic_type_info);

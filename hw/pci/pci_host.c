@@ -46,6 +46,7 @@ do { printf("pci_host_data: " fmt , ## __VA_ARGS__); } while (0)
 /* the helper function to get a PCIDevice* for a given pci address */
 static inline PCIDevice *pci_dev_find_by_addr(PCIBus *bus, uint32_t addr)
 {
+    //自地址中取bus_num,devfn(具体见以上注释）
     uint8_t bus_num = addr >> 16;
     uint8_t devfn = addr >> 8;
 
@@ -81,6 +82,7 @@ void pci_host_config_write_common(PCIDevice *pci_dev, uint32_t addr,
     pci_dev->config_write(pci_dev, addr, val, MIN(len, limit - addr));
 }
 
+//pci指定地址内容读取
 uint32_t pci_host_config_read_common(PCIDevice *pci_dev, uint32_t addr,
                                      uint32_t limit, uint32_t len)
 {
@@ -99,6 +101,7 @@ uint32_t pci_host_config_read_common(PCIDevice *pci_dev, uint32_t addr,
         return ~0x0;
     }
 
+    //pci设备配置读取
     ret = pci_dev->config_read(pci_dev, addr, MIN(len, limit - addr));
     trace_pci_cfg_read(pci_dev->name, PCI_SLOT(pci_dev->devfn),
                        PCI_FUNC(pci_dev->devfn), addr, ret);
@@ -106,7 +109,7 @@ uint32_t pci_host_config_read_common(PCIDevice *pci_dev, uint32_t addr,
     return ret;
 }
 
-void pci_data_write(PCIBus *s, uint32_t addr, uint32_t val, int len)
+void pci_data_write(PCIBus *s, uint32_t addr, uint32_t val, unsigned len)
 {
     PCIDevice *pci_dev = pci_dev_find_by_addr(s, addr);
     uint32_t config_addr = addr & (PCI_CONFIG_SPACE_SIZE - 1);
@@ -115,28 +118,25 @@ void pci_data_write(PCIBus *s, uint32_t addr, uint32_t val, int len)
         return;
     }
 
-    PCI_DPRINTF("%s: %s: addr=%02" PRIx32 " val=%08" PRIx32 " len=%d\n",
-                __func__, pci_dev->name, config_addr, val, len);
     pci_host_config_write_common(pci_dev, config_addr, PCI_CONFIG_SPACE_SIZE,
                                  val, len);
 }
 
-uint32_t pci_data_read(PCIBus *s, uint32_t addr, int len)
+uint32_t pci_data_read(PCIBus *s, uint32_t addr, unsigned len)
 {
+    //取地址对应的pci设备
     PCIDevice *pci_dev = pci_dev_find_by_addr(s, addr);
+
+    //取要读取的实际配置地址
     uint32_t config_addr = addr & (PCI_CONFIG_SPACE_SIZE - 1);
-    uint32_t val;
 
     if (!pci_dev) {
         return ~0x0;
     }
 
-    val = pci_host_config_read_common(pci_dev, config_addr,
-                                      PCI_CONFIG_SPACE_SIZE, len);
-    PCI_DPRINTF("%s: %s: addr=%02"PRIx32" val=%08"PRIx32" len=%d\n",
-                __func__, pci_dev->name, config_addr, val, len);
-
-    return val;
+    //读取config_addr
+    return pci_host_config_read_common(pci_dev, config_addr,
+                                       PCI_CONFIG_SPACE_SIZE, len);
 }
 
 static void pci_host_config_write(void *opaque, hwaddr addr,
@@ -167,8 +167,7 @@ static void pci_host_data_write(void *opaque, hwaddr addr,
                                 uint64_t val, unsigned len)
 {
     PCIHostState *s = opaque;
-    PCI_DPRINTF("write addr " TARGET_FMT_plx " len %d val %x\n",
-                addr, len, (unsigned)val);
+
     if (s->config_reg & (1u << 31))
         pci_data_write(s->bus, s->config_reg | (addr & 3), val, len);
 }
@@ -177,14 +176,11 @@ static uint64_t pci_host_data_read(void *opaque,
                                    hwaddr addr, unsigned len)
 {
     PCIHostState *s = opaque;
-    uint32_t val;
+
     if (!(s->config_reg & (1U << 31))) {
         return 0xffffffff;
     }
-    val = pci_data_read(s->bus, s->config_reg | (addr & 3), len);
-    PCI_DPRINTF("read addr " TARGET_FMT_plx " len %d val %x\n",
-                addr, len, val);
-    return val;
+    return pci_data_read(s->bus, s->config_reg | (addr & 3), len);
 }
 
 const MemoryRegionOps pci_host_conf_le_ops = {

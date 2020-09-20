@@ -11,7 +11,7 @@
 # This work is licensed under the terms of the GNU GPL, version 2.
 # See the COPYING file in the top-level directory.
 #依据/block文件夹中的每个.c文件，生成一条block_driver_modules记录
-from __future__ import print_function
+
 import sys
 import os
 

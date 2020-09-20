@@ -56,7 +56,6 @@ typedef int (*IsaDmaTransferHandler)(void *opaque, int nchan, int pos,
 typedef struct IsaDmaClass {
     InterfaceClass parent;
 
-    IsaDmaTransferMode (*get_transfer_mode)(IsaDma *obj, int nchan);
     bool (*has_autoinitialization)(IsaDma *obj, int nchan);
     int (*read_memory)(IsaDma *obj, int nchan, void *buf, int pos, int len);
     int (*write_memory)(IsaDma *obj, int nchan, void *buf, int pos, int len);
@@ -70,6 +69,7 @@ typedef struct IsaDmaClass {
 
 typedef struct ISADeviceClass {
     DeviceClass parent_class;
+    void (*build_aml)(ISADevice *dev, Aml *scope);
 } ISADeviceClass;
 
 struct ISABus {
@@ -78,7 +78,7 @@ struct ISABus {
     /*< public >*/
 
     MemoryRegion *address_space;
-    MemoryRegion *address_space_io;
+    MemoryRegion *address_space_io;/*isabus的mr空间*/
     qemu_irq *irqs;
     IsaDma *dma[2];
 };
@@ -88,7 +88,7 @@ struct ISADevice {
     DeviceState parent_obj;
     /*< public >*/
 
-    uint32_t isairq[2];
+    int8_t isairq[2];      /* -1 = unassigned */
     int nirqs;
     int ioport_id;
 };
@@ -96,9 +96,9 @@ struct ISADevice {
 ISABus *isa_bus_new(DeviceState *dev, MemoryRegion *address_space,
                     MemoryRegion *address_space_io, Error **errp);
 void isa_bus_irqs(ISABus *bus, qemu_irq *irqs);
-qemu_irq isa_get_irq(ISADevice *dev, int isairq);
-void isa_init_irq(ISADevice *dev, qemu_irq *p, int isairq);
-void isa_connect_gpio_out(ISADevice *isadev, int gpioirq, int isairq);
+qemu_irq isa_get_irq(ISADevice *dev, unsigned isairq);
+void isa_init_irq(ISADevice *dev, qemu_irq *p, unsigned isairq);
+void isa_connect_gpio_out(ISADevice *isadev, int gpioirq, unsigned isairq);
 void isa_bus_dma(ISABus *bus, IsaDma *dma8, IsaDma *dma16);
 IsaDma *isa_get_dma(ISABus *bus, int nchan);
 MemoryRegion *isa_address_space(ISADevice *dev);
@@ -108,6 +108,7 @@ ISADevice *isa_try_create(ISABus *bus, const char *name);
 ISADevice *isa_create_simple(ISABus *bus, const char *name);
 
 ISADevice *isa_vga_init(ISABus *bus);
+void isa_build_aml(ISABus *bus, Aml *scope);
 
 /**
  * isa_register_ioport: Install an I/O port region on the ISA bus.
@@ -146,5 +147,7 @@ static inline ISABus *isa_bus_from_device(ISADevice *d)
 {
     return ISA_BUS(qdev_get_parent_bus(DEVICE(d)));
 }
+
+#define TYPE_PIIX4_PCI_DEVICE "piix4-isa"
 
 #endif

@@ -70,6 +70,7 @@ typedef struct BDRVNBDState {
     CoMutex send_mutex;
     CoQueue free_sema;
     Coroutine *connection_co;
+    Coroutine *teardown_co;
     QemuCoSleepState *connection_co_sleep_ns_state;
     bool drained;
     bool wait_drained_end;
@@ -93,6 +94,19 @@ typedef struct BDRVNBDState {
 } BDRVNBDState;
 
 static int nbd_client_connect(BlockDriverState *bs, Error **errp);
+
+static void nbd_clear_bdrvstate(BDRVNBDState *s)
+{
+    object_unref(OBJECT(s->tlscreds));
+    qapi_free_SocketAddress(s->saddr);
+    s->saddr = NULL;
+    g_free(s->export);
+    s->export = NULL;
+    g_free(s->tlscredsid);
+    s->tlscredsid = NULL;
+    g_free(s->x_dirty_bitmap);
+    s->x_dirty_bitmap = NULL;
+}
 
 static void nbd_channel_error(BDRVNBDState *s, int ret)
 {
@@ -203,7 +217,15 @@ static void nbd_teardown_connection(BlockDriverState *bs)
             qemu_co_sleep_wake(s->connection_co_sleep_ns_state);
         }
     }
-    BDRV_POLL_WHILE(bs, s->connection_co);
+    if (qemu_in_coroutine()) {
+        s->teardown_co = qemu_coroutine_self();
+        /* connection_co resumes us when it terminates */
+        qemu_coroutine_yield();
+        s->teardown_co = NULL;
+    } else {
+        BDRV_POLL_WHILE(bs, s->connection_co);
+    }
+    assert(!s->connection_co);
 }
 
 static bool nbd_client_connecting(BDRVNBDState *s)
@@ -395,6 +417,9 @@ static coroutine_fn void nbd_connection_entry(void *opaque)
         s->ioc = NULL;
     }
 
+    if (s->teardown_co) {
+        aio_co_wake(s->teardown_co);
+    }
     aio_wait_kick();
 }
 
@@ -866,6 +891,7 @@ typedef struct NBDReplyChunkIter {
 static void nbd_iter_channel_error(NBDReplyChunkIter *iter,
                                    int ret, Error **local_err)
 {
+    assert(local_err && *local_err);
     assert(ret < 0);
 
     if (!iter->ret) {
@@ -1294,9 +1320,7 @@ static int coroutine_fn nbd_client_co_block_status(
     NBDRequest request = {
         .type = NBD_CMD_BLOCK_STATUS,
         .from = offset,
-        .len = MIN(MIN_NON_ZERO(QEMU_ALIGN_DOWN(INT_MAX,
-                                                bs->bl.request_alignment),
-                                s->info.max_block),
+        .len = MIN(QEMU_ALIGN_DOWN(INT_MAX, bs->bl.request_alignment),
                    MIN(bytes, s->info.size - offset)),
         .flags = NBD_CMD_FLAG_REQ_ONE,
     };
@@ -1515,8 +1539,10 @@ static int nbd_parse_uri(const char *filename, QDict *options)
         goto out;
     }
 
-    p = uri->path ? uri->path : "/";
-    p += strspn(p, "/");
+    p = uri->path ? uri->path : "";
+    if (p[0] == '/') {
+        p++;
+    }
     if (p[0]) {
         qdict_put_str(options, "export", p);
     }
@@ -1832,6 +1858,10 @@ static int nbd_process_options(BlockDriverState *bs, QDict *options,
     }
 
     s->export = g_strdup(qemu_opt_get(opts, "export"));
+    if (s->export && strlen(s->export) > NBD_MAX_STRING_SIZE) {
+        error_setg(errp, "export name too long to send to server");
+        goto error;
+    }
 
     s->tlscredsid = g_strdup(qemu_opt_get(opts, "tls-creds"));
     if (s->tlscredsid) {
@@ -1849,16 +1879,18 @@ static int nbd_process_options(BlockDriverState *bs, QDict *options,
     }
 
     s->x_dirty_bitmap = g_strdup(qemu_opt_get(opts, "x-dirty-bitmap"));
+    if (s->x_dirty_bitmap && strlen(s->x_dirty_bitmap) > NBD_MAX_STRING_SIZE) {
+        error_setg(errp, "x-dirty-bitmap query too long to send to server");
+        goto error;
+    }
+
     s->reconnect_delay = qemu_opt_get_number(opts, "reconnect-delay", 0);
 
     ret = 0;
 
  error:
     if (ret < 0) {
-        object_unref(OBJECT(s->tlscreds));
-        qapi_free_SocketAddress(s->saddr);
-        g_free(s->export);
-        g_free(s->tlscredsid);
+        nbd_clear_bdrvstate(s);
     }
     qemu_opts_del(opts);
     return ret;
@@ -1881,6 +1913,7 @@ static int nbd_open(BlockDriverState *bs, QDict *options, int flags,
 
     ret = nbd_client_connect(bs, errp);
     if (ret < 0) {
+        nbd_clear_bdrvstate(s);
         return ret;
     }
     /* successfully connected */
@@ -1922,7 +1955,7 @@ static void nbd_refresh_limits(BlockDriverState *bs, Error **errp)
     }
 
     bs->bl.request_alignment = min;
-    bs->bl.max_pdiscard = max;
+    bs->bl.max_pdiscard = QEMU_ALIGN_DOWN(INT_MAX, min);
     bs->bl.max_pwrite_zeroes = max;
     bs->bl.max_transfer = max;
 
@@ -1937,12 +1970,7 @@ static void nbd_close(BlockDriverState *bs)
     BDRVNBDState *s = bs->opaque;
 
     nbd_client_close(bs);
-
-    object_unref(OBJECT(s->tlscreds));
-    qapi_free_SocketAddress(s->saddr);
-    g_free(s->export);
-    g_free(s->tlscredsid);
-    g_free(s->x_dirty_bitmap);
+    nbd_clear_bdrvstate(s);
 }
 
 static int64_t nbd_getlength(BlockDriverState *bs)
@@ -2008,6 +2036,8 @@ static BlockDriver bdrv_nbd = {
     .protocol_name              = "nbd",
     .instance_size              = sizeof(BDRVNBDState),
     .bdrv_parse_filename        = nbd_parse_filename,
+    .bdrv_co_create_opts        = bdrv_co_create_opts_simple,
+    .create_opts                = &bdrv_create_opts_simple,
     .bdrv_file_open             = nbd_open,
     .bdrv_reopen_prepare        = nbd_client_reopen_prepare,
     .bdrv_co_preadv             = nbd_client_co_preadv,
@@ -2033,6 +2063,8 @@ static BlockDriver bdrv_nbd_tcp = {
     .protocol_name              = "nbd+tcp",
     .instance_size              = sizeof(BDRVNBDState),
     .bdrv_parse_filename        = nbd_parse_filename,
+    .bdrv_co_create_opts        = bdrv_co_create_opts_simple,
+    .create_opts                = &bdrv_create_opts_simple,
     .bdrv_file_open             = nbd_open,
     .bdrv_reopen_prepare        = nbd_client_reopen_prepare,
     .bdrv_co_preadv             = nbd_client_co_preadv,
@@ -2058,6 +2090,8 @@ static BlockDriver bdrv_nbd_unix = {
     .protocol_name              = "nbd+unix",
     .instance_size              = sizeof(BDRVNBDState),
     .bdrv_parse_filename        = nbd_parse_filename,
+    .bdrv_co_create_opts        = bdrv_co_create_opts_simple,
+    .create_opts                = &bdrv_create_opts_simple,
     .bdrv_file_open             = nbd_open,
     .bdrv_reopen_prepare        = nbd_client_reopen_prepare,
     .bdrv_co_preadv             = nbd_client_co_preadv,

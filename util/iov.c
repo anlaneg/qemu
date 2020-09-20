@@ -79,6 +79,7 @@ size_t iov_memset(const struct iovec *iov, const unsigned int iov_cnt,
     return done;
 }
 
+//取iov buffer总长度
 size_t iov_size(const struct iovec *iov, const unsigned int iov_cnt)
 {
     size_t len;

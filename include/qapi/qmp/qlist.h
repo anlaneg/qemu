@@ -17,15 +17,18 @@
 #include "qemu/queue.h"
 
 typedef struct QListEntry {
+    //list元素
     QObject *value;
     QTAILQ_ENTRY(QListEntry) next;
 } QListEntry;
 
 struct QList {
+    //qlist对象，单链表
     struct QObjectBase_ base;
     QTAILQ_HEAD(,QListEntry) head;
 };
 
+//将obj加入到链头部
 #define qlist_append(qlist, obj) \
         qlist_append_obj(qlist, QOBJECT(obj))
 
@@ -34,10 +37,10 @@ void qlist_append_int(QList *qlist, int64_t value);
 void qlist_append_null(QList *qlist);
 void qlist_append_str(QList *qlist, const char *value);
 
-#define QLIST_FOREACH_ENTRY(qlist, var)             \
-        for ((var) = ((qlist)->head.tqh_first);     \
-            (var);                                  \
-            (var) = ((var)->next.tqe_next))
+#define QLIST_FOREACH_ENTRY(qlist, var)                 \
+        for ((var) = QTAILQ_FIRST(&(qlist)->head);      \
+             (var);                                     \
+             (var) = QTAILQ_NEXT((var), next))
 
 static inline QObject *qlist_entry_obj(const QListEntry *entry)
 {
@@ -47,8 +50,6 @@ static inline QObject *qlist_entry_obj(const QListEntry *entry)
 QList *qlist_new(void);
 QList *qlist_copy(QList *src);
 void qlist_append_obj(QList *qlist, QObject *obj);
-void qlist_iter(const QList *qlist,
-                void (*iter)(QObject *obj, void *opaque), void *opaque);
 QObject *qlist_pop(QList *qlist);
 QObject *qlist_peek(QList *qlist);
 int qlist_empty(const QList *qlist);

@@ -49,10 +49,10 @@ typedef struct PCDIMMDevice {
     DeviceState parent_obj;
 
     /* public */
-    uint64_t addr;
-    uint32_t node;
-    int32_t slot;
-    HostMemoryBackend *hostmem;
+    uint64_t addr;//GPA起始位置
+    uint32_t node;//pcdimm设备所属numa
+    int32_t slot;//pcdimm设备所属插槽，默认为 -1，表示自动分配
+    HostMemoryBackend *hostmem;//对应的后端设备
 } PCDIMMDevice;
 
 /**

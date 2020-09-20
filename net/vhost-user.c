@@ -79,7 +79,7 @@ static int vhost_user_start(int queues, NetClientState *ncs[],
     options.backend_type = VHOST_BACKEND_TYPE_USER;
 
     for (i = 0; i < queues; i++) {
-    		//网卡类型为均为NET_CLIENT_DRIVER_VHOST_USER
+    	//网卡类型为均为NET_CLIENT_DRIVER_VHOST_USER
         assert(ncs[i]->info->type == NET_CLIENT_DRIVER_VHOST_USER);
 
         s = DO_UPCAST(NetVhostUserState, nc, ncs[i]);
@@ -87,7 +87,8 @@ static int vhost_user_start(int queues, NetClientState *ncs[],
         options.net_backend = ncs[i];
         options.opaque      = be;//设置为后端
         options.busyloop_timeout = 0;
-        net = vhost_net_init(&options);//初始化vhost_net
+        /*初始化vhost_net*/
+        net = vhost_net_init(&options);
         if (!net) {
             error_report("failed to init vhost_net for queue %d", i);
             goto err;
@@ -220,7 +221,7 @@ static gboolean net_vhost_user_watch(GIOChannel *chan, GIOCondition cond,
     return TRUE;
 }
 
-static void net_vhost_user_event(void *opaque, int event);
+static void net_vhost_user_event(void *opaque, QEMUChrEvent event);
 
 static void chr_closed_bh(void *opaque)
 {
@@ -251,7 +252,7 @@ static void chr_closed_bh(void *opaque)
     }
 }
 
-static void net_vhost_user_event(void *opaque, int event)
+static void net_vhost_user_event(void *opaque, QEMUChrEvent event)
 {
     const char *name = opaque;
     NetClientState *ncs[MAX_QUEUE_NUM];
@@ -297,6 +298,11 @@ static void net_vhost_user_event(void *opaque, int event)
 
             aio_bh_schedule_oneshot(ctx, chr_closed_bh, opaque);
         }
+        break;
+    case CHR_EVENT_BREAK:
+    case CHR_EVENT_MUX_IN:
+    case CHR_EVENT_MUX_OUT:
+        /* Ignore */
         break;
     }
 

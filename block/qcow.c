@@ -480,7 +480,7 @@ static int get_cluster_offset(BlockDriverState *bs,
                     return -E2BIG;
                 }
                 ret = bdrv_truncate(bs->file, cluster_offset + s->cluster_size,
-                                    PREALLOC_MODE_OFF, NULL);
+                                    false, PREALLOC_MODE_OFF, 0, NULL);
                 if (ret < 0) {
                     return ret;
                 }
@@ -849,20 +849,15 @@ static int coroutine_fn qcow_co_create(BlockdevCreateOptions *opts,
         return -EIO;
     }
 
-    qcow_blk = blk_new(bdrv_get_aio_context(bs),
-                       BLK_PERM_WRITE | BLK_PERM_RESIZE, BLK_PERM_ALL);
-    ret = blk_insert_bs(qcow_blk, bs, errp);
-    if (ret < 0) {
+    qcow_blk = blk_new_with_bs(bs, BLK_PERM_WRITE | BLK_PERM_RESIZE,
+                               BLK_PERM_ALL, errp);
+    if (!qcow_blk) {
+        ret = -EPERM;
         goto exit;
     }
     blk_set_allow_write_beyond_eof(qcow_blk, true);
 
     /* Create image format */
-    ret = blk_truncate(qcow_blk, 0, PREALLOC_MODE_OFF, errp);
-    if (ret < 0) {
-        goto exit;
-    }
-
     memset(&header, 0, sizeof(header));
     header.magic = cpu_to_be32(QCOW_MAGIC);
     header.version = cpu_to_be32(QCOW_VERSION);
@@ -939,7 +934,8 @@ exit:
     return ret;
 }
 
-static int coroutine_fn qcow_co_create_opts(const char *filename,
+static int coroutine_fn qcow_co_create_opts(BlockDriver *drv,
+                                            const char *filename,
                                             QemuOpts *opts, Error **errp)
 {
     BlockdevCreateOptions *create_options = NULL;
@@ -1038,8 +1034,8 @@ static int qcow_make_empty(BlockDriverState *bs)
     if (bdrv_pwrite_sync(bs->file, s->l1_table_offset, s->l1_table,
             l1_length) < 0)
         return -1;
-    ret = bdrv_truncate(bs->file, s->l1_table_offset + l1_length,
-                        PREALLOC_MODE_OFF, NULL);
+    ret = bdrv_truncate(bs->file, s->l1_table_offset + l1_length, false,
+                        PREALLOC_MODE_OFF, 0, NULL);
     if (ret < 0)
         return ret;
 
@@ -1205,6 +1201,7 @@ static BlockDriver bdrv_qcow = {
     .strong_runtime_opts    = qcow_strong_runtime_opts,
 };
 
+//注册qcow格式的块设备驱动
 static void bdrv_qcow_init(void)
 {
     bdrv_register(&bdrv_qcow);

@@ -303,6 +303,7 @@ static BlockDriver bdrv_bochs = {
     .bdrv_close		= bochs_close,
 };
 
+//注册bochs格式的block驱动
 static void bdrv_bochs_init(void)
 {
     bdrv_register(&bdrv_bochs);

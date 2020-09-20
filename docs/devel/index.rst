@@ -17,8 +17,14 @@ Contents:
    loads-stores
    memory
    migration
+   atomics
    stable-process
    testing
    decodetree
    secure-coding-practices
    tcg
+   tcg-plugins
+   bitops
+   reset
+   s390-dasd-ipl
+   clocks

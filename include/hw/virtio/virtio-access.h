@@ -147,6 +147,7 @@ static inline uint64_t virtio_ldq_p(VirtIODevice *vdev, const void *ptr)
     }
 }
 
+//virtio实现s 转换为网络
 static inline uint16_t virtio_tswap16(VirtIODevice *vdev, uint16_t s)
 {
 #ifdef HOST_WORDS_BIGENDIAN
@@ -227,6 +228,7 @@ static inline void virtio_tswap32s(VirtIODevice *vdev, uint32_t *s)
     *s = virtio_tswap32(vdev, *s);
 }
 
+//将s转换为主机序
 static inline uint64_t virtio_tswap64(VirtIODevice *vdev, uint64_t s)
 {
 #ifdef HOST_WORDS_BIGENDIAN
