@@ -163,11 +163,13 @@ static int pcibus_num(PCIBus *bus)
     return bus->parent_dev->config[PCI_SECONDARY_BUS];
 }
 
+/*返回bus对应的numa_node*/
 static uint16_t pcibus_numa_node(PCIBus *bus)
 {
     return NUMA_NODE_UNASSIGNED;
 }
 
+/*PCI总线初始化*/
 static void pci_bus_class_init(ObjectClass *klass, void *data)
 {
     BusClass *k = BUS_CLASS(klass);
@@ -2427,12 +2429,14 @@ static void pcibus_dev_print(Monitor *mon, DeviceState *dev, int indent)
     desc = pci_class_descriptions;
     while (desc->desc && class != desc->class)
         desc++;
+    /*显示class*/
     if (desc->desc) {
         snprintf(ctxt, sizeof(ctxt), "%s", desc->desc);
     } else {
         snprintf(ctxt, sizeof(ctxt), "Class %04x", class);
     }
 
+    /*显示pci地址及vendor,device id等*/
     monitor_printf(mon, "%*sclass %s, addr %02x:%02x.%x, "
                    "pci id %04x:%04x (sub %04x:%04x)\n",
                    indent, "", ctxt, pci_dev_bus_num(d),
@@ -2441,9 +2445,11 @@ static void pcibus_dev_print(Monitor *mon, DeviceState *dev, int indent)
                    pci_get_word(d->config + PCI_DEVICE_ID),
                    pci_get_word(d->config + PCI_SUBSYSTEM_VENDOR_ID),
                    pci_get_word(d->config + PCI_SUBSYSTEM_ID));
+    /*显示每个regions的信息*/
     for (i = 0; i < PCI_NUM_REGIONS; i++) {
         r = &d->io_regions[i];
         if (!r->size)
+        		/*跳过空的region*/
             continue;
         monitor_printf(mon, "%*sbar %d: %s at 0x%"FMT_PCIBUS
                        " [0x%"FMT_PCIBUS"]\n",

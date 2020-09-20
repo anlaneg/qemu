@@ -1183,7 +1183,7 @@ void object_unref(Object *obj)
 
 //向obj中添加属性
 ObjectProperty *
-object_property_add(Object *obj, const char *name, const char *type,
+object_property_add(Object *obj/*要添加属性的名称*/, const char *name/*属性名称*/, const char *type/*属性类型*/,
                     ObjectPropertyAccessor *get,
                     ObjectPropertyAccessor *set,
                     ObjectPropertyRelease *release,
@@ -1192,6 +1192,7 @@ object_property_add(Object *obj, const char *name, const char *type,
     ObjectProperty *prop;
     size_t name_len = strlen(name);
 
+    //属性名称以'[*]'结尾的情况
     if (name_len >= 3 && !memcmp(name + name_len - 3, "[*]", 4)) {
         int i;
         ObjectProperty *ret;
@@ -1220,6 +1221,7 @@ object_property_add(Object *obj, const char *name, const char *type,
         return NULL;
     }
 
+    /*构造prop,并将其加入到obj的properties表里*/
     prop = g_malloc0(sizeof(*prop));
 
     prop->name = g_strdup(name);
@@ -2175,9 +2177,12 @@ void object_class_property_add_str(ObjectClass *klass, const char *name,
     }
 }
 
+/*boolean类型属性*/
 typedef struct BoolProperty
 {
+	/*取boolean属性值*/
     bool (*get)(Object *, Error **);
+    /*设置boolean属性值*/
     void (*set)(Object *, bool, Error **);
 } BoolProperty;
 
@@ -2220,9 +2225,9 @@ static void property_release_bool(Object *obj, const char *name,
     g_free(prop);
 }
 
-void object_property_add_bool(Object *obj, const char *name,
-                              bool (*get)(Object *, Error **),
-                              void (*set)(Object *, bool, Error **),
+void object_property_add_bool(Object *obj/*要添加的对象*/, const char *name,/*boolean属性值名称*/
+                              bool (*get)(Object *, Error **)/*boolean属性get函数*/,
+                              void (*set)(Object *, bool, Error **)/*boolean属性set函数*/,
                               Error **errp)
 {
     Error *local_err = NULL;

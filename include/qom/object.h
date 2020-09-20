@@ -352,13 +352,14 @@ typedef void (ObjectPropertyRelease)(Object *obj,
 
 typedef struct ObjectProperty
 {
-    gchar *name;
-    gchar *type;
+    gchar *name;/*对象属性名称*/
+    gchar *type;/*对象属性类型*/
     gchar *description;
     ObjectPropertyAccessor *get;
     ObjectPropertyAccessor *set;
     ObjectPropertyResolve *resolve;
-    ObjectPropertyRelease *release;//属性值释放函数
+    /*属性值释放函数*/
+    ObjectPropertyRelease *release;
     void *opaque;
 } ObjectProperty;
 

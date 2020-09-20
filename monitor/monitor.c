@@ -159,9 +159,11 @@ int monitor_puts(Monitor *mon, const char *str)
     qemu_mutex_lock(&mon->mon_lock);
     for (i = 0; str[i]; i++) {
         c = str[i];
+        /*\n换成\r\n*/
         if (c == '\n') {
             qstring_append_chr(mon->outbuf, '\r');
         }
+        /*将c存入outbuf中*/
         qstring_append_chr(mon->outbuf, c);
         if (c == '\n') {
             monitor_flush_locked(mon);
@@ -172,6 +174,7 @@ int monitor_puts(Monitor *mon, const char *str)
     return i;
 }
 
+/*格式化fmt到mon->outbuf中*/
 int monitor_vprintf(Monitor *mon, const char *fmt, va_list ap)
 {
     char *buf;

@@ -143,6 +143,7 @@ struct DeviceState {
     bool pending_deleted_event;
     QemuOpts *opts;
     int hotplugged;
+    /*设备从属的总线*/
     BusState *parent_bus;
     QLIST_HEAD(, NamedGPIOList) gpios;
     QLIST_HEAD(, BusState) child_bus;
@@ -162,10 +163,12 @@ struct DeviceListener {
 #define BUS_CLASS(klass) OBJECT_CLASS_CHECK(BusClass, (klass), TYPE_BUS)
 #define BUS_GET_CLASS(obj) OBJECT_GET_CLASS(BusClass, (obj), TYPE_BUS)
 
+//总线对应的类
 struct BusClass {
     ObjectClass parent_class;
 
     /* FIXME first arg should be BusState */
+    /*显示dev信息到mon包含的buffer*/
     void (*print_dev)(Monitor *mon, DeviceState *dev, int indent);
     char *(*get_dev_path)(DeviceState *dev);
     /*
@@ -194,17 +197,24 @@ typedef struct BusChild {
 
 /**
  * BusState:
+ * bus对应的对象结构
  * @hotplug_handler: link to a hotplug handler associated with bus.
  */
 struct BusState {
     Object obj;
+    /*总线所在的设备，总线不能独自产生，其必须依赖于一个设备，例如pci总线依赖于pci桥设备
+     * usb总线依赖于usb控制器*/
     DeviceState *parent;
-    char *name;
+    char *name;/*bus名称*/
+    /*热插拔处理函数*/
     HotplugHandler *hotplug_handler;
+    /*总线上设备总数*/
     int max_index;
     bool realized;
     int num_children;
+    /*此总线上所有设备*/
     QTAILQ_HEAD(, BusChild) children;
+    /**/
     QLIST_ENTRY(BusState) sibling;
 };
 

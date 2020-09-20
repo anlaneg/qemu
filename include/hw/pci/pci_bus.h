@@ -16,6 +16,7 @@ typedef struct PCIBusClass {
     /*< public >*/
 
     int (*bus_num)(PCIBus *bus);
+    /*bus对应的numa_node*/
     uint16_t (*numa_node)(PCIBus *bus);
 } PCIBusClass;
 
@@ -53,6 +54,7 @@ struct PCIBus {
     Notifier machine_done;
 };
 
+/*是否pci root bus*/
 static inline bool pci_bus_is_root(PCIBus *bus)
 {
     return !!(bus->flags & PCI_BUS_IS_ROOT);
