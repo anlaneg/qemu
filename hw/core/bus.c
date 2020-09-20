@@ -164,6 +164,7 @@ BusState *qbus_create(const char *typename, DeviceState *parent, const char *nam
     return bus;
 }
 
+/*返回bus对象的realized属性*/
 static bool bus_get_realized(Object *obj, Error **errp)
 {
     BusState *bus = BUS(obj);
@@ -222,6 +223,7 @@ static void qbus_initfn(Object *obj)
                              bus_get_realized, bus_set_realized, NULL);
 }
 
+/*默认返回dev的类型名称做为fw路径*/
 static char *default_bus_get_fw_dev_path(DeviceState *dev)
 {
     return g_strdup(object_get_typename(OBJECT(dev)));
@@ -316,11 +318,13 @@ static void qbus_finalize(Object *obj)
 static const TypeInfo bus_info = {
     .name = TYPE_BUS,
     .parent = TYPE_OBJECT,
+	/*bus对应的对象为BusState*/
     .instance_size = sizeof(BusState),
     .abstract = true,
     .class_size = sizeof(BusClass),
     .instance_init = qbus_initfn,
     .instance_finalize = qbus_finalize,
+	/*bus class初始化时调用*/
     .class_init = bus_class_init,
     .interfaces = (InterfaceInfo[]) {
         { TYPE_RESETTABLE_INTERFACE },
@@ -333,4 +337,5 @@ static void bus_register_types(void)
     type_register_static(&bus_info);
 }
 
+/*注册bus类型*/
 type_init(bus_register_types)

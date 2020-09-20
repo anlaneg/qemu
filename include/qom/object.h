@@ -369,17 +369,18 @@ typedef void (ObjectPropertyInit)(Object *obj, ObjectProperty *prop);
 
 struct ObjectProperty
 {
-    gchar *name;//属性名称
-    gchar *type;//属性类型名称
+    gchar *name;/*对象属性名称*/
+    gchar *type;/*对象属性类型*/
     gchar *description;//属性描述信息
     ObjectPropertyAccessor *get;//属性值get函数
     ObjectPropertyAccessor *set;//属性值set函数
     ObjectPropertyResolve *resolve;
-    ObjectPropertyRelease *release;//属性值释放函数
+    /*属性值释放函数*/
+    ObjectPropertyRelease *release;
     ObjectPropertyInit *init;
     void *opaque;/*属性访问函数的参数*/
     QObject *defval;
-};
+} ObjectProperty;
 
 /**
  * ObjectUnparent:

@@ -1294,7 +1294,7 @@ void object_unref(Object *obj)
 
 //向obj中添加属性
 ObjectProperty *
-object_property_add(Object *obj, const char *name/*属性名称*/, const char *type/*属性类型*/,
+object_property_add(Object *obj/*要添加属性的名称*/, const char *name/*属性名称*/, const char *type/*属性类型*/,
                     ObjectPropertyAccessor *get,
                     ObjectPropertyAccessor *set,
                     ObjectPropertyRelease *release,
@@ -1304,6 +1304,7 @@ object_property_add(Object *obj, const char *name/*属性名称*/, const char *t
     /*属性名称长度*/
     size_t name_len = strlen(name);
 
+    //属性名称以'[*]'结尾的情况
     if (name_len >= 3 && !memcmp(name + name_len - 3, "[*]", 4)) {
         /*属性名称以[*]结尾的*/
         int i;
@@ -1333,7 +1334,7 @@ object_property_add(Object *obj, const char *name/*属性名称*/, const char *t
         return NULL;
     }
 
-    //创建ObjectProperty对象，并添加进object的属性表中
+    /*构造prop,并将其加入到obj的properties表里*/
     prop = g_malloc0(sizeof(*prop));
 
     prop->name = g_strdup(name);
@@ -2425,11 +2426,12 @@ object_class_property_add_str(ObjectClass *klass, const char *name,
     return rv;
 }
 
+/*boolean类型属性*/
 typedef struct BoolProperty
 {
-    //bool属性的get函数
+	/*取boolean属性值*/
     bool (*get)(Object *, Error **);
-    //bool属性的set函数
+    /*设置boolean属性值*/
     void (*set)(Object *, bool, Error **);
 } BoolProperty;
 

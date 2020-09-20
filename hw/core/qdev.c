@@ -95,7 +95,7 @@ static void bus_add_child(BusState *bus, DeviceState *child)
                              NULL);
 }
 
-//为device设置parent bus
+/*设备从属的bus*/
 void qdev_set_parent_bus(DeviceState *dev, BusState *bus)
 {
     BusState *old_parent_bus = dev->parent_bus;
@@ -150,7 +150,7 @@ DeviceState *qdev_create(BusState *bus, const char *name)
     return dev;
 }
 
-//创建指定type的Device
+/*按type类型在bus上创建设备*/
 DeviceState *qdev_try_create(BusState *bus, const char *type)
 {
     DeviceState *dev;
@@ -159,8 +159,7 @@ DeviceState *qdev_try_create(BusState *bus, const char *type)
     if (object_class_by_name(type) == NULL) {
         return NULL;
     }
-
-    //创建此类型的Device
+    /*创建type类型的设备*/
     dev = DEVICE(object_new(type));
     if (!dev) {
         return NULL;
