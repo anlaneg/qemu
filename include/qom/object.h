@@ -406,13 +406,15 @@ typedef void (ObjectFree)(void *obj);
  *
  * The base for all classes.  The only thing that #ObjectClass contains is an
  * integer type handle.
- * 所有class的基类，每个type都有一个关联的class
+ * 所有class的基类，每个type都有一个关联的ObjectClass
  */
 struct ObjectClass
 {
     /*< private >*/
-    Type type;//ObjectClass对应的TypeImpl
-    GSList *interfaces;//按顺序存入各接口的type class
+    //ObjectClass对应的TypeImpl
+    Type type;
+    //按顺序存入各接口的type class
+    GSList *interfaces;
 
     const char *object_cast_cache[OBJECT_CLASS_CAST_CACHE];
     const char *class_cast_cache[OBJECT_CLASS_CAST_CACHE];
@@ -611,10 +613,12 @@ struct InterfaceInfo {
 //interfaceClass是所有interface的Class
 struct InterfaceClass
 {
-    ObjectClass parent_class;//父ObjectClass
+    //父ObjectClass
+    ObjectClass parent_class;
     /*< private >*/
     ObjectClass *concrete_class;
-    Type interface_type;//interface对应的Type
+    //interface对应的TypeImpl
+    Type interface_type;
 };
 
 #define TYPE_INTERFACE "interface"

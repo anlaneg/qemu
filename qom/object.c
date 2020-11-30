@@ -90,6 +90,7 @@ struct TypeImpl
     InterfaceImpl interfaces[MAX_INTERFACES];
 };
 
+/*interface类型*/
 static Type type_interface;
 
 //存储type的全局hash表,通过type名称可获得对应的TypeImpl
@@ -234,8 +235,8 @@ static bool type_has_parent(TypeImpl *type)
 }
 
 //获取类型ti的ObjectClass大小
-//如自身class_size不为0，则使用，否则使用父类型class_size
-//否则使用sizeof(ObjectClass)
+//如果自身class_size不为0，则使用，否则有父类型，使用父类型class_size
+//无父类型则使用sizeof(ObjectClass)
 static size_t type_class_get_size(TypeImpl *ti)
 {
     if (ti->class_size) {
@@ -308,7 +309,7 @@ static void type_initialize_interface(TypeImpl *ti, TypeImpl *interface_type,
 {
     InterfaceClass *new_iface;
     TypeInfo info = { };
-    TypeImpl *iface_impl;
+    TypeImpl *iface_impl;/*接口类型*/
 
     //将接口看成是名称为$ti->name::$interfacename的类型
     //接口是抽象类
@@ -316,16 +317,20 @@ static void type_initialize_interface(TypeImpl *ti, TypeImpl *interface_type,
     info.name = g_strdup_printf("%s::%s", ti->name, interface_type->name);
     info.abstract = true;
 
-    iface_impl = type_new(&info);//依据info创建type_impl
+    //依据info创建接口类型的type_impl
+    iface_impl = type_new(&info);
     iface_impl->parent_type = parent_type;
-    type_initialize(iface_impl);//初始化此类型
-    g_free((char *)info.name);//销毁info
+    //初始化此类型
+    type_initialize(iface_impl);
+    //销毁info
+    g_free((char *)info.name);
 
     //实现函数继续
     new_iface = (InterfaceClass *)iface_impl->class;
     new_iface->concrete_class = ti->class;//类型归本类
     new_iface->interface_type = interface_type;//类型用上面的
 
+    /*将iface_impl->class加入到interfaces结尾*/
     ti->class->interfaces = g_slist_append(ti->class->interfaces,
                                            iface_impl->class);
 }
@@ -422,7 +427,8 @@ static void type_initialize(TypeImpl *ti)
                 TypeImpl *target_type = OBJECT_CLASS(e->data)->type;
 
                 if (type_is_ancestor(target_type, t)) {
-                    break;//已在继承链上存在，不处理
+                    //已在继承链上存在，不处理
+                    break;
                 }
             }
 
@@ -1459,10 +1465,10 @@ ObjectProperty *object_class_property_find(ObjectClass *klass, const char *name/
         }
     }
 
-    //父节点中无指定属性，查找自身属性表
+    //父节点中未找到指定属性，查找自身属性表
     prop = g_hash_table_lookup(klass->properties, name);
     if (!prop) {
-    		//查找失败时，报错，并返回NULL
+    	//查找失败时，报错，并返回NULL
         error_setg(errp, "Property '.%s' not found", name);
     }
     return prop;
@@ -2326,8 +2332,8 @@ Object *object_resolve_path(const char *path, bool *ambiguous)
 //字符串属性
 typedef struct StringProperty
 {
-    char *(*get)(Object *, Error **);//get函数
-    void (*set)(Object *, const char *, Error **);//set函数
+    char *(*get)(Object *, Error **);//object某一属性的get函数
+    void (*set)(Object *, const char *, Error **);//object某一属性的set函数
 } StringProperty;
 
 //获取属性的字符串取值
@@ -2338,7 +2344,7 @@ static void property_get_str(Object *obj, Visitor *v, const char *name,
     char *value;
     Error *err = NULL;
 
-    //调用property的get回调，获得得value
+    //调用property的get回调，获得$name属性的值value
     value = prop->get(obj, &err);
     if (err) {
         error_propagate(errp, err);
@@ -2398,6 +2404,7 @@ void object_property_add_str(Object *obj, const char *name,
     }
 }
 
+/*向klass中添加名称为$name的字符串类型属性，get,set用于获取此属性值*/
 ObjectProperty *
 object_class_property_add_str(ObjectClass *klass, const char *name,
                                    char *(*get)(Object *, Error **),
@@ -2412,7 +2419,7 @@ object_class_property_add_str(ObjectClass *klass, const char *name,
     prop->get = get;
     prop->set = set;
 
-    //添加string类型的property
+    //添加string类型名称为$name的property
     rv = object_class_property_add(klass, name, "string",
                               get ? property_get_str : NULL,
                               set ? property_set_str : NULL,
@@ -2726,6 +2733,7 @@ object_class_property_add_tm(ObjectClass *klass, const char *name,
     return rv;
 }
 
+//复制一份obj对应的类型名称
 static char *qdev_get_type(Object *obj, Error **errp)
 {
     return g_strdup(object_get_typename(obj));
@@ -3073,7 +3081,7 @@ out:
     g_free(prop_type);
 }
 
-//设置ObjectProperty的描述信息
+//为object的属性设置描述信息
 void object_property_set_description(Object *obj, const char *name,
                                      const char *description, Error **errp)
 {
@@ -3105,10 +3113,12 @@ void object_class_property_set_description(ObjectClass *klass,
         return;
     }
 
+    //存在此属性，则设置描述信息
     g_free(op->description);
     op->description = g_strdup(description);
 }
 
+//添加字符串类型type,用于返回klass类型名称
 static void object_class_init(ObjectClass *klass, void *data)
 {
     object_class_property_add_str(klass, "type", qdev_get_type,
@@ -3118,7 +3128,7 @@ static void object_class_init(ObjectClass *klass, void *data)
 //实现基础类注册
 static void register_types(void)
 {
-    //interface类型信息
+    //interface类型信息（interface的class为InterfaceClass)
     static TypeInfo interface_info = {
         .name = TYPE_INTERFACE,
         .class_size = sizeof(InterfaceClass),
@@ -3135,6 +3145,7 @@ static void register_types(void)
 
     //注册interface类型
     type_interface = type_register_internal(&interface_info);
+
     //注册object类型
     type_register_internal(&object_info);
 }

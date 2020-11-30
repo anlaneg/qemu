@@ -305,7 +305,7 @@ void visit_type_bool(Visitor *v, const char *name, bool *obj, Error **errp)
 }
 
 //调用v->type_str解析字符串类型
-void visit_type_str(Visitor *v, const char *name/**/, char **obj/*出参，解析后的结果*/, Error **errp/*错误信息*/)
+void visit_type_str(Visitor *v, const char *name/*名称*/, char **obj/*出参，解析后的结果*/, Error **errp/*错误信息*/)
 {
     Error *err = NULL;
 

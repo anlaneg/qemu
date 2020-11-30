@@ -1925,7 +1925,7 @@ static void virtio_pci_class_init(ObjectClass *klass, void *data)
 //定义virtio-pci类型设备
 static const TypeInfo virtio_pci_info = {
     .name          = TYPE_VIRTIO_PCI,
-    .parent        = TYPE_PCI_DEVICE,
+    .parent        = TYPE_PCI_DEVICE,/*父类型为pci设备*/
     .instance_size = sizeof(VirtIOPCIProxy),
     .class_init    = virtio_pci_class_init,
     .class_size    = sizeof(VirtioPCIClass),
