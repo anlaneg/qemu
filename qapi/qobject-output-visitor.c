@@ -117,7 +117,7 @@ static void qobject_output_add_obj(QObjectOutputVisitor *qov, const char *name,
     }
 }
 
-static void qobject_output_start_struct(Visitor *v, const char *name,
+static bool qobject_output_start_struct(Visitor *v, const char *name,
                                         void **obj, size_t unused, Error **errp)
 {
     //将Visitor还原为objoutput
@@ -129,6 +129,7 @@ static void qobject_output_start_struct(Visitor *v, const char *name,
     qobject_output_add(qov, name, dict);
     //创建并入栈
     qobject_output_push(qov, dict, obj);
+    return true;
 }
 
 static void qobject_output_end_struct(Visitor *v, void **obj)
@@ -139,7 +140,7 @@ static void qobject_output_end_struct(Visitor *v, void **obj)
     assert(qobject_type(value) == QTYPE_QDICT);
 }
 
-static void qobject_output_start_list(Visitor *v, const char *name,
+static bool qobject_output_start_list(Visitor *v, const char *name,
                                       GenericList **listp, size_t size,
                                       Error **errp)
 {
@@ -149,6 +150,7 @@ static void qobject_output_start_list(Visitor *v, const char *name,
 
     qobject_output_add(qov, name, list);
     qobject_output_push(qov, list, listp);
+    return true;
 }
 
 //取下一个元素
@@ -166,29 +168,32 @@ static void qobject_output_end_list(Visitor *v, void **obj)
     assert(qobject_type(value) == QTYPE_QLIST);
 }
 
-static void qobject_output_type_int64(Visitor *v, const char *name,
+static bool qobject_output_type_int64(Visitor *v, const char *name,
                                       int64_t *obj, Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
     qobject_output_add(qov, name, qnum_from_int(*obj)/*创建QNum对象*/);
+    return true;
 }
 
-static void qobject_output_type_uint64(Visitor *v, const char *name,
+static bool qobject_output_type_uint64(Visitor *v, const char *name,
                                        uint64_t *obj, Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
     qobject_output_add(qov, name, qnum_from_uint(*obj));
+    return true;
 }
 
-static void qobject_output_type_bool(Visitor *v, const char *name, bool *obj,
+static bool qobject_output_type_bool(Visitor *v, const char *name, bool *obj,
                                      Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
     qobject_output_add(qov, name, qbool_from_bool(*obj));
+    return true;
 }
 
 //向v中加入字符串对象
-static void qobject_output_type_str(Visitor *v, const char *name, char **obj,
+static bool qobject_output_type_str(Visitor *v, const char *name, char **obj,
                                     Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
@@ -198,28 +203,32 @@ static void qobject_output_type_str(Visitor *v, const char *name, char **obj,
         //创建空的Qstring对象
         qobject_output_add(qov, name, qstring_from_str(""));
     }
+    return true;
 }
 
-static void qobject_output_type_number(Visitor *v, const char *name,
+static bool qobject_output_type_number(Visitor *v, const char *name,
                                        double *obj, Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
     qobject_output_add(qov, name, qnum_from_double(*obj));
+    return true;
 }
 
-static void qobject_output_type_any(Visitor *v, const char *name,
+static bool qobject_output_type_any(Visitor *v, const char *name,
                                     QObject **obj, Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
 
     qobject_output_add_obj(qov, name, qobject_ref(*obj));
+    return true;
 }
 
-static void qobject_output_type_null(Visitor *v, const char *name,
+static bool qobject_output_type_null(Visitor *v, const char *name,
                                      QNull **obj, Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
     qobject_output_add(qov, name, qnull());
+    return true;
 }
 
 /* Finish building, and return the root object.

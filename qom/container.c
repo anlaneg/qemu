@@ -18,7 +18,6 @@
 //继承链:container->object
 static const TypeInfo container_info = {
     .name          = "container",
-    .instance_size = sizeof(Object),
     .parent        = TYPE_OBJECT,
 };
 
@@ -32,7 +31,7 @@ static void container_register_types(void)
 Object *container_get(Object *root, const char *path)
 {
     Object *obj, *child;
-    gchar **parts;
+    char **parts;
     int i;
 
     //按‘/'拆分,parts[0]==''
@@ -45,9 +44,9 @@ Object *container_get(Object *root, const char *path)
     	//按路径名称查找子OBJ
         child = object_resolve_path_component(obj, parts[i]);
         if (!child) {
-        	//parts[i]不存在，添加新的child('container')，并添加parts[i]属性
-        	child = object_new("container");
-            object_property_add_child(obj, parts[i], child, NULL);
+            //parts[i]不存在，添加新的child('container')，并添加parts[i]属性
+            child = object_new("container");
+            object_property_add_child(obj, parts[i], child);
             object_unref(child);
         }
     }

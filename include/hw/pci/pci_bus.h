@@ -10,7 +10,7 @@
  * use accessor functions in pci.h
  */
 
-typedef struct PCIBusClass {
+struct PCIBusClass {
     /*< private >*/
     BusClass parent_class;
     /*< public >*/
@@ -18,7 +18,7 @@ typedef struct PCIBusClass {
     int (*bus_num)(PCIBus *bus);
     /*bus对应的numa_node*/
     uint16_t (*numa_node)(PCIBus *bus);
-} PCIBusClass;
+};
 
 enum PCIBusFlags {
     /* This bus is the root of a PCI domain */

@@ -31,10 +31,10 @@ size_diff = size_long - size_short
 def create_chain() -> None:
     iotests.qemu_img_log('create', '-f', iotests.imgfmt, base,
                          str(size_long))
-    iotests.qemu_img_log('create', '-f', iotests.imgfmt, '-b', base, mid,
-                         str(size_short))
-    iotests.qemu_img_log('create', '-f', iotests.imgfmt, '-b', mid, top,
-                         str(size_long))
+    iotests.qemu_img_log('create', '-f', iotests.imgfmt, '-b', base,
+                         '-F', iotests.imgfmt, mid, str(size_short))
+    iotests.qemu_img_log('create', '-f', iotests.imgfmt, '-b', mid,
+                         '-F', iotests.imgfmt, top, str(size_long))
 
     iotests.qemu_io_log('-c', 'write -P 1 0 %d' % size_long, base)
 
@@ -115,6 +115,26 @@ with iotests.FilePath('base') as base, \
     iotests.qemu_io_log('-c', 'read -P 1 0 %d' % size_short, mid)
     iotests.qemu_io_log('-c', 'read -P 0 %d %d' % (size_short, size_diff), mid)
 
+    iotests.log('=== Testing qemu-img commit (top -> base) ===')
+
+    create_chain()
+    iotests.qemu_img_log('commit', '-b', base, top)
+    iotests.img_info_log(base)
+    iotests.qemu_io_log('-c', 'read -P 1 0 %d' % size_short, base)
+    iotests.qemu_io_log('-c', 'read -P 0 %d %d' % (size_short, size_diff), base)
+
+    iotests.log('=== Testing QMP active commit (top -> base) ===')
+
+    create_chain()
+    with create_vm() as vm:
+        vm.launch()
+        vm.qmp_log('block-commit', device='top', base_node='base',
+                   job_id='job0', auto_dismiss=False)
+        vm.run_job('job0', wait=5)
+
+    iotests.img_info_log(mid)
+    iotests.qemu_io_log('-c', 'read -P 1 0 %d' % size_short, base)
+    iotests.qemu_io_log('-c', 'read -P 0 %d %d' % (size_short, size_diff), base)
 
     iotests.log('== Resize tests ==')
 
@@ -139,8 +159,8 @@ with iotests.FilePath('base') as base, \
 
         iotests.log('=== preallocation=%s ===' % prealloc)
         iotests.qemu_img_log('create', '-f', iotests.imgfmt, base, base_size)
-        iotests.qemu_img_log('create', '-f', iotests.imgfmt, '-b', base, top,
-                             top_size_old)
+        iotests.qemu_img_log('create', '-f', iotests.imgfmt, '-b', base,
+                             '-F', iotests.imgfmt, top, top_size_old)
         iotests.qemu_io_log('-c', 'write -P 1 %s 64k' % off, base)
 
         # After this, top_size_old to base_size should be allocated/zeroed.

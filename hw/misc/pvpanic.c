@@ -20,6 +20,7 @@
 #include "hw/nvram/fw_cfg.h"
 #include "hw/qdev-properties.h"
 #include "hw/misc/pvpanic.h"
+#include "qom/object.h"
 
 /* The bit of supported pv event, TODO: include uapi header and remove this */
 #define PVPANIC_F_PANICKED      0
@@ -29,8 +30,9 @@
 #define PVPANIC_PANICKED        (1 << PVPANIC_F_PANICKED)
 #define PVPANIC_CRASHLOADED     (1 << PVPANIC_F_CRASHLOADED)
 
-#define ISA_PVPANIC_DEVICE(obj)    \
-    OBJECT_CHECK(PVPanicState, (obj), TYPE_PVPANIC)
+typedef struct PVPanicState PVPanicState;
+DECLARE_INSTANCE_CHECKER(PVPanicState, ISA_PVPANIC_DEVICE,
+                         TYPE_PVPANIC)
 
 static void handle_event(int event)
 {
@@ -58,18 +60,20 @@ static void handle_event(int event)
 #include "hw/isa/isa.h"
 
 //pvpanic设备
-typedef struct PVPanicState {
+struct PVPanicState {
     ISADevice parent_obj;
 
     MemoryRegion io;//pvapnic对应的内存区域
     uint16_t ioport;
-} PVPanicState;
+    uint8_t events;
+};
 
 /* return supported events on read */
 static uint64_t pvpanic_ioport_read(void *opaque, hwaddr addr, unsigned size)
 {
     //对此inport读取，返回常量
-    return PVPANIC_PANICKED;
+    PVPanicState *pvp = opaque;
+    return pvp->events;
 }
 
 static void pvpanic_ioport_write(void *opaque, hwaddr addr/*要写的地址*/, uint64_t val/*要写的值*/,
@@ -119,6 +123,7 @@ static void pvpanic_isa_realizefn(DeviceState *dev, Error **errp)
 //定义ioport属性
 static Property pvpanic_isa_properties[] = {
     DEFINE_PROP_UINT16(PVPANIC_IOPORT_PROP/*属性名称*/, PVPanicState, ioport, 0x505),
+    DEFINE_PROP_UINT8("events", PVPanicState, events, PVPANIC_PANICKED | PVPANIC_CRASHLOADED),
     DEFINE_PROP_END_OF_LIST(),
 };
 

@@ -27,6 +27,7 @@
 #include "chardev/char.h"
 #include "ui/console.h"
 #include "ui/input.h"
+#include "qom/object.h"
 
 //0x3f = 00111111
 //取低６位
@@ -35,7 +36,7 @@
 //取高２位
 #define MSMOUSE_HI2(n) (((n) & 0xc0) >> 6)
 
-typedef struct {
+struct MouseChardev {
     Chardev parent;
 
     QemuInputHandlerState *hs;
@@ -44,11 +45,12 @@ typedef struct {
     bool btnc[INPUT_BUTTON__MAX];
     uint8_t outbuf[32];
     int outlen;
-} MouseChardev;
+};
+typedef struct MouseChardev MouseChardev;
 
 #define TYPE_CHARDEV_MSMOUSE "chardev-msmouse"
-#define MOUSE_CHARDEV(obj)                                      \
-    OBJECT_CHECK(MouseChardev, (obj), TYPE_CHARDEV_MSMOUSE)
+DECLARE_INSTANCE_CHECKER(MouseChardev, MOUSE_CHARDEV,
+                         TYPE_CHARDEV_MSMOUSE)
 
 static void msmouse_chr_accept_input(Chardev *chr)
 {

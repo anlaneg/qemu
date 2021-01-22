@@ -239,13 +239,13 @@ struct {                                                                \
         typeof(elm) save_sle_next;                                           \
         do {                                                                 \
             save_sle_next = (elm)->field.sle_next = (head)->slh_first;       \
-        } while (atomic_cmpxchg(&(head)->slh_first, save_sle_next, (elm)) != \
+        } while (qatomic_cmpxchg(&(head)->slh_first, save_sle_next, (elm)) !=\
                  save_sle_next);                                             \
 } while (/*CONSTCOND*/0)
 
 //将src指向的链表，移到dest链表指针上去（保证原子性）
 #define QSLIST_MOVE_ATOMIC(dest, src) do {                               \
-        (dest)->slh_first = atomic_xchg(&(src)->slh_first, NULL);        \
+        (dest)->slh_first = qatomic_xchg(&(src)->slh_first, NULL);       \
 } while (/*CONSTCOND*/0)
 
 //移除首元素
@@ -419,7 +419,8 @@ struct {                                                                \
 /*
  * Simple queue access methods.
  */
-#define QSIMPLEQ_EMPTY_ATOMIC(head) (atomic_read(&((head)->sqh_first)) == NULL)
+#define QSIMPLEQ_EMPTY_ATOMIC(head) \
+    (qatomic_read(&((head)->sqh_first)) == NULL)
 //队列是否为空
 #define QSIMPLEQ_EMPTY(head)        ((head)->sqh_first == NULL)
 //队列首个元素

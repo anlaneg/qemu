@@ -105,15 +105,6 @@ static int qcow_probe(const uint8_t *buf, int buf_size, const char *filename)
         return 0;
 }
 
-static QemuOptsList qcow_runtime_opts = {
-    .name = "qcow",
-    .head = QTAILQ_HEAD_INITIALIZER(qcow_runtime_opts.head),
-    .desc = {
-        BLOCK_CRYPTO_OPT_DEF_QCOW_KEY_SECRET("encrypt."),
-        { /* end of list */ }
-    },
-};
-
 static int qcow_open(BlockDriverState *bs, QDict *options, int flags,
                      Error **errp)
 {
@@ -121,7 +112,6 @@ static int qcow_open(BlockDriverState *bs, QDict *options, int flags,
     unsigned int len, i, shift;
     int ret;
     QCowHeader header;
-    Error *local_err = NULL;
     QCryptoBlockOpenOptions *crypto_opts = NULL;
     unsigned int cflags = 0;
     QDict *encryptopts = NULL;
@@ -130,8 +120,8 @@ static int qcow_open(BlockDriverState *bs, QDict *options, int flags,
     qdict_extract_subqdict(options, &encryptopts, "encrypt.");
     encryptfmt = qdict_get_try_str(encryptopts, "format");
 
-    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_file,
-                               false, errp);
+    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_of_bds,
+                               BDRV_CHILD_IMAGE, false, errp);
     if (!bs->file) {
         ret = -EINVAL;
         goto fail;
@@ -314,9 +304,8 @@ static int qcow_open(BlockDriverState *bs, QDict *options, int flags,
     error_setg(&s->migration_blocker, "The qcow format used by node '%s' "
                "does not support live migration",
                bdrv_get_device_or_node_name(bs));
-    ret = migrate_add_blocker(s->migration_blocker, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    ret = migrate_add_blocker(s->migration_blocker, errp);
+    if (ret < 0) {
         error_free(s->migration_blocker);
         goto fail;
     }
@@ -940,17 +929,28 @@ static int coroutine_fn qcow_co_create_opts(BlockDriver *drv,
 {
     BlockdevCreateOptions *create_options = NULL;
     BlockDriverState *bs = NULL;
-    QDict *qdict;
+    QDict *qdict = NULL;
     Visitor *v;
     const char *val;
-    Error *local_err = NULL;
     int ret;
+    char *backing_fmt;
 
     static const QDictRenames opt_renames[] = {
         { BLOCK_OPT_BACKING_FILE,       "backing-file" },
         { BLOCK_OPT_ENCRYPT,            BLOCK_OPT_ENCRYPT_FORMAT },
         { NULL, NULL },
     };
+
+    /*
+     * We can't actually store a backing format, but can check that
+     * the user's request made sense.
+     */
+    backing_fmt = qemu_opt_get_del(opts, BLOCK_OPT_BACKING_FMT);
+    if (backing_fmt && !bdrv_find_format(backing_fmt)) {
+        error_setg(errp, "unrecognized backing format '%s'", backing_fmt);
+        ret = -EINVAL;
+        goto fail;
+    }
 
     /* Parse options and convert legacy syntax */
     qdict = qemu_opts_to_qdict_filtered(opts, NULL, &qcow_create_opts, true);
@@ -973,9 +973,8 @@ static int coroutine_fn qcow_co_create_opts(BlockDriver *drv,
     }
 
     /* Create and open the file (protocol layer) */
-    ret = bdrv_create_file(filename, opts, &local_err);
+    ret = bdrv_create_file(filename, opts, errp);
     if (ret < 0) {
-        error_propagate(errp, local_err);
         goto fail;
     }
 
@@ -996,11 +995,9 @@ static int coroutine_fn qcow_co_create_opts(BlockDriver *drv,
         goto fail;
     }
 
-    visit_type_BlockdevCreateOptions(v, NULL, &create_options, &local_err);
+    visit_type_BlockdevCreateOptions(v, NULL, &create_options, errp);
     visit_free(v);
-
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (!create_options) {
         ret = -EINVAL;
         goto fail;
     }
@@ -1018,6 +1015,7 @@ static int coroutine_fn qcow_co_create_opts(BlockDriver *drv,
 
     ret = 0;
 fail:
+    g_free(backing_fmt);
     qobject_unref(qdict);
     bdrv_unref(bs);
     qapi_free_BlockdevCreateOptions(create_options);
@@ -1153,6 +1151,11 @@ static QemuOptsList qcow_create_opts = {
             .help = "File name of a base image"
         },
         {
+            .name = BLOCK_OPT_BACKING_FMT,
+            .type = QEMU_OPT_STRING,
+            .help = "Format of the backing image",
+        },
+        {
             .name = BLOCK_OPT_ENCRYPT,
             .type = QEMU_OPT_BOOL,
             .help = "Encrypt the image with format 'aes'. (Deprecated "
@@ -1181,11 +1184,12 @@ static BlockDriver bdrv_qcow = {
     .bdrv_probe		= qcow_probe,
     .bdrv_open		= qcow_open,
     .bdrv_close		= qcow_close,
-    .bdrv_child_perm        = bdrv_format_default_perms,
+    .bdrv_child_perm        = bdrv_default_perms,
     .bdrv_reopen_prepare    = qcow_reopen_prepare,
     .bdrv_co_create         = qcow_co_create,
     .bdrv_co_create_opts    = qcow_co_create_opts,
     .bdrv_has_zero_init     = bdrv_has_zero_init_1,
+    .is_format              = true,
     .supports_backing       = true,
     .bdrv_refresh_limits    = qcow_refresh_limits,
 

@@ -286,7 +286,6 @@ static void sam460ex_init(MachineState *machine)
     CPUPPCState *env;
     I2CBus *i2c;
     hwaddr entry = UBOOT_ENTRY;
-    hwaddr loadaddr = LOAD_UIMAGE_LOADADDR_INVALID;
     target_long initrd_size = 0;
     DeviceState *dev;
     SysBusDevice *sbdev;
@@ -339,7 +338,7 @@ static void sam460ex_init(MachineState *machine)
     spd_data[20] = 4; /* SO-DIMM module */
     smbus_eeprom_init_one(i2c, 0x50, spd_data);
     /* RTC */
-    i2c_create_slave(i2c, "m41t80", 0x68);
+    i2c_slave_create_simple(i2c, "m41t80", 0x68);
 
     dev = sysbus_create_simple(TYPE_PPC4xx_I2C, 0x4ef600800, uic[0][3]);
 
@@ -370,11 +369,11 @@ static void sam460ex_init(MachineState *machine)
 
     /* USB */
     sysbus_create_simple(TYPE_PPC4xx_EHCI, 0x4bffd0400, uic[2][29]);
-    dev = qdev_create(NULL, "sysbus-ohci");
+    dev = qdev_new("sysbus-ohci");
     qdev_prop_set_string(dev, "masterbus", "usb-bus.0");
     qdev_prop_set_uint32(dev, "num-ports", 6);
-    qdev_init_nofail(dev);
     sbdev = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(sbdev, &error_fatal);
     sysbus_mmio_map(sbdev, 0, 0x4bffd0000);
     sysbus_connect_irq(sbdev, 0, uic[2][30]);
     usb_create_simple(usb_bus_find(-1), "usb-kbd");
@@ -426,17 +425,16 @@ static void sam460ex_init(MachineState *machine)
 
     /* Load kernel. */
     if (machine->kernel_filename) {
+        hwaddr loadaddr = LOAD_UIMAGE_LOADADDR_INVALID;
         success = load_uimage(machine->kernel_filename, &entry, &loadaddr,
                               NULL, NULL, NULL);
         if (success < 0) {
-            uint64_t elf_entry, elf_lowaddr;
+            uint64_t elf_entry;
 
-            success = load_elf(machine->kernel_filename, NULL,
-                               NULL, NULL, &elf_entry,
-                               &elf_lowaddr, NULL, NULL, 1, PPC_ELF_MACHINE, 0,
-                               0);
+            success = load_elf(machine->kernel_filename, NULL, NULL, NULL,
+                               &elf_entry, NULL, NULL, NULL,
+                               1, PPC_ELF_MACHINE, 0, 0);
             entry = elf_entry;
-            loadaddr = elf_lowaddr;
         }
         /* XXX try again as binary */
         if (success < 0) {

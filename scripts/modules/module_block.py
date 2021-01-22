@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 # encoding=utf-8
 #
 # Module information generator
@@ -94,23 +94,24 @@ def print_bottom(fheader):
 #endif
 ''')
 
-# First argument: output file
-# All other arguments: modules source files (.c)
-output_file = sys.argv[1]
-with open(output_file, 'w') as fheader:
-    #生成文件头
-    print_top(fheader)
+if __name__ == '__main__':
+    # First argument: output file
+    # All other arguments: modules source files (.c)
+    output_file = sys.argv[1]
+    with open(output_file, 'w') as fheader:
+    	#生成文件头
+        print_top(fheader)
 
-    #argv[1]为输出文件，argv[2:]为输入文件
-    for filename in sys.argv[2:]:
-        if os.path.isfile(filename):
-            #输入文件必须存在，解析输入文件
-            process_file(fheader, filename)
-        else:
-            print("File " + filename + " does not exist.", file=sys.stderr)
-            sys.exit(1)
+    	#argv[1]为输出文件，argv[2:]为输入文件
+        for filename in sys.argv[2:]:
+            if os.path.isfile(filename):
+            	#输入文件必须存在，解析输入文件
+                process_file(fheader, filename)
+            else:
+                print("File " + filename + " does not exist.", file=sys.stderr)
+                sys.exit(1)
 
-    #显示生成文件尾部
-    print_bottom(fheader)
+    	#显示生成文件尾部
+        print_bottom(fheader)
 
-sys.exit(0)
+    sys.exit(0)

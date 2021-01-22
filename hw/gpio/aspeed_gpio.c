@@ -755,16 +755,13 @@ static void aspeed_gpio_get_pin(Object *obj, Visitor *v, const char *name,
 static void aspeed_gpio_set_pin(Object *obj, Visitor *v, const char *name,
                                void *opaque, Error **errp)
 {
-    Error *local_err = NULL;
     bool level;
     int pin = 0xfff;
     char group[4];
     AspeedGPIOState *s = ASPEED_GPIO(obj);
     int set_idx, group_idx = 0;
 
-    visit_type_bool(v, name, &level, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (!visit_type_bool(v, name, &level, errp)) {
         return;
     }
     if (sscanf(name, "gpio%2[A-Z]%1d", group, &pin) != 2) {
@@ -873,7 +870,7 @@ static void aspeed_gpio_init(Object *obj)
         name = g_strdup_printf("gpio%s%d", props->group_label[group_idx],
                                pin_idx % GPIOS_PER_GROUP);
         object_property_add(obj, name, "bool", aspeed_gpio_get_pin,
-                            aspeed_gpio_set_pin, NULL, NULL, NULL);
+                            aspeed_gpio_set_pin, NULL, NULL);
         g_free(name);
     }
 }

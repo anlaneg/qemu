@@ -122,7 +122,7 @@ static void backup_top_refresh_filename(BlockDriverState *bs)
 }
 
 static void backup_top_child_perm(BlockDriverState *bs, BdrvChild *c,
-                                  const BdrvChildRole *role,
+                                  BdrvChildRole role,
                                   BlockReopenQueue *reopen_queue,
                                   uint64_t perm, uint64_t shared,
                                   uint64_t *nperm, uint64_t *nshared)
@@ -142,7 +142,7 @@ static void backup_top_child_perm(BlockDriverState *bs, BdrvChild *c,
         return;
     }
 
-    if (role == &child_file) {
+    if (!(role & BDRV_CHILD_FILTERED)) {
         /*
          * Target child
          *
@@ -155,8 +155,8 @@ static void backup_top_child_perm(BlockDriverState *bs, BdrvChild *c,
         *nperm = BLK_PERM_WRITE;
     } else {
         /* Source child */
-        bdrv_filter_default_perms(bs, c, role, reopen_queue, perm, shared,
-                                  nperm, nshared);
+        bdrv_default_perms(bs, c, role, reopen_queue,
+                           perm, shared, nperm, nshared);
 
         if (perm & BLK_PERM_WRITE) {
             *nperm = *nperm | BLK_PERM_CONSISTENT_READ;
@@ -174,8 +174,6 @@ BlockDriver bdrv_backup_top_filter = {
     .bdrv_co_pwrite_zeroes      = backup_top_co_pwrite_zeroes,
     .bdrv_co_pdiscard           = backup_top_co_pdiscard,
     .bdrv_co_flush              = backup_top_co_flush,
-
-    .bdrv_co_block_status       = bdrv_co_block_status_from_backing,
 
     .bdrv_refresh_filename      = backup_top_refresh_filename,
 
@@ -214,7 +212,8 @@ BlockDriverState *bdrv_backup_top_append(BlockDriverState *source,
              source->supported_zero_flags);
 
     bdrv_ref(target);
-    state->target = bdrv_attach_child(top, target, "target", &child_file, errp);
+    state->target = bdrv_attach_child(top, target, "target", &child_of_bds,
+                                      BDRV_CHILD_DATA, errp);
     if (!state->target) {
         bdrv_unref(target);
         bdrv_unref(top);
@@ -280,7 +279,7 @@ void bdrv_backup_top_drop(BlockDriverState *bs)
 
     s->active = false;
     bdrv_child_refresh_perms(bs, bs->backing, &error_abort);
-    bdrv_replace_node(bs, backing_bs(bs), &error_abort);
+    bdrv_replace_node(bs, bs->backing->bs, &error_abort);
     bdrv_set_backing_hd(bs, NULL, &error_abort);
 
     bdrv_drained_end(bs);

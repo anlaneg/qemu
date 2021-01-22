@@ -142,6 +142,9 @@ static BlockCopyTask *block_copy_task_create(BlockCopyState *s,
         return NULL;
     }
 
+    assert(QEMU_IS_ALIGNED(offset, s->cluster_size));
+    bytes = QEMU_ALIGN_UP(bytes, s->cluster_size);
+
     /* region is dirty, so no existent tasks possible in it */
     assert(!find_conflicting_task(s, offset, bytes));
 
@@ -343,9 +346,7 @@ static int coroutine_fn block_copy_do_copy(BlockCopyState *s,
                                     ~BDRV_REQ_WRITE_COMPRESSED);
         if (ret < 0) {
             trace_block_copy_write_zeroes_fail(s, offset, ret);
-            if (error_is_read) {
-                *error_is_read = false;
-            }
+            *error_is_read = false;
         }
         return ret;
     }
@@ -393,9 +394,7 @@ static int coroutine_fn block_copy_do_copy(BlockCopyState *s,
     ret = bdrv_co_pread(s->source, offset, nbytes, bounce_buffer, 0);
     if (ret < 0) {
         trace_block_copy_read_fail(s, offset, ret);
-        if (error_is_read) {
-            *error_is_read = true;
-        }
+        *error_is_read = true;
         goto out;
     }
 
@@ -403,9 +402,7 @@ static int coroutine_fn block_copy_do_copy(BlockCopyState *s,
                          s->write_flags);
     if (ret < 0) {
         trace_block_copy_write_fail(s, offset, ret);
-        if (error_is_read) {
-            *error_is_read = false;
-        }
+        *error_is_read = false;
         goto out;
     }
 
@@ -418,7 +415,7 @@ out:
 static coroutine_fn int block_copy_task_entry(AioTask *task)
 {
     BlockCopyTask *t = container_of(task, BlockCopyTask, task);
-    bool error_is_read;
+    bool error_is_read = false;
     int ret;
 
     ret = block_copy_do_copy(t->s, t->offset, t->bytes, t->zeroes,
@@ -443,8 +440,8 @@ static int block_copy_block_status(BlockCopyState *s, int64_t offset,
     BlockDriverState *base;
     int ret;
 
-    if (s->skip_unallocated && s->source->bs->backing) {
-        base = s->source->bs->backing->bs;
+    if (s->skip_unallocated) {
+        base = bdrv_backing_chain_next(s->source->bs);
     } else {
         base = NULL;
     }
@@ -628,8 +625,10 @@ out:
          * block_copy_task_run. If it fails, it means some task already failed
          * for real reason, let's return first failure.
          * Still, assert that we don't rewrite failure by success.
+         *
+         * Note: ret may be positive here because of block-status result.
          */
-        assert(ret == 0 || aio_task_pool_status(aio) < 0);
+        assert(ret >= 0 || aio_task_pool_status(aio) < 0);
         ret = aio_task_pool_status(aio);
 
         aio_task_pool_free(aio);

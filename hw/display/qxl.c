@@ -1762,7 +1762,16 @@ async_common:
         qxl_set_mode(d, val, 0);
         break;
     case QXL_IO_LOG:
+#ifdef CONFIG_MODULES
+        /*
+         * FIXME
+         * trace_event_get_state_backends() does not work for modules,
+         * it leads to "undefined symbol: qemu_qxl_io_log_semaphore"
+         */
+        if (true) {
+#else
         if (trace_event_get_state_backends(TRACE_QXL_IO_LOG) || d->guestdebug) {
+#endif
             /* We cannot trust the guest to NUL terminate d->ram->log_buf */
             char *log_buf = g_strndup((const char *)d->ram->log_buf,
                                       sizeof(d->ram->log_buf));
@@ -1899,7 +1908,7 @@ static void qxl_send_events(PCIQXLDevice *d, uint32_t events)
     /*
      * Older versions of Spice forgot to define the QXLRam struct
      * with the '__aligned__(4)' attribute. clang 7 and newer will
-     * thus warn that atomic_fetch_or(&d->ram->int_pending, ...)
+     * thus warn that qatomic_fetch_or(&d->ram->int_pending, ...)
      * might be a misaligned atomic access, and will generate an
      * out-of-line call for it, which results in a link error since
      * we don't currently link against libatomic.
@@ -1919,7 +1928,7 @@ static void qxl_send_events(PCIQXLDevice *d, uint32_t events)
 #define ALIGNED_UINT32_PTR(P) ((uint32_t *)P)
 #endif
 
-    old_pending = atomic_fetch_or(ALIGNED_UINT32_PTR(&d->ram->int_pending),
+    old_pending = qatomic_fetch_or(ALIGNED_UINT32_PTR(&d->ram->int_pending),
                                   le_events);
     if ((old_pending & le_events) == le_events) {
         return;

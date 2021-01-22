@@ -31,23 +31,23 @@
 #include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "hw/i2c/smbus_eeprom.h"
+#include "qom/object.h"
 
 //#define DEBUG
 
 #define TYPE_SMBUS_EEPROM "smbus-eeprom"
 
-#define SMBUS_EEPROM(obj) \
-    OBJECT_CHECK(SMBusEEPROMDevice, (obj), TYPE_SMBUS_EEPROM)
+OBJECT_DECLARE_SIMPLE_TYPE(SMBusEEPROMDevice, SMBUS_EEPROM)
 
 #define SMBUS_EEPROM_SIZE 256
 
-typedef struct SMBusEEPROMDevice {
+struct SMBusEEPROMDevice {
     SMBusDevice smbusdev;
     uint8_t data[SMBUS_EEPROM_SIZE];
     uint8_t *init_data;
     uint8_t offset;
     bool accessed;
-} SMBusEEPROMDevice;
+};
 
 static uint8_t eeprom_receive_byte(SMBusDevice *dev)
 {
@@ -169,11 +169,11 @@ void smbus_eeprom_init_one(I2CBus *smbus, uint8_t address, uint8_t *eeprom_buf)
 {
     DeviceState *dev;
 
-    dev = qdev_create((BusState *) smbus, TYPE_SMBUS_EEPROM);
+    dev = qdev_new(TYPE_SMBUS_EEPROM);
     qdev_prop_set_uint8(dev, "address", address);
     /* FIXME: use an array of byte or block backend property? */
     SMBUS_EEPROM(dev)->init_data = eeprom_buf;
-    qdev_init_nofail(dev);
+    qdev_realize_and_unref(dev, (BusState *)smbus, &error_fatal);
 }
 
 void smbus_eeprom_init(I2CBus *smbus, int nb_eeprom,

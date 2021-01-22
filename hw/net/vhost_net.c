@@ -17,6 +17,7 @@
 #include "net/net.h"
 #include "net/tap.h"
 #include "net/vhost-user.h"
+#include "net/vhost-vdpa.h"
 
 #include "standard-headers/linux/vhost_types.h"
 #include "hw/virtio/virtio-net.h"
@@ -33,12 +34,6 @@
 #include "hw/virtio/vhost.h"
 #include "hw/virtio/virtio-bus.h"
 
-struct vhost_net {
-    struct vhost_dev dev;
-    struct vhost_virtqueue vqs[2];
-    int backend;/*后端对应的信息，例如tap口时tap对应的fd*/
-    NetClientState *nc;
-};
 
 /* Features supported by host kernel. */
 static const int kernel_feature_bits[] = {
@@ -96,6 +91,11 @@ static const int *vhost_net_get_feature_bits(struct vhost_net *net)
     case NET_CLIENT_DRIVER_VHOST_USER:
         feature_bits = user_feature_bits;
         break;
+#ifdef CONFIG_VHOST_NET_VDPA
+    case NET_CLIENT_DRIVER_VHOST_VDPA:
+        feature_bits = vdpa_feature_bits;
+        break;
+#endif
     default:
         error_report("Feature bits not defined for this type: %d",
                 net->nc->info->type);
@@ -109,6 +109,16 @@ uint64_t vhost_net_get_features(struct vhost_net *net, uint64_t features)
 {
     return vhost_get_features(&net->dev, vhost_net_get_feature_bits(net),
             features);
+}
+int vhost_net_get_config(struct vhost_net *net,  uint8_t *config,
+                         uint32_t config_len)
+{
+    return vhost_dev_get_config(&net->dev, config, config_len);
+}
+int vhost_net_set_config(struct vhost_net *net, const uint8_t *data,
+                         uint32_t offset, uint32_t size, uint32_t flags)
+{
+    return vhost_dev_set_config(&net->dev, data, offset, size, flags);
 }
 
 void vhost_net_ack_features(struct vhost_net *net, uint64_t features)
@@ -315,7 +325,9 @@ int vhost_net_start(VirtIODevice *dev, NetClientState *ncs,
     BusState *qbus = BUS(qdev_get_parent_bus(DEVICE(dev)));
     VirtioBusState *vbus = VIRTIO_BUS(qbus);
     VirtioBusClass *k = VIRTIO_BUS_GET_CLASS(vbus);
+    struct vhost_net *net;
     int r, e, i;
+    NetClientState *peer;
 
     if (!k->set_guest_notifiers) {
         error_report("binding does not support guest notifiers");
@@ -323,10 +335,10 @@ int vhost_net_start(VirtIODevice *dev, NetClientState *ncs,
     }
 
     for (i = 0; i < total_queues; i++) {
-        struct vhost_net *net;
 
         //取队端类型
-        net = get_vhost_net(ncs[i].peer);
+        peer = qemu_get_peer(ncs, i);
+        net = get_vhost_net(peer);
         vhost_net_set_vq_index(net, i * 2);
 
         /* Suppress the masking guest notifiers on vhost user
@@ -345,15 +357,16 @@ int vhost_net_start(VirtIODevice *dev, NetClientState *ncs,
     }
 
     for (i = 0; i < total_queues; i++) {
-        r = vhost_net_start_one(get_vhost_net(ncs[i].peer), dev);
+        peer = qemu_get_peer(ncs, i);
+        r = vhost_net_start_one(get_vhost_net(peer), dev);
 
         if (r < 0) {
             goto err_start;
         }
 
-        if (ncs[i].peer->vring_enable) {
+        if (peer->vring_enable) {
             /* restore vring enable state */
-            r = vhost_set_vring_enable(ncs[i].peer, ncs[i].peer->vring_enable);
+            r = vhost_set_vring_enable(peer, peer->vring_enable);
 
             if (r < 0) {
                 goto err_start;
@@ -365,7 +378,8 @@ int vhost_net_start(VirtIODevice *dev, NetClientState *ncs,
 
 err_start:
     while (--i >= 0) {
-        vhost_net_stop_one(get_vhost_net(ncs[i].peer), dev);
+        peer = qemu_get_peer(ncs , i);
+        vhost_net_stop_one(get_vhost_net(peer), dev);
     }
     e = k->set_guest_notifiers(qbus->parent, total_queues * 2, false);
     if (e < 0) {
@@ -439,6 +453,12 @@ VHostNetState *get_vhost_net(NetClientState *nc)
 #ifdef CONFIG_VHOST_NET_USER
     case NET_CLIENT_DRIVER_VHOST_USER://采用vhost_user做为后端
         vhost_net = vhost_user_get_vhost_net(nc);
+        assert(vhost_net);
+        break;
+#endif
+#ifdef CONFIG_VHOST_NET_VDPA
+    case NET_CLIENT_DRIVER_VHOST_VDPA:
+        vhost_net = vhost_vdpa_get_vhost_net(nc);
         assert(vhost_net);
         break;
 #endif

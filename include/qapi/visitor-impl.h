@@ -49,31 +49,31 @@ struct Visitor
 
     /* Must be set to visit structs */
     //通过函数visit_start_struct调用
-    void (*start_struct)(Visitor *v, const char *name, void **obj,
+    bool (*start_struct)(Visitor *v, const char *name, void **obj,
                          size_t size, Error **errp);
 
     /* Optional; intended for input visitors */
-    void (*check_struct)(Visitor *v, Error **errp);
+    bool (*check_struct)(Visitor *v, Error **errp);
 
     /* Must be set to visit structs */
     void (*end_struct)(Visitor *v, void **obj);
 
     /* Must be set; implementations may require @list to be non-null,
      * but must document it. */
-    void (*start_list)(Visitor *v, const char *name, GenericList **list/*出参，解析的list*/,
-                       size_t size, Error **errp);/*开始list解析*/
+    bool (*start_list)(Visitor *v, const char *name, GenericList **list/*出参，解析的list*/,
+                       size_t size, Error **errp/*开始list解析*/);
 
     /* Must be set */
     GenericList *(*next_list)(Visitor *v, GenericList *tail, size_t size);/*解析下一个list,如果没有了，返回NULL*/
 
     /* Optional; intended for input visitors */
-    void (*check_list)(Visitor *v, Error **errp);/*检查list是否解析正确*/
+    bool (*check_list)(Visitor *v, Error **errp);/*检查list是否解析正确*/
 
     /* Must be set */
     void (*end_list)(Visitor *v, void **list);/*完成list解析*/
 
     /* Must be set by input and clone visitors to visit alternates */
-    void (*start_alternate)(Visitor *v, const char *name,
+    bool (*start_alternate)(Visitor *v, const char *name,
                             GenericAlternate **obj, size_t size,
                             Error **errp);
 
@@ -81,35 +81,40 @@ struct Visitor
     void (*end_alternate)(Visitor *v, void **obj);
 
     /* Must be set */
-    void (*type_int64)(Visitor *v, const char *name, int64_t *obj/*出参，保存结果*/,
-                       Error **errp/*出参，出错时使用*/);/*int64类型解析*/
-
+    /*int64类型解析*/
+    bool (*type_int64)(Visitor *v, const char *name, int64_t *obj/*出参，保存结果*/,
+                       Error **errp/*出参，出错时使用*/);
+    /*uint64类型解析*/
     /* Must be set */
-    void (*type_uint64)(Visitor *v, const char *name, uint64_t *obj,
-                        Error **errp);/*uint64类型解析*/
+    bool (*type_uint64)(Visitor *v, const char *name, uint64_t *obj,
+                        Error **errp);
 
     /* Optional; fallback is type_uint64() */
     //解析size类型数据，支持 k, M, G, T, P or E 等单位，可fallback到uint64解析
-    void (*type_size)(Visitor *v, const char *name, uint64_t *obj,
+    bool (*type_size)(Visitor *v, const char *name, uint64_t *obj,
                       Error **errp);
 
     /* Must be set */
-    void (*type_bool)(Visitor *v, const char *name, bool *obj, Error **errp);/*bool类型解析*/
+    /*bool类型解析*/
+    bool (*type_bool)(Visitor *v, const char *name, bool *obj, Error **errp);
 
     /* Must be set */
-    void (*type_str)(Visitor *v, const char *name, char **obj/*出参，解析结果*/, Error **errp);/*字符串类型解析*/
+    /*字符串类型解析*/
+    bool (*type_str)(Visitor *v, const char *name, char **obj/*出参，解析结果*/, Error **errp);
 
     /* Must be set to visit numbers */
-    void (*type_number)(Visitor *v, const char *name, double *obj,
-                        Error **errp);/*double类型解析*/
+    /*double类型解析*/
+    bool (*type_number)(Visitor *v, const char *name, double *obj,
+                        Error **errp);
 
     /* Must be set to visit arbitrary QTypes */
-    void (*type_any)(Visitor *v, const char *name, QObject **obj,
+    bool (*type_any)(Visitor *v, const char *name, QObject **obj,
                      Error **errp);
 
     /* Must be set to visit explicit null values.  */
-    void (*type_null)(Visitor *v, const char *name, QNull **obj,
-                      Error **errp);/*null类型解析*/
+    /*null类型解析*/
+    bool (*type_null)(Visitor *v, const char *name, QNull **obj,
+                      Error **errp);
 
     /* Must be set for input visitors to visit structs, optional otherwise.
        The core takes care of the return type in the public interface. */

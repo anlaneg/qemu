@@ -17,14 +17,17 @@
 #include "qapi/qobject-input-visitor.h"
 #include "qapi/qobject-output-visitor.h"
 
-void object_property_set_qobject(Object *obj, QObject *value,
-                                 const char *name, Error **errp)
+bool object_property_set_qobject(Object *obj,
+                                 const char *name, QObject *value,
+                                 Error **errp)
 {
     Visitor *v;
+    bool ok;
 
     v = qobject_input_visitor_new(value);
-    object_property_set(obj, v, name, errp);
+    ok = object_property_set(obj, name, v, errp);
     visit_free(v);
+    return ok;
 }
 
 //取Object中名称为name的属性值
@@ -32,18 +35,15 @@ QObject *object_property_get_qobject(Object *obj, const char *name,
                                      Error **errp)
 {
     QObject *ret = NULL;
-    Error *local_err = NULL;
     Visitor *v;
 
     /*构造output visitor,并指明结果值存在ret指针中*/
     v = qobject_output_visitor_new(&ret);
     //获取相应属性值
-    object_property_get(obj, v, name, &local_err);
-    if (!local_err) {
+    if (object_property_get(obj, name, v, errp)) {
         //未发生错误，执行complete
         visit_complete(v, &ret);
     }
-    error_propagate(errp, local_err);
     visit_free(v);
     //返回内容
     return ret;

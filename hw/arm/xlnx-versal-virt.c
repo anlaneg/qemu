@@ -22,12 +22,12 @@
 #include "cpu.h"
 #include "hw/qdev-properties.h"
 #include "hw/arm/xlnx-versal.h"
+#include "qom/object.h"
 
 #define TYPE_XLNX_VERSAL_VIRT_MACHINE MACHINE_TYPE_NAME("xlnx-versal-virt")
-#define XLNX_VERSAL_VIRT_MACHINE(obj) \
-    OBJECT_CHECK(VersalVirt, (obj), TYPE_XLNX_VERSAL_VIRT_MACHINE)
+OBJECT_DECLARE_SIMPLE_TYPE(VersalVirt, XLNX_VERSAL_VIRT_MACHINE)
 
-typedef struct VersalVirt {
+struct VersalVirt {
     MachineState parent_obj;
 
     Versal soc;
@@ -45,7 +45,7 @@ typedef struct VersalVirt {
     struct {
         bool secure;
     } cfg;
-} VersalVirt;
+};
 
 static void fdt_create(VersalVirt *s)
 {
@@ -212,7 +212,7 @@ static void fdt_add_gem_nodes(VersalVirt *s)
                               s->phandle.ethernet_phy[i]);
         qemu_fdt_setprop_cells(s->fdt, name, "clocks",
                                s->phandle.clk_25Mhz, s->phandle.clk_25Mhz,
-                               s->phandle.clk_25Mhz, s->phandle.clk_25Mhz);
+                               s->phandle.clk_125Mhz, s->phandle.clk_125Mhz);
         qemu_fdt_setprop(s->fdt, name, "clock-names",
                          clocknames, sizeof(clocknames));
         qemu_fdt_setprop_cells(s->fdt, name, "interrupts",
@@ -432,10 +432,9 @@ static void create_virtio_regions(VersalVirt *s)
         qemu_irq pic_irq;
 
         pic_irq = qdev_get_gpio_in(DEVICE(&s->soc.fpd.apu.gic), irq);
-        dev = qdev_create(NULL, "virtio-mmio");
-        object_property_add_child(OBJECT(&s->soc), name, OBJECT(dev),
-                                  &error_fatal);
-        qdev_init_nofail(dev);
+        dev = qdev_new("virtio-mmio");
+        object_property_add_child(OBJECT(&s->soc), name, OBJECT(dev));
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
         sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, pic_irq);
         mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 0);
         memory_region_add_subregion(&s->soc.mr_ps, base, mr);
@@ -464,11 +463,11 @@ static void sd_plugin_card(SDHCIState *sd, DriveInfo *di)
     BlockBackend *blk = di ? blk_by_legacy_dinfo(di) : NULL;
     DeviceState *card;
 
-    card = qdev_create(qdev_get_child_bus(DEVICE(sd), "sd-bus"), TYPE_SD_CARD);
-    object_property_add_child(OBJECT(sd), "card[*]", OBJECT(card),
-                              &error_fatal);
-    qdev_prop_set_drive(card, "drive", blk, &error_fatal);
-    object_property_set_bool(OBJECT(card), true, "realized", &error_fatal);
+    card = qdev_new(TYPE_SD_CARD);
+    object_property_add_child(OBJECT(sd), "card[*]", OBJECT(card));
+    qdev_prop_set_drive_err(card, "drive", blk, &error_fatal);
+    qdev_realize_and_unref(card, qdev_get_child_bus(DEVICE(sd), "sd-bus"),
+                           &error_fatal);
 }
 
 static void versal_virt_init(MachineState *machine)
@@ -501,13 +500,13 @@ static void versal_virt_init(MachineState *machine)
         psci_conduit = QEMU_PSCI_CONDUIT_SMC;
     }
 
-    sysbus_init_child_obj(OBJECT(machine), "xlnx-versal", &s->soc,
-                          sizeof(s->soc), TYPE_XLNX_VERSAL);
-    object_property_set_link(OBJECT(&s->soc), OBJECT(machine->ram),
-                             "ddr", &error_abort);
-    object_property_set_int(OBJECT(&s->soc), psci_conduit,
-                            "psci-conduit", &error_abort);
-    object_property_set_bool(OBJECT(&s->soc), true, "realized", &error_fatal);
+    object_initialize_child(OBJECT(machine), "xlnx-versal", &s->soc,
+                            TYPE_XLNX_VERSAL);
+    object_property_set_link(OBJECT(&s->soc), "ddr", OBJECT(machine->ram),
+                             &error_abort);
+    object_property_set_int(OBJECT(&s->soc), "psci-conduit", psci_conduit,
+                            &error_abort);
+    sysbus_realize(SYS_BUS_DEVICE(&s->soc), &error_fatal);
 
     fdt_create(s);
     create_virtio_regions(s);
@@ -562,6 +561,7 @@ static void versal_virt_machine_class_init(ObjectClass *oc, void *data)
 
     mc->desc = "Xilinx Versal Virtual development board";
     mc->init = versal_virt_init;
+    mc->min_cpus = XLNX_VERSAL_NR_ACPUS;
     mc->max_cpus = XLNX_VERSAL_NR_ACPUS;
     mc->default_cpus = XLNX_VERSAL_NR_ACPUS;
     mc->no_cdrom = true;

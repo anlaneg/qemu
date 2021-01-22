@@ -482,8 +482,13 @@ static void test_propagate_basic(void)
     BlockDriverState *bs_a, *bs_b, *bs_verify;
     QDict *options;
 
-    /* Create bs_a and its BlockBackend */
-    blk = blk_new(qemu_get_aio_context(), BLK_PERM_ALL, BLK_PERM_ALL);
+    /*
+     * Create bs_a and its BlockBackend.  We cannot take the RESIZE
+     * permission because blkverify will not share it on the test
+     * image.
+     */
+    blk = blk_new(qemu_get_aio_context(), BLK_PERM_ALL & ~BLK_PERM_RESIZE,
+                  BLK_PERM_ALL);
     bs_a = bdrv_new_open_driver(&bdrv_test, "bs_a", BDRV_O_RDWR, &error_abort);
     blk_insert_bs(blk, bs_a, &error_abort);
 
@@ -566,7 +571,13 @@ static void test_propagate_diamond(void)
     qdict_put_str(options, "raw", "bs_c");
 
     bs_verify = bdrv_open(NULL, NULL, options, BDRV_O_RDWR, &error_abort);
-    blk = blk_new(qemu_get_aio_context(), BLK_PERM_ALL, BLK_PERM_ALL);
+    /*
+     * Do not take the RESIZE permission: This would require the same
+     * from bs_c and thus from bs_a; however, blkverify will not share
+     * it on bs_b, and thus it will not be available for bs_a.
+     */
+    blk = blk_new(qemu_get_aio_context(), BLK_PERM_ALL & ~BLK_PERM_RESIZE,
+                  BLK_PERM_ALL);
     blk_insert_bs(blk, bs_verify, &error_abort);
 
     /* Switch the AioContext */
@@ -639,8 +650,7 @@ static void test_propagate_mirror(void)
     blk_insert_bs(blk, src, &error_abort);
 
     bdrv_try_set_aio_context(target, ctx, &local_err);
-    g_assert(local_err);
-    error_free(local_err);
+    error_free_or_abort(&local_err);
 
     g_assert(blk_get_aio_context(blk) == main_ctx);
     g_assert(bdrv_get_aio_context(src) == main_ctx);

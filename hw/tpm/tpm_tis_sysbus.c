@@ -25,19 +25,21 @@
 #include "qemu/osdep.h"
 #include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
-#include "tpm_util.h"
+#include "hw/acpi/tpm.h"
+#include "tpm_prop.h"
 #include "hw/sysbus.h"
 #include "tpm_tis.h"
+#include "qom/object.h"
 
-typedef struct TPMStateSysBus {
+struct TPMStateSysBus {
     /*< private >*/
     SysBusDevice parent_obj;
 
     /*< public >*/
     TPMState state; /* not a QOM object */
-} TPMStateSysBus;
+};
 
-#define TPM_TIS_SYSBUS(obj) OBJECT_CHECK(TPMStateSysBus, (obj), TYPE_TPM_TIS_SYSBUS)
+OBJECT_DECLARE_SIMPLE_TYPE(TPMStateSysBus, TPM_TIS_SYSBUS)
 
 static int tpm_tis_pre_save_sysbus(void *opaque)
 {

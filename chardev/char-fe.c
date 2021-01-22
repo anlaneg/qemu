@@ -29,7 +29,7 @@
 
 #include "chardev/char-fe.h"
 #include "chardev/char-io.h"
-#include "chardev/char-mux.h"
+#include "chardev-internal.h"
 
 //向be中写入buf中的数据（不要求全部写入）
 int qemu_chr_fe_write(CharBackend *be, const uint8_t *buf, int len)

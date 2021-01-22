@@ -139,7 +139,7 @@ opts_visitor_insert(GHashTable *unprocessed_opts, const QemuOpt *opt)
 
 //分配obj需要的空间，创建unprocessed_opts表，
 //并将opts中的选项逐个加入到unprocessed_opts表中
-static void
+static bool
 opts_start_struct(Visitor *v, const char *name, void **obj,
                   size_t size, Error **errp)
 {
@@ -151,7 +151,7 @@ opts_start_struct(Visitor *v, const char *name, void **obj,
         *obj = g_malloc0(size);
     }
     if (ov->depth++ > 0) {
-        return;
+        return true;
     }
 
     ov->unprocessed_opts = g_hash_table_new_full(&g_str_hash, &g_str_equal,
@@ -173,10 +173,11 @@ opts_start_struct(Visitor *v, const char *name, void **obj,
         ov->fake_id_opt->str = g_strdup(ov->opts_root->id);
         opts_visitor_insert(ov->unprocessed_opts, ov->fake_id_opt);
     }
+    return true;
 }
 
 
-static void
+static bool
 opts_check_struct(Visitor *v, Error **errp)
 {
     OptsVisitor *ov = to_ov(v);
@@ -184,7 +185,7 @@ opts_check_struct(Visitor *v, Error **errp)
     GQueue *any;
 
     if (ov->depth > 1) {
-        return;
+        return true;
     }
 
     /* we should have processed all (distinct) QemuOpt instances */
@@ -195,7 +196,9 @@ opts_check_struct(Visitor *v, Error **errp)
 
         first = g_queue_peek_head(any);
         error_setg(errp, QERR_INVALID_PARAMETER, first->name);
+        return false;
     }
+    return true;
 }
 
 //资源释放
@@ -234,7 +237,7 @@ lookup_distinct(const OptsVisitor *ov, const char *name, Error **errp)
 }
 
 
-static void
+static bool
 opts_start_list(Visitor *v, const char *name, GenericList **list, size_t size,
                 Error **errp)
 {
@@ -245,12 +248,13 @@ opts_start_list(Visitor *v, const char *name, GenericList **list, size_t size,
     /* we don't support visits without a list */
     assert(list);
     ov->repeated_opts = lookup_distinct(ov, name, errp);
-    if (ov->repeated_opts) {
-        ov->list_mode = LM_IN_PROGRESS;//更改访问方式
-        *list = g_malloc0(size);
-    } else {
+    if (!ov->repeated_opts) {
         *list = NULL;
+        return false;
     }
+    ov->list_mode = LM_IN_PROGRESS;//更改访问方式
+    *list = g_malloc0(size);
+    return true;
 }
 
 
@@ -298,13 +302,14 @@ opts_next_list(Visitor *v, GenericList *tail, size_t size)
 }
 
 
-static void
+static bool
 opts_check_list(Visitor *v, Error **errp)
 {
     /*
      * Unvisited list elements will be reported later when checking
      * whether unvisited struct members remain.
      */
+    return true;
 }
 
 
@@ -357,7 +362,7 @@ processed(OptsVisitor *ov, const char *name)
 
 
 //字符串类型解析
-static void
+static bool
 opts_type_str(Visitor *v, const char *name/*选项名称*/, char **obj/*出参，返回opts对应的字符串配置选项*/, Error **errp)
 {
     OptsVisitor *ov = to_ov(v);
@@ -368,7 +373,7 @@ opts_type_str(Visitor *v, const char *name/*选项名称*/, char **obj/*出参�
     if (!opt) {
     	//不存在此选项，则结果obj为NULL
         *obj = NULL;
-        return;
+        return false;
     }
     //如果opt中有字符串，则obj使用此字符串
     *obj = g_strdup(opt->str ? opt->str : "");
@@ -379,12 +384,12 @@ opts_type_str(Visitor *v, const char *name/*选项名称*/, char **obj/*出参�
      * check if there were no other failures during the visit.  */
     //标记name选项已被处理
     processed(ov, name);
+    return true;
 }
 
 
-/* mimics qemu-option.c::parse_option_bool() */
 //将opt的值转换为boolean类型
-static void
+static bool
 opts_type_bool(Visitor *v, const char *name, bool *obj, Error **errp)
 {
     OptsVisitor *ov = to_ov(v);
@@ -392,33 +397,23 @@ opts_type_bool(Visitor *v, const char *name, bool *obj, Error **errp)
 
     opt = lookup_scalar(ov, name, errp);
     if (!opt) {
-        return;
+        return false;
     }
-
     if (opt->str) {
-        if (strcmp(opt->str, "on") == 0 ||
-            strcmp(opt->str, "yes") == 0 ||
-            strcmp(opt->str, "y") == 0) {
-            *obj = true;//true处理
-        } else if (strcmp(opt->str, "off") == 0 ||
-            strcmp(opt->str, "no") == 0 ||
-            strcmp(opt->str, "n") == 0) {
-            *obj = false;//false处理
-        } else {
-            error_setg(errp, QERR_INVALID_PARAMETER_VALUE, opt->name,
-                       "on|yes|y|off|no|n");
-            return;
+        if (!qapi_bool_parse(opt->name, opt->str, obj, errp)) {
+            return false;
         }
     } else {
         *obj = true;
     }
 
     processed(ov, name);
+    return true;
 }
 
 
 //将选项name的配置值转换为整数
-static void
+static bool
 opts_type_int64(Visitor *v, const char *name, int64_t *obj, Error **errp)
 {
     OptsVisitor *ov = to_ov(v);
@@ -429,12 +424,12 @@ opts_type_int64(Visitor *v, const char *name, int64_t *obj, Error **errp)
 
     if (ov->list_mode == LM_SIGNED_INTERVAL) {
         *obj = ov->range_next.s;
-        return;
+        return true;
     }
 
     opt = lookup_scalar(ov, name, errp);
     if (!opt) {
-        return;
+        return false;
     }
     //取opt的值
     str = opt->str ? opt->str : "";
@@ -449,7 +444,7 @@ opts_type_int64(Visitor *v, const char *name, int64_t *obj, Error **errp)
         if (*endptr == '\0') {
             *obj = val;
             processed(ov, name);
-            return;
+            return true;
         }
         if (*endptr == '-' && ov->list_mode == LM_IN_PROGRESS) {
             long long val2;
@@ -466,17 +461,18 @@ opts_type_int64(Visitor *v, const char *name, int64_t *obj, Error **errp)
 
                 /* as if entering on the top */
                 *obj = ov->range_next.s;
-                return;
+                return true;
             }
         }
     }
     error_setg(errp, QERR_INVALID_PARAMETER_VALUE, opt->name,
                (ov->list_mode == LM_NONE) ? "an int64 value" :
                                             "an int64 value or range");
+    return false;
 }
 
 
-static void
+static bool
 opts_type_uint64(Visitor *v, const char *name, uint64_t *obj, Error **errp)
 {
     OptsVisitor *ov = to_ov(v);
@@ -487,12 +483,12 @@ opts_type_uint64(Visitor *v, const char *name, uint64_t *obj, Error **errp)
 
     if (ov->list_mode == LM_UNSIGNED_INTERVAL) {
         *obj = ov->range_next.u;
-        return;
+        return true;
     }
 
     opt = lookup_scalar(ov, name, errp);
     if (!opt) {
-        return;
+        return false;
     }
     str = opt->str;
 
@@ -503,7 +499,7 @@ opts_type_uint64(Visitor *v, const char *name, uint64_t *obj, Error **errp)
         if (*endptr == '\0') {
             *obj = val;
             processed(ov, name);
-            return;
+            return true;
         }
         if (*endptr == '-' && ov->list_mode == LM_IN_PROGRESS) {
             unsigned long long val2;
@@ -518,17 +514,18 @@ opts_type_uint64(Visitor *v, const char *name, uint64_t *obj, Error **errp)
 
                 /* as if entering on the top */
                 *obj = ov->range_next.u;
-                return;
+                return true;
             }
         }
     }
     error_setg(errp, QERR_INVALID_PARAMETER_VALUE, opt->name,
                (ov->list_mode == LM_NONE) ? "a uint64 value" :
                                             "a uint64 value or range");
+    return false;
 }
 
 
-static void
+static bool
 opts_type_size(Visitor *v, const char *name, uint64_t *obj, Error **errp)
 {
     OptsVisitor *ov = to_ov(v);
@@ -537,17 +534,18 @@ opts_type_size(Visitor *v, const char *name, uint64_t *obj, Error **errp)
 
     opt = lookup_scalar(ov, name, errp);
     if (!opt) {
-        return;
+        return false;
     }
 
     err = qemu_strtosz(opt->str ? opt->str : "", NULL, obj);
     if (err < 0) {
         error_setg(errp, QERR_INVALID_PARAMETER_VALUE, opt->name,
                    "a size value");
-        return;
+        return false;
     }
 
     processed(ov, name);
+    return true;
 }
 
 //检查是否存在选项name,如果有返回present=true,否则返回present=false

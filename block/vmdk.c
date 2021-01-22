@@ -595,7 +595,7 @@ static int vmdk_open_vmfs_sparse(BlockDriverState *bs,
     int ret;
     uint32_t magic;
     VMDK3Header header;
-    VmdkExtent *extent;
+    VmdkExtent *extent = NULL;
 
     ret = bdrv_pread(file, sizeof(magic), &header, sizeof(header));
     if (ret < 0) {
@@ -751,7 +751,7 @@ static int vmdk_open_se_sparse(BlockDriverState *bs,
     int ret;
     VMDKSESparseConstHeader const_header;
     VMDKSESparseVolatileHeader volatile_header;
-    VmdkExtent *extent;
+    VmdkExtent *extent = NULL;
 
     ret = bdrv_apply_auto_read_only(bs,
             "No write support for seSparse images available", errp);
@@ -869,7 +869,7 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
     uint32_t magic;
     uint32_t l1_size, l1_entry_sectors;
     VMDK4Header header;
-    VmdkExtent *extent;
+    VmdkExtent *extent = NULL;
     BDRVVmdkState *s = bs->opaque;
     int64_t l1_backup_offset = 0;
     bool compressed;
@@ -1053,14 +1053,11 @@ static int vmdk_open_sparse(BlockDriverState *bs, BdrvChild *file, int flags,
     switch (magic) {
         case VMDK3_MAGIC:
             return vmdk_open_vmfs_sparse(bs, file, flags, errp);
-            break;
         case VMDK4_MAGIC:
             return vmdk_open_vmdk4(bs, file, flags, options, errp);
-            break;
         default:
             error_setg(errp, "Image not in VMDK format");
             return -EINVAL;
-            break;
     }
 }
 
@@ -1089,8 +1086,9 @@ static int vmdk_parse_extents(const char *desc, BlockDriverState *bs,
     char *desc_file_dir = NULL;
     char *extent_path;
     BdrvChild *extent_file;
+    BdrvChildRole extent_role;
     BDRVVmdkState *s = bs->opaque;
-    VmdkExtent *extent;
+    VmdkExtent *extent = NULL;
     char extent_opt_prefix[32];
     Error *local_err = NULL;
 
@@ -1151,8 +1149,15 @@ static int vmdk_parse_extents(const char *desc, BlockDriverState *bs,
         ret = snprintf(extent_opt_prefix, 32, "extents.%d", s->num_extents);
         assert(ret < 32);
 
+        extent_role = BDRV_CHILD_DATA;
+        if (strcmp(type, "FLAT") != 0 && strcmp(type, "VMFS") != 0) {
+            /* non-flat extents have metadata */
+            extent_role |= BDRV_CHILD_METADATA;
+        }
+
         extent_file = bdrv_open_child(extent_path, options, extent_opt_prefix,
-                                      bs, &child_file, false, &local_err);
+                                      bs, &child_of_bds, extent_role, false,
+                                      &local_err);
         g_free(extent_path);
         if (local_err) {
             error_propagate(errp, local_err);
@@ -1255,10 +1260,9 @@ static int vmdk_open(BlockDriverState *bs, QDict *options, int flags,
     int ret;
     BDRVVmdkState *s = bs->opaque;
     uint32_t magic;
-    Error *local_err = NULL;
 
-    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_file,
-                               false, errp);
+    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_of_bds,
+                               BDRV_CHILD_IMAGE, false, errp);
     if (!bs->file) {
         return -EINVAL;
     }
@@ -1277,6 +1281,12 @@ static int vmdk_open(BlockDriverState *bs, QDict *options, int flags,
             s->desc_offset = 0x200;
             break;
         default:
+            /* No data in the descriptor file */
+            bs->file->role &= ~BDRV_CHILD_DATA;
+
+            /* Must succeed because we have given up permissions if anything */
+            bdrv_child_refresh_perms(bs, bs->file, &error_abort);
+
             ret = vmdk_open_desc_file(bs, flags, buf, options, errp);
             break;
     }
@@ -1303,9 +1313,8 @@ static int vmdk_open(BlockDriverState *bs, QDict *options, int flags,
     error_setg(&s->migration_blocker, "The vmdk format used by node '%s' "
                "does not support live migration",
                bdrv_get_device_or_node_name(bs));
-    ret = migrate_add_blocker(s->migration_blocker, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    ret = migrate_add_blocker(s->migration_blocker, errp);
+    if (ret < 0) {
         error_free(s->migration_blocker);
         goto fail;
     }
@@ -2236,19 +2245,16 @@ static int vmdk_create_extent(const char *filename, int64_t filesize,
 {
     int ret;
     BlockBackend *blk = NULL;
-    Error *local_err = NULL;
 
-    ret = bdrv_create_file(filename, opts, &local_err);
+    ret = bdrv_create_file(filename, opts, errp);
     if (ret < 0) {
-        error_propagate(errp, local_err);
         goto exit;
     }
 
     blk = blk_new_open(filename, NULL, NULL,
                        BDRV_O_RDWR | BDRV_O_RESIZE | BDRV_O_PROTOCOL,
-                       &local_err);
+                       errp);
     if (blk == NULL) {
-        error_propagate(errp, local_err);
         ret = -EIO;
         goto exit;
     }
@@ -2624,6 +2630,14 @@ static int coroutine_fn vmdk_co_create_opts(BlockDriver *drv,
     bool zeroed_grain;
     bool compat6;
     VMDKCreateOptsData data;
+    char *backing_fmt = NULL;
+
+    backing_fmt = qemu_opt_get_del(opts, BLOCK_OPT_BACKING_FMT);
+    if (backing_fmt && strcmp(backing_fmt, "vmdk") != 0) {
+        error_setg(errp, "backing_file must be a vmdk image");
+        ret = -EINVAL;
+        goto exit;
+    }
 
     if (filename_decompose(filename, path, prefix, postfix, PATH_MAX, errp)) {
         ret = -EINVAL;
@@ -2682,6 +2696,7 @@ static int coroutine_fn vmdk_co_create_opts(BlockDriver *drv,
                             vmdk_co_create_opts_cb, &data, errp);
 
 exit:
+    g_free(backing_fmt);
     g_free(adapter_type);
     g_free(backing_file);
     g_free(hw_version);
@@ -2786,21 +2801,6 @@ static void vmdk_close(BlockDriverState *bs)
 
     migrate_del_blocker(s->migration_blocker);
     error_free(s->migration_blocker);
-}
-
-static coroutine_fn int vmdk_co_flush(BlockDriverState *bs)
-{
-    BDRVVmdkState *s = bs->opaque;
-    int i, err;
-    int ret = 0;
-
-    for (i = 0; i < s->num_extents; i++) {
-        err = bdrv_co_flush(s->extents[i].file->bs);
-        if (err < 0) {
-            ret = err;
-        }
-    }
-    return ret;
 }
 
 static int64_t vmdk_get_allocated_file_size(BlockDriverState *bs)
@@ -3018,6 +3018,11 @@ static QemuOptsList vmdk_create_opts = {
             .help = "File name of a base image"
         },
         {
+            .name = BLOCK_OPT_BACKING_FMT,
+            .type = QEMU_OPT_STRING,
+            .help = "Must be 'vmdk' if present",
+        },
+        {
             .name = BLOCK_OPT_COMPAT6,
             .type = QEMU_OPT_BOOL,
             .help = "VMDK version 6 image",
@@ -3053,7 +3058,7 @@ static BlockDriver bdrv_vmdk = {
     .bdrv_open                    = vmdk_open,
     .bdrv_co_check                = vmdk_co_check,
     .bdrv_reopen_prepare          = vmdk_reopen_prepare,
-    .bdrv_child_perm              = bdrv_format_default_perms,
+    .bdrv_child_perm              = bdrv_default_perms,
     .bdrv_co_preadv               = vmdk_co_preadv,
     .bdrv_co_pwritev              = vmdk_co_pwritev,
     .bdrv_co_pwritev_compressed   = vmdk_co_pwritev_compressed,
@@ -3061,7 +3066,6 @@ static BlockDriver bdrv_vmdk = {
     .bdrv_close                   = vmdk_close,
     .bdrv_co_create_opts          = vmdk_co_create_opts,
     .bdrv_co_create               = vmdk_co_create,
-    .bdrv_co_flush_to_disk        = vmdk_co_flush,
     .bdrv_co_block_status         = vmdk_co_block_status,
     .bdrv_get_allocated_file_size = vmdk_get_allocated_file_size,
     .bdrv_has_zero_init           = vmdk_has_zero_init,
@@ -3070,6 +3074,7 @@ static BlockDriver bdrv_vmdk = {
     .bdrv_get_info                = vmdk_get_info,
     .bdrv_gather_child_options    = vmdk_gather_child_options,
 
+    .is_format                    = true,
     .supports_backing             = true,
     .create_opts                  = &vmdk_create_opts,
 };

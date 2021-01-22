@@ -283,7 +283,8 @@ static void tap_set_vnet_hdr_len(NetClientState *nc, int len)
 
     assert(nc->info->type == NET_CLIENT_DRIVER_TAP);
     assert(len == sizeof(struct virtio_net_hdr_mrg_rxbuf) ||
-           len == sizeof(struct virtio_net_hdr));
+           len == sizeof(struct virtio_net_hdr) ||
+           len == sizeof(struct virtio_net_hdr_v1_hash));
 
     tap_fd_set_vnet_hdr_len(s->fd, len);
     s->host_vnet_hdr_len = len;
@@ -523,6 +524,7 @@ static int net_bridge_run_helper(const char *helper, const char *bridge,
                                  Error **errp)
 {
     sigset_t oldmask, mask;
+    g_autofree char *default_helper = NULL;
     int pid, status;
     char *args[5];
     char **parg;
@@ -532,6 +534,10 @@ static int net_bridge_run_helper(const char *helper, const char *bridge,
     sigemptyset(&mask);
     sigaddset(&mask, SIGCHLD);
     sigprocmask(SIG_BLOCK, &mask, &oldmask);
+
+    if (!helper) {
+        helper = default_helper = get_relocated_path(DEFAULT_BRIDGE_HELPER);
+    }
 
     //创建unix socket的pair
     if (socketpair(PF_UNIX, SOCK_STREAM, 0, sv) == -1) {
@@ -644,9 +650,8 @@ int net_init_bridge(const Netdev *netdev, const char *name,
 
     assert(netdev->type == NET_CLIENT_DRIVER_BRIDGE);
     bridge = &netdev->u.bridge;
-
     //桥的helper命令行
-    helper = bridge->has_helper ? bridge->helper : DEFAULT_BRIDGE_HELPER;
+    helper = bridge->has_helper ? bridge->helper : NULL;
     br     = bridge->has_br     ? bridge->br     : DEFAULT_BRIDGE_INTERFACE;
 
     //运行bridge的命令，创建tap口，并加入到桥$br中，返回tap对应的fd,准备加入事件
@@ -656,7 +661,11 @@ int net_init_bridge(const Netdev *netdev, const char *name,
     }
 
     qemu_set_nonblock(fd);
-    vnet_hdr = tap_probe_vnet_hdr(fd);
+    vnet_hdr = tap_probe_vnet_hdr(fd, errp);
+    if (vnet_hdr < 0) {
+        close(fd);
+        return -1;
+    }
     s = net_tap_fd_init(peer, "bridge", name, fd, vnet_hdr);
 
     snprintf(s->nc.info_str, sizeof(s->nc.info_str), "helper=%s,br=%s", helper,
@@ -756,8 +765,10 @@ static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer/*
         }
 
         if (vhostfdname) {
+            int ret;
+
             /*通过vhostfd字符串，获得vhostfd*/
-            vhostfd = monitor_fd_param(cur_mon, vhostfdname, &err);
+            vhostfd = monitor_fd_param(monitor_cur(), vhostfdname, &err);
             if (vhostfd == -1) {
                 if (tap->has_vhostforce && tap->vhostforce) {
                     error_propagate(errp, err);
@@ -766,7 +777,12 @@ static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer/*
                 }
                 return;
             }
-            qemu_set_nonblock(vhostfd);
+            ret = qemu_try_set_nonblock(vhostfd);
+            if (ret < 0) {
+                error_setg_errno(errp, -ret, "%s: Can't use file descriptor %d",
+                                 name, fd);
+                return;
+            }
         } else {
             /*打开vhost-net字符设备，获得对应的fd*/
             vhostfd = open("/dev/vhost-net", O_RDWR);
@@ -833,17 +849,20 @@ int net_init_tap(const Netdev *netdev, const char *name/*net client唯一标识*
     const NetdevTapOptions *tap;
     int fd, vnet_hdr = 0, i = 0, queues;
     /* for the no-fd, no-helper case */
-    const char *script = NULL; /* suppress wrong "uninit'd use" gcc warning */
-    const char *downscript = NULL;
+    const char *script;
+    const char *downscript;
     Error *err = NULL;
     const char *vhostfdname;
     char ifname[128];
+    int ret = 0;
 
     //此时由于创建的tap类net client,故netdev类型为tap
     assert(netdev->type == NET_CLIENT_DRIVER_TAP);
     tap = &netdev->u.tap;
     queues = tap->has_queues ? tap->queues : 1;
     vhostfdname = tap->has_vhostfd ? tap->vhostfd : NULL;
+    script = tap->has_script ? tap->script : NULL;
+    downscript = tap->has_downscript ? tap->downscript : NULL;
 
     /* QEMU hubs do not support multiqueue tap, in this case peer is set.
      * For -netdev, peer is always NULL. */
@@ -864,15 +883,24 @@ int net_init_tap(const Netdev *netdev, const char *name/*net client唯一标识*
         }
 
         //获得tap->fd指定的tap设备fd描述符
-        fd = monitor_fd_param(cur_mon, tap->fd, &err);
+        fd = monitor_fd_param(monitor_cur(), tap->fd, errp);
         if (fd == -1) {
-            error_propagate(errp, err);
             return -1;
         }
 
-        qemu_set_nonblock(fd);
+        ret = qemu_try_set_nonblock(fd);
+        if (ret < 0) {
+            error_setg_errno(errp, -ret, "%s: Can't use file descriptor %d",
+                             name, fd);
+            close(fd);
+            return -1;
+        }
 
-        vnet_hdr = tap_probe_vnet_hdr(fd);
+        vnet_hdr = tap_probe_vnet_hdr(fd, errp);
+        if (vnet_hdr < 0) {
+            close(fd);
+            return -1;
+        }
 
         //通过以上参数创始TapState
         net_init_tap_one(tap, peer, "tap", name, NULL,
@@ -880,6 +908,7 @@ int net_init_tap(const Netdev *netdev, const char *name/*net client唯一标识*
                          vhostfdname, vnet_hdr/*是否使能了vnet_hdr*/, fd/*tap设备fd*/, &err);
         if (err) {
             error_propagate(errp, err);
+            close(fd);
             return -1;
         }
     } else if (tap->has_fds) {
@@ -887,7 +916,6 @@ int net_init_tap(const Netdev *netdev, const char *name/*net client唯一标识*
         char **fds;
         char **vhost_fds;
         int nfds = 0, nvhosts = 0;
-        int ret = 0;
 
         //与以下参数相冲突
         if (tap->has_ifname || tap->has_script || tap->has_downscript ||
@@ -917,18 +945,25 @@ int net_init_tap(const Netdev *netdev, const char *name/*net client唯一标识*
 
         //针对每个nfds,创建一个TAPState
         for (i = 0; i < nfds; i++) {
-            fd = monitor_fd_param(cur_mon, fds[i], &err);
+            fd = monitor_fd_param(monitor_cur(), fds[i], errp);
             if (fd == -1) {
-                error_propagate(errp, err);
                 ret = -1;
                 goto free_fail;
             }
 
-            qemu_set_nonblock(fd);
+            ret = qemu_try_set_nonblock(fd);
+            if (ret < 0) {
+                error_setg_errno(errp, -ret, "%s: Can't use file descriptor %d",
+                                 name, fd);
+                goto free_fail;
+            }
 
             if (i == 0) {
-                vnet_hdr = tap_probe_vnet_hdr(fd);
-            } else if (vnet_hdr != tap_probe_vnet_hdr(fd)) {
+                vnet_hdr = tap_probe_vnet_hdr(fd, errp);
+                if (vnet_hdr < 0) {
+                    goto free_fail;
+                }
+            } else if (vnet_hdr != tap_probe_vnet_hdr(fd, NULL)) {
                 error_setg(errp,
                            "vnet_hdr not consistent across given tap fds");
                 ret = -1;
@@ -975,7 +1010,11 @@ free_fail:
         }
 
         qemu_set_nonblock(fd);
-        vnet_hdr = tap_probe_vnet_hdr(fd);
+        vnet_hdr = tap_probe_vnet_hdr(fd, errp);
+        if (vnet_hdr < 0) {
+            close(fd);
+            return -1;
+        }
 
         /*创建TAPState*/
         net_init_tap_one(tap, peer, "bridge", name, ifname,
@@ -987,15 +1026,22 @@ free_fail:
             return -1;
         }
     } else {
+        g_autofree char *default_script = NULL;
+        g_autofree char *default_downscript = NULL;
         /*其它方式，与hash_vhostfds相冲突*/
         if (tap->has_vhostfds) {
             error_setg(errp, "vhostfds= is invalid if fds= wasn't specified");
             return -1;
         }
+
         //接口up/down脚本
-        script = tap->has_script ? tap->script : DEFAULT_NETWORK_SCRIPT;
-        downscript = tap->has_downscript ? tap->downscript :
-            DEFAULT_NETWORK_DOWN_SCRIPT;
+        if (!script) {
+            script = default_script = get_relocated_path(DEFAULT_NETWORK_SCRIPT);
+        }
+        if (!downscript) {
+            downscript = default_downscript =
+                                 get_relocated_path(DEFAULT_NETWORK_DOWN_SCRIPT);
+        }
 
         if (tap->has_ifname) {
             pstrcpy(ifname, sizeof ifname, tap->ifname);
