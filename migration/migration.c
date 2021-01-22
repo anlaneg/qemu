@@ -52,10 +52,12 @@
 #include "migration/colo.h"
 #include "hw/boards.h"
 #include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
 #include "monitor/monitor.h"
 #include "net/announce.h"
 #include "qemu/queue.h"
 #include "multifd.h"
+#include "qemu/yank.h"
 
 #ifdef CONFIG_VFIO
 #include "hw/vfio/vfio-common.h"
@@ -117,8 +119,6 @@
 
 static NotifierList migration_state_notifiers =
     NOTIFIER_LIST_INITIALIZER(migration_state_notifiers);
-
-static bool deferred_incoming;
 
 /* Messages sent on the return path from destination to source */
 enum mig_rp_message_type {
@@ -182,6 +182,10 @@ void migration_object_init(void)
         error_report_err(err);
         exit(1);
     }
+
+    blk_mig_init();
+    ram_mig_init();
+    dirty_bitmap_mig_init();
 }
 
 void migration_shutdown(void)
@@ -252,6 +256,8 @@ void migration_incoming_state_destroy(void)
         qapi_free_SocketAddressList(mis->socket_address_list);
         mis->socket_address_list = NULL;
     }
+
+    yank_unregister_instance(MIGRATION_YANK_INSTANCE);
 }
 
 static void migrate_generate_event(int new_state)
@@ -269,19 +275,6 @@ static bool migrate_late_block_activate(void)
 
     return s->enabled_capabilities[
         MIGRATION_CAPABILITY_LATE_BLOCK_ACTIVATE];
-}
-
-/*
- * Called on -incoming with a defer: uri.
- * The migration can be started later after any parameters have been
- * changed.
- */
-static void deferred_incoming_migration(Error **errp)
-{
-    if (deferred_incoming) {
-        error_setg(errp, "Incoming migration already deferred");
-    }
-    deferred_incoming = true;
 }
 
 /*
@@ -417,24 +410,23 @@ int migration_incoming_enable_colo(void)
 void migrate_add_address(SocketAddress *address)
 {
     MigrationIncomingState *mis = migration_incoming_get_current();
-    SocketAddressList *addrs;
 
-    addrs = g_new0(SocketAddressList, 1);
-    addrs->next = mis->socket_address_list;
-    mis->socket_address_list = addrs;
-    addrs->value = QAPI_CLONE(SocketAddress, address);
+    QAPI_LIST_PREPEND(mis->socket_address_list,
+                      QAPI_CLONE(SocketAddress, address));
 }
 
-void qemu_start_incoming_migration(const char *uri, Error **errp)
+static void qemu_start_incoming_migration(const char *uri, Error **errp)
 {
     const char *p = NULL;
 
+    if (!yank_register_instance(MIGRATION_YANK_INSTANCE, errp)) {
+        return;
+    }
+
     qapi_event_send_migration(MIGRATION_STATUS_SETUP);
-    if (!strcmp(uri, "defer")) {
-        deferred_incoming_migration(errp);
-    } else if (strstart(uri, "tcp:", &p) ||
-               strstart(uri, "unix:", NULL) ||
-               strstart(uri, "vsock:", NULL)) {
+    if (strstart(uri, "tcp:", &p) ||
+        strstart(uri, "unix:", NULL) ||
+        strstart(uri, "vsock:", NULL)) {
         socket_start_incoming_migration(p ? p : uri, errp);
 #ifdef CONFIG_RDMA
     } else if (strstart(uri, "rdma:", &p)) {
@@ -445,6 +437,7 @@ void qemu_start_incoming_migration(const char *uri, Error **errp)
     } else if (strstart(uri, "fd:", &p)) {
         fd_start_incoming_migration(p, errp);
     } else {
+        yank_unregister_instance(MIGRATION_YANK_INSTANCE);
         error_setg(errp, "unknown migration protocol: %s", uri);
     }
 }
@@ -1667,27 +1660,23 @@ void migrate_set_state(int *state, int old_state, int new_state)
     }
 }
 
-static MigrationCapabilityStatusList *migrate_cap_add(
-    MigrationCapabilityStatusList *list,
-    MigrationCapability index,
-    bool state)
+static MigrationCapabilityStatus *migrate_cap_add(MigrationCapability index,
+                                                  bool state)
 {
-    MigrationCapabilityStatusList *cap;
+    MigrationCapabilityStatus *cap;
 
-    cap = g_new0(MigrationCapabilityStatusList, 1);
-    cap->value = g_new0(MigrationCapabilityStatus, 1);
-    cap->value->capability = index;
-    cap->value->state = state;
-    cap->next = list;
+    cap = g_new0(MigrationCapabilityStatus, 1);
+    cap->capability = index;
+    cap->state = state;
 
     return cap;
 }
 
 void migrate_set_block_enabled(bool value, Error **errp)
 {
-    MigrationCapabilityStatusList *cap;
+    MigrationCapabilityStatusList *cap = NULL;
 
-    cap = migrate_cap_add(NULL, MIGRATION_CAPABILITY_BLOCK, value);
+    QAPI_LIST_PREPEND(cap, migrate_cap_add(MIGRATION_CAPABILITY_BLOCK, value));
     qmp_migrate_set_capabilities(cap, errp);
     qapi_free_MigrationCapabilityStatusList(cap);
 }
@@ -1750,6 +1739,7 @@ static void migrate_fd_cleanup(MigrationState *s)
     }
     notifier_list_notify(&migration_state_notifiers, s);
     block_cleanup_parameters(s);
+    yank_unregister_instance(MIGRATION_YANK_INSTANCE);
 }
 
 static void migrate_fd_cleanup_schedule(MigrationState *s)
@@ -1984,12 +1974,12 @@ void qmp_migrate_incoming(const char *uri, Error **errp)
     Error *local_err = NULL;
     static bool once = true;
 
-    if (!deferred_incoming) {
-        error_setg(errp, "For use with '-incoming defer'");
-        return;
-    }
     if (!once) {
         error_setg(errp, "The incoming migration has already been started");
+        return;
+    }
+    if (!runstate_check(RUN_STATE_INMIGRATE)) {
+        error_setg(errp, "'-incoming' was not specified on the command line");
         return;
     }
 
@@ -2024,6 +2014,7 @@ void qmp_migrate_recover(const char *uri, Error **errp)
      * only re-setup the migration stream and poke existing migration
      * to continue using that newly established channel.
      */
+    yank_unregister_instance(MIGRATION_YANK_INSTANCE);
     qemu_start_incoming_migration(uri, errp);
 }
 
@@ -2115,6 +2106,12 @@ static bool migrate_prepare(MigrationState *s, bool blk, bool blk_inc,
         return false;
     }
 
+    if (runstate_check(RUN_STATE_POSTMIGRATE)) {
+        error_setg(errp, "Can't migrate the vm that was paused due to "
+                   "previous migration");
+        return false;
+    }
+
     if (migration_is_blocked(errp)) {
         return false;
     }
@@ -2161,6 +2158,12 @@ void qmp_migrate(const char *uri, bool has_blk, bool blk,
         return;
     }
 
+    if (!(has_resume && resume)) {
+        if (!yank_register_instance(MIGRATION_YANK_INSTANCE, errp)) {
+            return;
+        }
+    }
+
     if (strstart(uri, "tcp:", &p) ||
         strstart(uri, "unix:", NULL) ||
         strstart(uri, "vsock:", NULL)) {
@@ -2174,6 +2177,9 @@ void qmp_migrate(const char *uri, bool has_blk, bool blk,
     } else if (strstart(uri, "fd:", &p)) {
         fd_start_outgoing_migration(s, p, &local_err);
     } else {
+        if (!(has_resume && resume)) {
+            yank_unregister_instance(MIGRATION_YANK_INSTANCE);
+        }
         error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "uri",
                    "a valid migration protocol");
         migrate_set_state(&s->state, MIGRATION_STATUS_SETUP,
@@ -2183,6 +2189,9 @@ void qmp_migrate(const char *uri, bool has_blk, bool blk,
     }
 
     if (local_err) {
+        if (!(has_resume && resume)) {
+            yank_unregister_instance(MIGRATION_YANK_INSTANCE);
+        }
         migrate_fd_error(s, local_err);
         error_propagate(errp, local_err);
         return;
@@ -3876,7 +3885,7 @@ static bool migration_object_check(MigrationState *ms, Error **errp)
 
     for (i = 0; i < MIGRATION_CAPABILITY__MAX; i++) {
         if (ms->enabled_capabilities[i]) {
-            head = migrate_cap_add(head, i, true);
+            QAPI_LIST_PREPEND(head, migrate_cap_add(i, true));
         }
     }
 

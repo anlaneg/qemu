@@ -159,11 +159,11 @@ if have_block
      'CONFIG_POSIX' in config_host
     tests += {
       'test-crypto-tlscredsx509': ['crypto-tls-x509-helpers.c', 'pkix_asn1_tab.c',
-                                   tasn1, crypto],
+                                   tasn1, crypto, gnutls],
       'test-crypto-tlssession': ['crypto-tls-x509-helpers.c', 'pkix_asn1_tab.c', 'crypto-tls-psk-helpers.c',
-                                 tasn1, crypto],
+                                 tasn1, crypto, gnutls],
       'test-io-channel-tls': ['io-channel-helpers.c', 'crypto-tls-x509-helpers.c', 'pkix_asn1_tab.c',
-                              tasn1, io, crypto]}
+                              tasn1, io, crypto, gnutls]}
   endif
   if 'CONFIG_AUTH_PAM' in config_host
     tests += {'test-authz-pam': [authz]}
@@ -264,8 +264,7 @@ endforeach
 if have_tools and 'CONFIG_VHOST_USER' in config_host and 'CONFIG_LINUX' in config_host
   executable('vhost-user-bridge',
              sources: files('vhost-user-bridge.c'),
-             link_with: [libvhost_user],
-             dependencies: [qemuutil])
+             dependencies: [qemuutil, vhost_user])
 endif
 
 if have_system and 'CONFIG_POSIX' in config_host

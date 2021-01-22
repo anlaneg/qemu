@@ -70,6 +70,12 @@ enum BdrvTrackedRequestType {
     BDRV_TRACKED_TRUNCATE,
 };
 
+/*
+ * That is not quite good that BdrvTrackedRequest structure is public,
+ * as block/io.c is very careful about incoming offset/bytes being
+ * correct. Be sure to assert bdrv_check_request() succeeded after any
+ * modification of BdrvTrackedRequest object out of block/io.c
+ */
 typedef struct BdrvTrackedRequest {
     BlockDriverState *bs;
     int64_t offset;
@@ -86,6 +92,8 @@ typedef struct BdrvTrackedRequest {
 
     struct BdrvTrackedRequest *waiting_for;
 } BdrvTrackedRequest;
+
+int bdrv_check_request(int64_t offset, int64_t bytes);
 
 struct BlockDriver {
     const char *format_name;//支持的格式名称
@@ -1052,7 +1060,8 @@ extern unsigned int bdrv_drain_all_count;
 void bdrv_apply_subtree_drain(BdrvChild *child, BlockDriverState *new_parent);
 void bdrv_unapply_subtree_drain(BdrvChild *child, BlockDriverState *old_parent);
 
-bool coroutine_fn bdrv_mark_request_serialising(BdrvTrackedRequest *req, uint64_t align);
+bool coroutine_fn bdrv_make_request_serialising(BdrvTrackedRequest *req,
+                                                uint64_t align);
 BdrvTrackedRequest *coroutine_fn bdrv_co_get_self_request(BlockDriverState *bs);
 
 int get_tmp_filename(char *filename, int size);

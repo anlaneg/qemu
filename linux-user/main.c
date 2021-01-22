@@ -671,9 +671,7 @@ int main(int argc, char **argv, char **envp)
         exit(1);
     }
     trace_init_file();
-    if (qemu_plugin_load_list(&plugins)) {
-        exit(1);
-    }
+    qemu_plugin_load_list(&plugins, &error_fatal);
 
     /* Zero out regs */
     memset(regs, 0, sizeof(struct target_pt_regs));
@@ -703,7 +701,7 @@ int main(int argc, char **argv, char **envp)
     cpu_type = parse_cpu_option(cpu_model);
 
     /* init tcg before creating CPUs and to get qemu_host_page_size */
-    tcg_exec_init(0);
+    tcg_exec_init(0, false);
 
     cpu = cpu_create(cpu_type);
     env = cpu->env_ptr;

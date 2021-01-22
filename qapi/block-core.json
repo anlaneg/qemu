@@ -302,7 +302,7 @@
 # @ro: true if the backing device was open read-only
 #
 # @drv: the name of the block format used to open the backing device. As of
-#       0.14.0 this can be: 'blkdebug', 'bochs', 'cloop', 'cow', 'dmg',
+#       0.14 this can be: 'blkdebug', 'bochs', 'cloop', 'cow', 'dmg',
 #       'file', 'file', 'ftp', 'ftps', 'host_cdrom', 'host_device',
 #       'http', 'https', 'luks', 'nbd', 'parallels', 'qcow',
 #       'qcow2', 'raw', 'vdi', 'vmdk', 'vpc', 'vvfat'
@@ -389,7 +389,7 @@
 # @deprecated: Member @encryption_key_missing is deprecated.  It is
 #              always false.
 #
-# Since: 0.14.0
+# Since: 0.14
 #
 ##
 { 'struct': 'BlockDeviceInfo',
@@ -607,7 +607,7 @@
 # @deprecated: Member @dirty-bitmaps is deprecated.  Use @inserted
 #              member @dirty-bitmaps instead.
 #
-# Since:  0.14.0
+# Since:  0.14
 ##
 { 'struct': 'BlockInfo',
   'data': {'device': 'str', '*qdev': 'str', 'type': 'str', 'removable': 'bool',
@@ -655,7 +655,7 @@
 # Returns: a list of @BlockInfo describing each virtual block device. Filter
 #          nodes that were created implicitly are skipped over.
 #
-# Since: 0.14.0
+# Since: 0.14
 #
 # Example:
 #
@@ -812,17 +812,17 @@
 # @wr_operations: The number of write operations performed by the device.
 #
 # @flush_operations: The number of cache flush operations performed by the
-#                    device (since 0.15.0)
+#                    device (since 0.15)
 #
 # @unmap_operations: The number of unmap operations performed by the device
 #                    (Since 4.2)
 #
-# @rd_total_time_ns: Total time spent on reads in nanoseconds (since 0.15.0).
+# @rd_total_time_ns: Total time spent on reads in nanoseconds (since 0.15).
 #
-# @wr_total_time_ns: Total time spent on writes in nanoseconds (since 0.15.0).
+# @wr_total_time_ns: Total time spent on writes in nanoseconds (since 0.15).
 #
 # @flush_total_time_ns: Total time spent on cache flushes in nanoseconds
-#                       (since 0.15.0).
+#                       (since 0.15).
 #
 # @unmap_total_time_ns: Total time spent on unmap operations in nanoseconds
 #                       (Since 4.2)
@@ -884,7 +884,7 @@
 #
 # @flush_latency_histogram: @BlockLatencyHistogramInfo. (Since 4.0)
 #
-# Since: 0.14.0
+# Since: 0.14
 ##
 { 'struct': 'BlockDeviceStats',
   'data': {'rd_bytes': 'int', 'wr_bytes': 'int', 'unmap_bytes' : 'int',
@@ -987,7 +987,7 @@
 # @backing: This describes the backing block device if it has one.
 #           (Since 2.0)
 #
-# Since: 0.14.0
+# Since: 0.14
 ##
 { 'struct': 'BlockStats',
   'data': {'*device': 'str', '*qdev': 'str', '*node-name': 'str',
@@ -1011,7 +1011,7 @@
 #
 # Returns: A list of @BlockStats for each virtual block devices.
 #
-# Since: 0.14.0
+# Since: 0.14
 #
 # Example:
 #
@@ -1299,7 +1299,7 @@
 # Returns: - nothing on success
 #          - If @device is not a valid block device, DeviceNotFound
 #
-# Since: 0.14.0
+# Since: 0.14
 #
 # Example:
 #
@@ -1484,7 +1484,7 @@
 # Returns: - nothing on success
 #          - If @device is not a valid block device, DeviceNotFound
 #
-# Since: 0.14.0
+# Since: 0.14
 #
 # Example:
 #
@@ -2829,7 +2829,7 @@
             'cloop', 'compress', 'copy-on-read', 'dmg', 'file', 'ftp', 'ftps',
             'gluster', 'host_cdrom', 'host_device', 'http', 'https', 'iscsi',
             'luks', 'nbd', 'nfs', 'null-aio', 'null-co', 'nvme', 'parallels',
-            'qcow', 'qcow2', 'qed', 'quorum', 'raw', 'rbd',
+            'preallocate', 'qcow', 'qcow2', 'qed', 'quorum', 'raw', 'rbd',
             { 'name': 'replication', 'if': 'defined(CONFIG_REPLICATION)' },
             'sheepdog',
             'ssh', 'throttle', 'vdi', 'vhdx', 'vmdk', 'vpc', 'vvfat' ] }
@@ -3097,6 +3097,23 @@
   'discriminator': 'format',
   'data': { 'aes': 'QCryptoBlockOptionsQCow',
             'luks': 'QCryptoBlockOptionsLUKS'} }
+
+##
+# @BlockdevOptionsPreallocate:
+#
+# Filter driver intended to be inserted between format and protocol node
+# and do preallocation in protocol node on write.
+#
+# @prealloc-align: on preallocation, align file length to this number,
+#                  default 1048576 (1M)
+#
+# @prealloc-size: how much to preallocate, default 134217728 (128M)
+#
+# Since: 6.0
+##
+{ 'struct': 'BlockdevOptionsPreallocate',
+  'base': 'BlockdevOptionsGenericFormat',
+  'data': { '*prealloc-align': 'int', '*prealloc-size': 'int' } }
 
 ##
 # @BlockdevOptionsQcow2:
@@ -4006,6 +4023,7 @@
       'null-co':    'BlockdevOptionsNull',
       'nvme':       'BlockdevOptionsNVMe',
       'parallels':  'BlockdevOptionsGenericFormat',
+      'preallocate':'BlockdevOptionsPreallocate',
       'qcow2':      'BlockdevOptionsQcow2',
       'qcow':       'BlockdevOptionsQcow',
       'qed':        'BlockdevOptionsGenericCOWFormat',
@@ -4852,7 +4870,7 @@
 # Note: If action is "stop", a STOP event will eventually follow the
 #       BLOCK_IO_ERROR event
 #
-# Since: 0.13.0
+# Since: 0.13
 #
 # Example:
 #

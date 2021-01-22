@@ -170,6 +170,8 @@ static void scsi_dma_restart_bh(void *opaque)
         scsi_req_unref(req);
     }
     aio_context_release(blk_get_aio_context(s->conf.blk));
+    /* Drop the reference that was acquired in scsi_dma_restart_cb */
+    object_unref(OBJECT(s));
 }
 
 void scsi_req_retry(SCSIRequest *req)
@@ -188,6 +190,8 @@ static void scsi_dma_restart_cb(void *opaque, int running, RunState state)
     }
     if (!s->bh) {
         AioContext *ctx = blk_get_aio_context(s->conf.blk);
+        /* The reference is dropped in scsi_dma_restart_bh.*/
+        object_ref(OBJECT(s));
         s->bh = aio_bh_new(ctx, scsi_dma_restart_bh, s);
         qemu_bh_schedule(s->bh);
     }
@@ -1634,7 +1638,7 @@ static char *scsibus_get_fw_dev_path(DeviceState *dev)
 /* SCSI request list.  For simplicity, pv points to the whole device */
 
 static int put_scsi_requests(QEMUFile *f, void *pv, size_t size,
-                             const VMStateField *field, QJSON *vmdesc)
+                             const VMStateField *field, JSONWriter *vmdesc)
 {
     SCSIDevice *s = pv;
     SCSIBus *bus = DO_UPCAST(SCSIBus, qbus, s->qdev.parent_bus);

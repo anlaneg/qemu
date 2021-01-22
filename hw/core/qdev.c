@@ -41,7 +41,6 @@
 #include "migration/vmstate.h"
 #include "trace.h"
 
-bool qdev_hotplug = false;
 static bool qdev_hot_added = false;
 bool qdev_hot_removed = false;
 
@@ -217,26 +216,17 @@ void device_listener_unregister(DeviceListener *listener)
 
 bool qdev_should_hide_device(QemuOpts *opts)
 {
-    int rc = -1;
     DeviceListener *listener;
 
     QTAILQ_FOREACH(listener, &device_listeners, link) {
-       if (listener->should_be_hidden) {
-            /*
-             * should_be_hidden_will return
-             *  1 if device matches opts and it should be hidden
-             *  0 if device matches opts and should not be hidden
-             *  -1 if device doesn't match ops
-             */
-            rc = listener->should_be_hidden(listener, opts);
-        }
-
-        if (rc > 0) {
-            break;
+        if (listener->hide_device) {
+            if (listener->hide_device(listener, opts)) {
+                return true;
+            }
         }
     }
 
-    return rc > 0;
+    return false;
 }
 
 void qdev_set_legacy_instance_id(DeviceState *dev, int alias_id,
@@ -416,7 +406,7 @@ void qdev_unrealize(DeviceState *dev)
     object_property_set_bool(OBJECT(dev), "realized", false, &error_abort);
 }
 
-static int qdev_assert_realized_properly(Object *obj, void *opaque)
+static int qdev_assert_realized_properly_cb(Object *obj, void *opaque)
 {
     DeviceState *dev = DEVICE(object_dynamic_cast(obj, TYPE_DEVICE));
     DeviceClass *dc;
@@ -429,16 +419,10 @@ static int qdev_assert_realized_properly(Object *obj, void *opaque)
     return 0;
 }
 
-void qdev_machine_creation_done(void)
+void qdev_assert_realized_properly(void)
 {
-    /*
-     * ok, initial machine setup is done, starting from now we can
-     * only create hotpluggable devices
-     */
-    qdev_hotplug = true;
-
     object_child_foreach_recursive(object_get_root(),
-                                   qdev_assert_realized_properly, NULL);
+                                   qdev_assert_realized_properly_cb, NULL);
 }
 
 bool qdev_machine_modified(void)
@@ -717,123 +701,6 @@ char *qdev_get_dev_path(DeviceState *dev)
     return NULL;
 }
 
-/**
- * Legacy property handling
- */
-
-static void qdev_get_legacy_property(Object *obj, Visitor *v,
-                                     const char *name, void *opaque,
-                                     Error **errp)
-{
-    DeviceState *dev = DEVICE(obj);
-    Property *prop = opaque;
-
-    char buffer[1024];
-    char *ptr = buffer;
-
-    prop->info->print(dev, prop, buffer, sizeof(buffer));
-    visit_type_str(v, name, &ptr, errp);
-}
-
-/**
- * qdev_class_add_legacy_property:
- * @dev: Device to add the property to.
- * @prop: The qdev property definition.
- *
- * Add a legacy QOM property to @dev for qdev property @prop.
- *
- * Legacy properties are string versions of QOM properties.  The format of
- * the string depends on the property type.  Legacy properties are only
- * needed for "info qtree".
- *
- * Do not use this in new code!  QOM Properties added through this interface
- * will be given names in the "legacy" namespace.
- */
-static void qdev_class_add_legacy_property(DeviceClass *dc, Property *prop)
-{
-    g_autofree char *name = NULL;
-
-    /* Register pointer properties as legacy properties */
-    if (!prop->info->print && prop->info->get) {
-        return;
-    }
-
-    name = g_strdup_printf("legacy-%s", prop->name);
-    object_class_property_add(OBJECT_CLASS(dc), name, "str",
-        prop->info->print ? qdev_get_legacy_property : prop->info->get,
-        NULL, NULL, prop);
-}
-
-void qdev_property_add_static(DeviceState *dev, Property *prop)
-{
-    Object *obj = OBJECT(dev);
-    ObjectProperty *op;
-
-    assert(!prop->info->create);
-
-    op = object_property_add(obj, prop->name, prop->info->name,
-                             prop->info->get, prop->info->set,
-                             prop->info->release,
-                             prop);
-
-    //设置属性的描述信息
-    object_property_set_description(obj, prop->name,
-                                    prop->info->description);
-
-    if (prop->set_default) {
-        prop->info->set_default_value(op, prop);
-        if (op->init) {
-            op->init(obj, op);
-        }
-    }
-}
-
-//为qdev添加属性
-static void qdev_class_add_property(DeviceClass *klass, Property *prop)
-{
-    ObjectClass *oc = OBJECT_CLASS(klass);
-
-    if (prop->info->create) {
-<<<<<<< HEAD
-        //如属性指定了create函数，则通过create完成属性添加
-        prop->info->create(oc, prop, &error_abort);
-=======
-        prop->info->create(oc, prop);
->>>>>>> upstream/master
-    } else {
-        //否则添加并设置默认值
-        ObjectProperty *op;
-
-        op = object_class_property_add(oc,
-                                       prop->name, prop->info->name,
-                                       prop->info->get, prop->info->set,
-                                       prop->info->release,
-                                       prop);
-        if (prop->set_default) {
-            prop->info->set_default_value(op, prop);
-        }
-    }
-    object_class_property_set_description(oc, prop->name,
-                                          prop->info->description);
-}
-
-void qdev_alias_all_properties(DeviceState *target, Object *source)
-{
-    ObjectClass *class;
-    Property *prop;
-
-    class = object_get_class(OBJECT(target));
-    do {
-        DeviceClass *dc = DEVICE_CLASS(class);
-
-        for (prop = dc->props_; prop && prop->name; prop++) {
-            object_property_add_alias(source, prop->name,
-                                      OBJECT(target), prop->name);
-        }
-        class = object_class_get_parent(class);
-    } while (class != object_class_by_name(TYPE_DEVICE));
-}
-
 //自device中获取realized属性（bool类型）
 static bool device_get_realized(Object *obj, Error **errp)
 {
@@ -1046,7 +913,7 @@ static void device_initfn(Object *obj)
 {
     DeviceState *dev = DEVICE(obj);
 
-    if (qdev_hotplug) {
+    if (phase_check(PHASE_MACHINE_READY)) {
         dev->hotplugged = 1;
         qdev_hot_added = true;
     }
@@ -1228,36 +1095,15 @@ static void device_class_init(ObjectClass *class, void *data)
 
     //添加realized属性
     object_class_property_add_bool(class, "realized",
-<<<<<<< HEAD
-                                   device_get_realized, device_set_realized,
-                                   &error_abort);
+                                   device_get_realized, device_set_realized);
     //添加hotpluggable属性
     object_class_property_add_bool(class, "hotpluggable",
-                                   device_get_hotpluggable, NULL,
-                                   &error_abort);
-    //iggds加hotplugged属性
-=======
-                                   device_get_realized, device_set_realized);
-    object_class_property_add_bool(class, "hotpluggable",
                                    device_get_hotpluggable, NULL);
->>>>>>> upstream/master
+    //iggds加hotplugged属性
     object_class_property_add_bool(class, "hotplugged",
                                    device_get_hotplugged, NULL);
     object_class_property_add_link(class, "parent_bus", TYPE_BUS,
                                    offsetof(DeviceState, parent_bus), NULL, 0);
-}
-
-/*为DeviceClass设置一组property*/
-void device_class_set_props(DeviceClass *dc, Property *props)
-{
-    Property *prop;
-
-    dc->props_ = props;
-    //遍历设置的property,其必须有名称，将其加入到dc中
-    for (prop = props; prop && prop->name; prop++) {
-        qdev_class_add_legacy_property(dc, prop);
-        qdev_class_add_property(dc, prop);
-    }
 }
 
 void device_class_set_parent_reset(DeviceClass *dc,
@@ -1303,6 +1149,19 @@ Object *qdev_get_machine(void)
     }
 
     return dev;
+}
+
+static MachineInitPhase machine_phase;
+
+bool phase_check(MachineInitPhase phase)
+{
+    return machine_phase >= phase;
+}
+
+void phase_advance(MachineInitPhase phase)
+{
+    assert(machine_phase == phase - 1);
+    machine_phase = phase;
 }
 
 //定义device类型

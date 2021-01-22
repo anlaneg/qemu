@@ -134,7 +134,9 @@ qtests_sparc64 = \
   ['prom-env-test', 'boot-serial-test']
 
 qtests_npcm7xx = \
-  ['npcm7xx_gpio-test',
+  ['npcm7xx_adc-test',
+   'npcm7xx_gpio-test',
+   'npcm7xx_pwm-test',
    'npcm7xx_rng-test',
    'npcm7xx_timer-test',
    'npcm7xx_watchdog_timer-test']
@@ -156,6 +158,7 @@ qtests_aarch64 = \
   ['arm-cpu-features',
    'numa-test',
    'boot-serial-test',
+   'xlnx-can-test',
    'migration-test']
 
 qtests_s390x = \
@@ -188,6 +191,7 @@ qos_test_ss.add(
   'sdhci-test.c',
   'spapr-phb-test.c',
   'tmp105-test.c',
+  'emc141x-test.c',
   'usb-hcd-ohci-test.c',
   'virtio-test.c',
   'virtio-blk-test.c',
@@ -197,7 +201,9 @@ qos_test_ss.add(
   'virtio-serial-test.c',
   'vmxnet3-test.c',
 )
-qos_test_ss.add(when: 'CONFIG_VIRTFS', if_true: files('virtio-9p-test.c'))
+if have_virtfs
+  qos_test_ss.add(files('virtio-9p-test.c'))
+endif
 qos_test_ss.add(when: 'CONFIG_VHOST_USER', if_true: files('vhost-user-test.c'))
 
 tpmemu_files = ['tpm-emu.c', 'tpm-util.c', 'tpm-tests.c']

@@ -82,16 +82,17 @@ typedef void (*BusUnrealize)(BusState *bus);
  * </note>
  *
  * # Hiding a device #
- * To hide a device, a DeviceListener function should_be_hidden() needs to
+ * To hide a device, a DeviceListener function hide_device() needs to
  * be registered.
- * It can be used to defer adding a device and therefore hide it from the
- * guest. The handler registering to this DeviceListener can save the QOpts
- * passed to it for re-using it later and must return that it wants the device
- * to be/remain hidden or not. When the handler function decides the device
- * shall not be hidden it will be added in qdev_device_add() and
- * realized as any other device. Otherwise qdev_device_add() will return early
- * without adding the device. The guest will not see a "hidden" device
- * until it was marked don't hide and qdev_device_add called again.
+ * It can be used to defer adding a device and therefore hide it from
+ * the guest. The handler registering to this DeviceListener can save
+ * the QOpts passed to it for re-using it later. It must return if it
+ * wants the device to be hidden or visible. When the handler function
+ * decides the device shall be visible it will be added with
+ * qdev_device_add() and realized as any other device. Otherwise
+ * qdev_device_add() will return early without adding the device. The
+ * guest will not see a "hidden" device until it was marked visible
+ * and qdev_device_add called again.
  *
  */
 //定义Device类型对应的ObjectClass
@@ -200,11 +201,12 @@ struct DeviceListener {
     void (*realize)(DeviceListener *listener, DeviceState *dev);
     void (*unrealize)(DeviceListener *listener, DeviceState *dev);
     /*
-     * This callback is called upon init of the DeviceState and allows to
-     * inform qdev that a device should be hidden, depending on the device
-     * opts, for example, to hide a standby device.
+     * This callback is called upon init of the DeviceState and
+     * informs qdev if a device should be visible or hidden.  We can
+     * hide a failover device depending for example on the device
+     * opts.
      */
-    int (*should_be_hidden)(DeviceListener *listener, QemuOpts *device_opts);
+    bool (*hide_device)(DeviceListener *listener, QemuOpts *device_opts);
     QTAILQ_ENTRY(DeviceListener) link;
 };
 
@@ -285,48 +287,6 @@ struct BusState {
     /**/
     QLIST_ENTRY(BusState) sibling;
     ResettableState reset;
-};
-
-/**
- * Property:
- * @set_default: true if the default value should be set from @defval,
- *    in which case @info->set_default_value must not be NULL
- *    (if false then no default value is set by the property system
- *     and the field retains whatever value it was given by instance_init).
- * @defval: default value for the property. This is used only if @set_default
- *     is true.
- */
-struct Property {
-    const char   *name;/*属性名称*/
-    const PropertyInfo *info;
-    ptrdiff_t    offset;//属性在结构体中起始的offset
-    uint8_t      bitnr;
-    bool         set_default;//是否需要设置默认值
-    union {
-        int64_t i;
-        uint64_t u;
-    } defval;
-    int          arrayoffset;
-    const PropertyInfo *arrayinfo;
-    int          arrayfieldsize;
-    const char   *link_type;
-};
-
-struct PropertyInfo {
-    const char *name;//属性名称
-    const char *description;//属性描述信息
-    const QEnumLookup *enum_table;
-    int (*print)(DeviceState *dev, Property *prop, char *dest, size_t len);
-    //通过此回调为prop设置默认值
-    void (*set_default_value)(ObjectProperty *op, const Property *prop);
-    //通过create函数，可在ObjectClass中添加属性prop
-    void (*create)(ObjectClass *oc, Property *prop);
-    //prop的get访问函数
-    ObjectPropertyAccessor *get;
-    //prop的set访问函数
-    ObjectPropertyAccessor *set;
-    //prop的释放函数
-    ObjectPropertyRelease *release;
 };
 
 /**
@@ -805,14 +765,6 @@ char *qdev_get_fw_dev_path(DeviceState *dev);
 char *qdev_get_own_fw_dev_path_from_handler(BusState *bus, DeviceState *dev);
 
 /**
- * @qdev_machine_init
- *
- * Initialize platform devices before machine init.  This is a hack until full
- * support for composition is added.
- */
-void qdev_machine_init(void);
-
-/**
  * device_legacy_reset:
  *
  * Reset a single device (by calling the reset method).
@@ -842,12 +794,12 @@ const VMStateDescription *qdev_get_vmsd(DeviceState *dev);
 
 const char *qdev_fw_name(DeviceState *dev);
 
+void qdev_assert_realized_properly(void);
 Object *qdev_get_machine(void);
 
 /* FIXME: make this a link<> */
 bool qdev_set_parent_bus(DeviceState *dev, BusState *bus, Error **errp);
 
-extern bool qdev_hotplug;
 extern bool qdev_hot_removed;
 
 char *qdev_get_dev_path(DeviceState *dev);
@@ -872,5 +824,36 @@ void device_listener_unregister(DeviceListener *listener);
  * and return if the device should be added now or not.
  */
 bool qdev_should_hide_device(QemuOpts *opts);
+
+typedef enum MachineInitPhase {
+    /* current_machine is NULL.  */
+    PHASE_NO_MACHINE,
+
+    /* current_machine is not NULL, but current_machine->accel is NULL.  */
+    PHASE_MACHINE_CREATED,
+
+    /*
+     * current_machine->accel is not NULL, but the machine properties have
+     * not been validated and machine_class->init has not yet been called.
+     */
+    PHASE_ACCEL_CREATED,
+
+    /*
+     * machine_class->init has been called, thus creating any embedded
+     * devices and validating machine properties.  Devices created at
+     * this time are considered to be cold-plugged.
+     */
+    PHASE_MACHINE_INITIALIZED,
+
+    /*
+     * QEMU is ready to start CPUs and devices created at this time
+     * are considered to be hot-plugged.  The monitor is not restricted
+     * to "preconfig" commands.
+     */
+    PHASE_MACHINE_READY,
+} MachineInitPhase;
+
+extern bool phase_check(MachineInitPhase phase);
+extern void phase_advance(MachineInitPhase phase);
 
 #endif

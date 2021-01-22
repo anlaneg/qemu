@@ -42,6 +42,7 @@
 #include "qapi/error.h"
 #include "qemu/bitmap.h"
 #include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
 #include "qemu/error-report.h"
 #include "qemu/timer.h"
 #include "qemu/log.h"
@@ -2132,7 +2133,6 @@ static void sd_instance_finalize(Object *obj)
 {
     SDState *sd = SD_CARD(obj);
 
-    timer_del(sd->ocr_power_timer);
     timer_free(sd->ocr_power_timer);
 }
 

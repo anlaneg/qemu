@@ -1050,7 +1050,7 @@ static int net_client_init1(const Netdev *netdev/*用户指定的配置*/, bool 
     if (net_client_init_fun[netdev->type](netdev, netdev->id, peer/*对端设备*/, errp) < 0) {
         /* FIXME drop when all init functions store an Error */
         if (errp && !*errp) {
-            error_setg(errp, QERR_DEVICE_INIT_FAILED,
+            error_setg(errp, "Device '%s' could not be initialized",
                        NetClientDriver_str(netdev->type));
         }
         return -1;

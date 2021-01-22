@@ -69,7 +69,7 @@ QemuOpts *qemu_find_opts_singleton(const char *group)
 //通过desc转换成parameterinfolist
 static CommandLineParameterInfoList *query_option_descs(const QemuOptDesc *desc)
 {
-    CommandLineParameterInfoList *param_list = NULL, *entry;
+    CommandLineParameterInfoList *param_list = NULL;
     CommandLineParameterInfo *info;
     int i;
 
@@ -104,11 +104,8 @@ static CommandLineParameterInfoList *query_option_descs(const QemuOptDesc *desc)
             info->q_default = g_strdup(desc[i].def_value_str);
         }
 
-        //申请entry,并将entry放置在param_list的前面
-        entry = g_malloc0(sizeof(*entry));
-        entry->value = info;
-        entry->next = param_list;
-        param_list = entry;
+        //将entry放置在param_list的前面
+        QAPI_LIST_PREPEND(param_list, info);
     }
 
     return param_list;
@@ -266,7 +263,7 @@ CommandLineOptionInfoList *qmp_query_command_line_options(bool has_option,
                                                           const char *option,
                                                           Error **errp)
 {
-    CommandLineOptionInfoList *conf_list = NULL, *entry;
+    CommandLineOptionInfoList *conf_list = NULL;
     CommandLineOptionInfo *info;
     int i;
 
@@ -283,10 +280,7 @@ CommandLineOptionInfoList *qmp_query_command_line_options(bool has_option,
                 info->parameters =
                     query_option_descs(vm_config_groups[i]->desc);
             }
-            entry = g_malloc0(sizeof(*entry));
-            entry->value = info;
-            entry->next = conf_list;
-            conf_list = entry;
+            QAPI_LIST_PREPEND(conf_list, info);
         }
     }
 
@@ -337,39 +331,6 @@ void qemu_add_opts(QemuOptsList *list)
     }
     fprintf(stderr, "ran out of space in vm_config_groups");
     abort();//如果没有空闲的，则挂掉
-}
-
-int qemu_set_option(const char *str)
-{
-    Error *local_err = NULL;
-    char group[64], id[64], arg[64];
-    QemuOptsList *list;
-    QemuOpts *opts;
-    int rc, offset;
-
-    rc = sscanf(str, "%63[^.].%63[^.].%63[^=]%n", group, id, arg, &offset);
-    if (rc < 3 || str[offset] != '=') {
-        error_report("can't parse: \"%s\"", str);
-        return -1;
-    }
-
-    list = qemu_find_opts(group);
-    if (list == NULL) {
-        return -1;
-    }
-
-    opts = qemu_opts_find(list, id);
-    if (!opts) {
-        error_report("there is no %s \"%s\" defined",
-                     list->name, id);
-        return -1;
-    }
-
-    if (!qemu_opt_set(opts, arg, str + offset + 1, &local_err)) {
-        error_report_err(local_err);
-        return -1;
-    }
-    return 0;
 }
 
 struct ConfigWriteData {

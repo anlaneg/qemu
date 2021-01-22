@@ -448,7 +448,7 @@ int probe_access_flags(CPUArchState *env, target_ulong addr,
  * Note: the address of search data can be obtained by adding @size to @ptr.
  */
 struct tb_tc {
-    void *ptr;    /* pointer to the translated code */
+    const void *ptr;    /* pointer to the translated code */
     size_t size;
 };
 
@@ -675,8 +675,5 @@ address_space_translate_for_iotlb(CPUState *cpu, int asidx, hwaddr addr,
 hwaddr memory_region_section_get_iotlb(CPUState *cpu,
                                        MemoryRegionSection *section);
 #endif
-
-/* vl.c */
-extern int singlestep;
 
 #endif
