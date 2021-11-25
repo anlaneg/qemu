@@ -247,6 +247,7 @@ static const MemoryListener vhost_vdpa_memory_listener = {
     .region_del = vhost_vdpa_listener_region_del,
 };
 
+/*通过ioctl向kernel发送请求*/
 static int vhost_vdpa_call(struct vhost_dev *dev, unsigned long int request,
                              void *arg)
 {

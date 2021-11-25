@@ -228,6 +228,7 @@ static int vhost_kernel_vsock_set_running(struct vhost_dev *dev, int start)
 }
 #endif /* CONFIG_VHOST_VSOCK */
 
+/*读取设备上送的iotlb消息*/
 static void vhost_kernel_iotlb_read(void *opaque)
 {
     struct vhost_dev *dev = opaque;
@@ -237,6 +238,7 @@ static void vhost_kernel_iotlb_read(void *opaque)
         (0x1ULL << VHOST_BACKEND_F_IOTLB_MSG_V2)) {
         struct vhost_msg_v2 msg;
 
+        /*读取tlb消息*/
         while ((len = read((uintptr_t)dev->opaque, &msg, sizeof msg)) > 0) {
             if (len < sizeof msg) {
                 error_report("Wrong vhost message len: %d", (int)len);
@@ -247,6 +249,7 @@ static void vhost_kernel_iotlb_read(void *opaque)
                 break;
             }
 
+            /*触发tlb消息更新*/
             vhost_backend_handle_iotlb_msg(dev, &msg.iotlb);
         }
     } else {
@@ -267,6 +270,7 @@ static void vhost_kernel_iotlb_read(void *opaque)
     }
 }
 
+/*向下发送iotlb更新消息*/
 static int vhost_kernel_send_device_iotlb_msg(struct vhost_dev *dev,
                                               struct vhost_iotlb_msg *imsg)
 {
@@ -295,6 +299,7 @@ static int vhost_kernel_send_device_iotlb_msg(struct vhost_dev *dev,
     return 0;
 }
 
+/*为此设备设置iotlb回调*/
 static void vhost_kernel_set_iotlb_callback(struct vhost_dev *dev,
                                            int enabled)
 {
@@ -325,7 +330,8 @@ static const VhostOps kernel_ops = {
         .vhost_set_vring_base = vhost_kernel_set_vring_base,
         .vhost_get_vring_base = vhost_kernel_get_vring_base,
         .vhost_set_vring_kick = vhost_kernel_set_vring_kick,
-        .vhost_set_vring_call = vhost_kernel_set_vring_call,//向下设置通知用的文件，例如eventfd
+        //向下设置通知用的文件，例如eventfd
+        .vhost_set_vring_call = vhost_kernel_set_vring_call,
         .vhost_set_vring_busyloop_timeout =
                                 vhost_kernel_set_vring_busyloop_timeout,
         .vhost_set_features = vhost_kernel_set_features,
@@ -339,7 +345,9 @@ static const VhostOps kernel_ops = {
         .vhost_vsock_set_guest_cid = vhost_kernel_vsock_set_guest_cid,
         .vhost_vsock_set_running = vhost_kernel_vsock_set_running,
 #endif /* CONFIG_VHOST_VSOCK */
+        /*设置iotlb处理回调*/
         .vhost_set_iotlb_callback = vhost_kernel_set_iotlb_callback,
+        /*向下发送iotlb消息*/
         .vhost_send_device_iotlb_msg = vhost_kernel_send_device_iotlb_msg,
 };
 #endif
@@ -374,6 +382,7 @@ int vhost_set_backend_type(struct vhost_dev *dev, VhostBackendType backend_type)
     return r;
 }
 
+/*向kernel发送iotlb更新消息*/
 int vhost_backend_update_device_iotlb(struct vhost_dev *dev,
                                              uint64_t iova, uint64_t uaddr,
                                              uint64_t len,
@@ -428,6 +437,7 @@ int vhost_backend_handle_iotlb_msg(struct vhost_dev *dev,
 
     switch (imsg->type) {
     case VHOST_IOTLB_MISS:
+        /*收到上送的iotlb miss消息*/
         ret = vhost_device_iotlb_miss(dev, imsg->iova,
                                       imsg->perm != VHOST_ACCESS_RO);
         break;

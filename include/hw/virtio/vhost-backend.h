@@ -164,7 +164,9 @@ typedef struct VhostOps {
     vhost_backend_can_merge_op vhost_backend_can_merge;
     vhost_vsock_set_guest_cid_op vhost_vsock_set_guest_cid;
     vhost_vsock_set_running_op vhost_vsock_set_running;
+    /*设置iotlb处理回调*/
     vhost_set_iotlb_callback_op vhost_set_iotlb_callback;
+    /*向下发送iotlb消息*/
     vhost_send_device_iotlb_msg_op vhost_send_device_iotlb_msg;
     vhost_get_config_op vhost_get_config;
     vhost_set_config_op vhost_set_config;

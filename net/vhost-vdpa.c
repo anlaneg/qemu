@@ -106,6 +106,7 @@ static int vhost_vdpa_add(NetClientState *ncs, void *be)
     VhostVDPAState *s;
     int ret;
 
+    /*指明后端类型为vdpa*/
     options.backend_type = VHOST_BACKEND_TYPE_VDPA;
     assert(ncs->info->type == NET_CLIENT_DRIVER_VHOST_VDPA);
     s = DO_UPCAST(VhostVDPAState, nc, ncs);
@@ -177,8 +178,9 @@ static NetClientInfo net_vhost_vdpa_info = {
         .has_ufo = vhost_vdpa_has_ufo,
 };
 
+/*vhost-vdpa初始化*/
 static int net_vhost_vdpa_init(NetClientState *peer, const char *device,
-                               const char *name, const char *vhostdev)
+                               const char *name, const char *vhostdev/*指向vhost-vdpa设备*/)
 {
     NetClientState *nc = NULL;
     VhostVDPAState *s;
@@ -189,6 +191,7 @@ static int net_vhost_vdpa_init(NetClientState *peer, const char *device,
     snprintf(nc->info_str, sizeof(nc->info_str), TYPE_VHOST_VDPA);
     nc->queue_index = 0;
     s = DO_UPCAST(VhostVDPAState, nc, nc);
+    /*打开vdpa字符设备*/
     vdpa_device_fd = qemu_open_old(vhostdev, O_RDWR);
     if (vdpa_device_fd == -1) {
         return -errno;

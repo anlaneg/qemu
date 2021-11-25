@@ -1008,6 +1008,7 @@ static int (* const net_client_init_fun[NET_CLIENT_DRIVER__MAX])(
         [NET_CLIENT_DRIVER_VHOST_USER] = net_init_vhost_user,
 #endif
 #ifdef CONFIG_VHOST_NET_VDPA
+        /*针对vhost-vdpa的初始化函数*/
         [NET_CLIENT_DRIVER_VHOST_VDPA] = net_init_vhost_vdpa,
 #endif
 #ifdef CONFIG_L2TPV3

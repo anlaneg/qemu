@@ -15,7 +15,7 @@
 #include "hw/virtio/virtio.h"
 
 typedef struct vhost_vdpa {
-    int device_fd;
+    int device_fd;/*vhost vdpa字符设备*/
     uint32_t msg_type;
     MemoryListener listener;
     struct vhost_dev *dev;
