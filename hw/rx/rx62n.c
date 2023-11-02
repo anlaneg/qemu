@@ -23,14 +23,11 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
-#include "hw/hw.h"
 #include "hw/rx/rx62n.h"
 #include "hw/loader.h"
 #include "hw/sysbus.h"
 #include "hw/qdev-properties.h"
 #include "sysemu/sysemu.h"
-#include "sysemu/qtest.h"
-#include "cpu.h"
 #include "qom/object.h"
 
 /*
@@ -117,7 +114,7 @@ static const uint8_t ipr_table[NR_IRQS] = {
 };
 
 /*
- * Level triggerd IRQ list
+ * Level triggered IRQ list
  * Not listed IRQ is Edge trigger.
  * See "11.3.1 Interrupt Vector Table" in hardware manual.
  */
@@ -157,7 +154,7 @@ static void register_icu(RX62NState *s)
     sysbus_connect_irq(icu, 0, qdev_get_gpio_in(DEVICE(&s->cpu), RX_CPU_IRQ));
     sysbus_connect_irq(icu, 1, qdev_get_gpio_in(DEVICE(&s->cpu), RX_CPU_FIR));
     sysbus_connect_irq(icu, 2, s->irq[SWI]);
-    sysbus_mmio_map(SYS_BUS_DEVICE(icu), 0, RX62N_ICU_BASE);
+    sysbus_mmio_map(icu, 0, RX62N_ICU_BASE);
 }
 
 static void register_tmr(RX62NState *s, int unit)

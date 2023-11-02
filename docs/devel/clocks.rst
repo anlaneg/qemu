@@ -80,11 +80,12 @@ Adding clocks to a device must be done during the init method of the Device
 instance.
 
 To add an input clock to a device, the function ``qdev_init_clock_in()``
-must be used.  It takes the name, a callback and an opaque parameter
-for the callback (this will be explained in a following section).
+must be used.  It takes the name, a callback, an opaque parameter
+for the callback and a mask of events when the callback should be
+called (this will be explained in a following section).
 Output is simpler; only the name is required. Typically::
 
-    qdev_init_clock_in(DEVICE(dev), "clk_in", clk_in_callback, dev);
+    qdev_init_clock_in(DEVICE(dev), "clk_in", clk_in_callback, dev, ClockUpdate);
     qdev_init_clock_out(DEVICE(dev), "clk_out");
 
 Both functions return the created Clock pointer, which should be saved in the
@@ -113,7 +114,7 @@ output.
      * callback for the input clock (see "Callback on input clock
      * change" section below for more information).
      */
-    static void clk_in_callback(void *opaque);
+    static void clk_in_callback(void *opaque, ClockEvent event);
 
     /*
      * static array describing clocks:
@@ -124,7 +125,7 @@ output.
      *   the clk_out field of a MyDeviceState structure.
      */
     static const ClockPortInitArray mydev_clocks = {
-        QDEV_CLOCK_IN(MyDeviceState, clk_in, clk_in_callback),
+        QDEV_CLOCK_IN(MyDeviceState, clk_in, clk_in_callback, ClockUpdate),
         QDEV_CLOCK_OUT(MyDeviceState, clk_out),
         QDEV_CLOCK_END
     };
@@ -152,6 +153,47 @@ change (for example the main clock source of a board), then you'll have
 nothing else to do. This value will be propagated to other clocks when
 connecting the clocks together and devices will fetch the right value during
 the first reset.
+
+Clock callbacks
+---------------
+
+You can give a clock a callback function in several ways:
+
+ * by passing it as an argument to ``qdev_init_clock_in()``
+ * as an argument to the ``QDEV_CLOCK_IN()`` macro initializing an
+   array to be passed to ``qdev_init_clocks()``
+ * by directly calling the ``clock_set_callback()`` function
+
+The callback function must be of this type:
+
+.. code-block:: c
+
+   typedef void ClockCallback(void *opaque, ClockEvent event);
+
+The ``opaque`` argument is the pointer passed to ``qdev_init_clock_in()``
+or ``clock_set_callback()``; for ``qdev_init_clocks()`` it is the
+``dev`` device pointer.
+
+The ``event`` argument specifies why the callback has been called.
+When you register the callback you specify a mask of ClockEvent values
+that you are interested in. The callback will only be called for those
+events.
+
+The events currently supported are:
+
+ * ``ClockPreUpdate`` : called when the input clock's period is about to
+   update. This is useful if the device needs to do some action for
+   which it needs to know the old value of the clock period. During
+   this callback, Clock API functions like ``clock_get()`` or
+   ``clock_ticks_to_ns()`` will use the old period.
+ * ``ClockUpdate`` : called after the input clock's period has changed.
+   During this callback, Clock API functions like ``clock_ticks_to_ns()``
+   will use the new period.
+
+Note that a clock only has one callback: it is not possible to register
+different functions for different events. You must register a single
+callback which listens for all of the events you are interested in,
+and use the ``event`` argument to identify which event has happened.
 
 Retrieving clocks from a device
 -------------------------------
@@ -218,6 +260,29 @@ clocks get the new clock period value: *Clock 2*, *Clock 3* and *Clock 4*.
 It is not possible to disconnect a clock or to change the clock connection
 after it is connected.
 
+Clock multiplier and divider settings
+-------------------------------------
+
+By default, when clocks are connected together, the child
+clocks run with the same period as their source (parent) clock.
+The Clock API supports a built-in period multiplier/divider
+mechanism so you can configure a clock to make its children
+run at a different period from its own. If you call the
+``clock_set_mul_div()`` function you can specify the clock's
+multiplier and divider values. The children of that clock
+will all run with a period of ``parent_period * multiplier / divider``.
+For instance, if the clock has a frequency of 8MHz and you set its
+multiplier to 2 and its divider to 3, the child clocks will run
+at 12MHz.
+
+You can change the multiplier and divider of a clock at runtime,
+so you can use this to model clock controller devices which
+have guest-programmable frequency multipliers or dividers.
+
+Note that ``clock_set_mul_div()`` does not automatically call
+``clock_propagate()``. If you make a runtime change to the
+multiplier or divider you must call clock_propagate() yourself.
+
 Unconnected input clocks
 ------------------------
 
@@ -231,9 +296,25 @@ object during device instance init. For example:
 .. code-block:: c
 
     clk = qdev_init_clock_in(DEVICE(dev), "clk-in", clk_in_callback,
-                             dev);
+                             dev, ClockUpdate);
     /* set initial value to 10ns / 100MHz */
     clock_set_ns(clk, 10);
+
+To enforce that the clock is wired up by the board code, you can
+call ``clock_has_source()`` in your device's realize method:
+
+.. code-block:: c
+
+   if (!clock_has_source(s->clk)) {
+       error_setg(errp, "MyDevice: clk input must be connected");
+       return;
+   }
+
+Note that this only checks that the clock has been wired up; it is
+still possible that the output clock connected to it is disabled
+or has not yet been configured, in which case the period will be
+zero. You should use the clock callback to find out when the clock
+period changes.
 
 Fetching clock frequency/period
 -------------------------------
@@ -251,11 +332,12 @@ next lowest integer. This implies some inaccuracy due to the rounding,
 so be cautious about using it in calculations.
 
 It is also possible to register a callback on clock frequency changes.
-Here is an example:
+Here is an example, which assumes that ``clock_callback`` has been
+specified as the callback for the ``ClockUpdate`` event:
 
 .. code-block:: c
 
-    void clock_callback(void *opaque) {
+    void clock_callback(void *opaque, ClockEvent event) {
         MyDeviceState *s = (MyDeviceState *) opaque;
         /*
          * 'opaque' is the argument passed to qdev_init_clock_in();
@@ -300,6 +382,18 @@ result but just allow the timer to be set to that far-future value.
 rather than simply passing it to a QEMUTimer function like
 ``timer_mod_ns()`` then you should be careful to avoid overflow
 in those calculations, of course.)
+
+Obtaining tick counts
+---------------------
+
+For calculations where you need to know the number of ticks in
+a given duration, use ``clock_ns_to_ticks()``. This function handles
+possible non-whole-number-of-nanoseconds periods and avoids
+potential rounding errors. It will return '0' if the clock is stopped
+(i.e. it has period zero). If the inputs imply a tick count that
+overflows a 64-bit value (a very long duration for a clock with a
+very short period) the output value is truncated, so effectively
+the 64-bit output wraps around.
 
 Changing a clock period
 -----------------------

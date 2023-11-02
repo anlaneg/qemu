@@ -18,15 +18,14 @@
 
 #include "qemu/units.h"
 #include "qemu/notify.h"
-#include "hw/pci/pci.h"
 #include "hw/pci/msix.h"
+#include "hw/pci/pci_device.h"
 #include "chardev/char-fe.h"
 #include "hw/net/vmxnet3_defs.h"
 
 #include "../rdma_backend_defs.h"
 #include "../rdma_rm_defs.h"
 
-#include "standard-headers/drivers/infiniband/hw/vmw_pvrdma/pvrdma_ring.h"
 #include "standard-headers/drivers/infiniband/hw/vmw_pvrdma/pvrdma_dev_api.h"
 #include "pvrdma_dev_ring.h"
 #include "qom/object.h"
@@ -64,10 +63,10 @@ typedef struct DSRInfo {
     union pvrdma_cmd_req *req;
     union pvrdma_cmd_resp *rsp;
 
-    struct pvrdma_ring *async_ring_state;
+    PvrdmaRingState *async_ring_state;
     PvrdmaRing async;
 
-    struct pvrdma_ring *cq_ring_state;
+    PvrdmaRingState *cq_ring_state;
     PvrdmaRing cq;
 } DSRInfo;
 

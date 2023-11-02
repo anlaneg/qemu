@@ -32,6 +32,7 @@
 #include "qemu/sockets.h"
 #include "qemu/main-loop.h"
 #include "block/aio.h"
+#include "trace.h"
 
 /*
  * Locking:
@@ -95,6 +96,8 @@ VncJob *vnc_job_new(VncState *vs)
 int vnc_job_add_rect(VncJob *job, int x, int y, int w, int h)
 {
     VncRectEntry *entry = g_new0(VncRectEntry, 1);
+
+    trace_vnc_job_add_rect(job->vs, job, x, y, w, h);
 
     entry->rect.x = x;
     entry->rect.y = y;
@@ -194,6 +197,8 @@ static void vnc_async_encoding_start(VncState *orig, VncState *local)
     local->zlib = orig->zlib;
     local->hextile = orig->hextile;
     local->zrle = orig->zrle;
+    local->client_width = orig->client_width;
+    local->client_height = orig->client_height;
 }
 
 static void vnc_async_encoding_end(VncState *orig, VncState *local)
@@ -204,6 +209,34 @@ static void vnc_async_encoding_end(VncState *orig, VncState *local)
     orig->hextile = local->hextile;
     orig->zrle = local->zrle;
     orig->lossy_rect = local->lossy_rect;
+}
+
+static bool vnc_worker_clamp_rect(VncState *vs, VncJob *job, VncRect *rect)
+{
+    trace_vnc_job_clamp_rect(vs, job, rect->x, rect->y, rect->w, rect->h);
+
+    if (rect->x >= vs->client_width) {
+        goto discard;
+    }
+    rect->w = MIN(vs->client_width - rect->x, rect->w);
+    if (rect->w == 0) {
+        goto discard;
+    }
+
+    if (rect->y >= vs->client_height) {
+        goto discard;
+    }
+    rect->h = MIN(vs->client_height - rect->y, rect->h);
+    if (rect->h == 0) {
+        goto discard;
+    }
+
+    trace_vnc_job_clamped_rect(vs, job, rect->x, rect->y, rect->w, rect->h);
+    return true;
+
+ discard:
+    trace_vnc_job_discard_rect(vs, job, rect->x, rect->y, rect->w, rect->h);
+    return false;
 }
 
 static int vnc_worker_thread_loop(VncJobQueue *queue)
@@ -224,11 +257,12 @@ static int vnc_worker_thread_loop(VncJobQueue *queue)
     //取出队列中的job
     job = QTAILQ_FIRST(&queue->jobs);
     vnc_unlock_queue(queue);
-    assert(job->vs->magic == VNC_MAGIC);
 
     if (queue->exit) {
         return -1;//线程需要退出
     }
+
+    assert(job->vs->magic == VNC_MAGIC);
 
     vnc_lock_output(job->vs);
     if (job->vs->ioc == NULL || job->vs->abort == true) {
@@ -267,14 +301,17 @@ static int vnc_worker_thread_loop(VncJobQueue *queue)
             goto disconnected;
         }
 
-        n = vnc_send_framebuffer_update(&vs, entry->rect.x, entry->rect.y,
-                                        entry->rect.w, entry->rect.h);
+        if (vnc_worker_clamp_rect(&vs, job, &entry->rect)) {
+            n = vnc_send_framebuffer_update(&vs, entry->rect.x, entry->rect.y,
+                                            entry->rect.w, entry->rect.h);
 
-        if (n >= 0) {
-            n_rectangles += n;
+            if (n >= 0) {
+                n_rectangles += n;
+            }
         }
         g_free(entry);
     }
+    trace_vnc_job_nrects(&vs, job, n_rectangles);
     vnc_unlock_display(job->vs->vd);
 
     /* Put n_rectangles at the beginning of the message */
@@ -348,7 +385,7 @@ void vnc_start_worker_thread(void)
     VncJobQueue *q;
 
     if (vnc_worker_thread_running())
-        return ;
+        return;
 
     q = vnc_queue_init();
     //创建vnc线程

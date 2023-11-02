@@ -31,8 +31,7 @@ struct JSONToken {
     char str[];
 };
 
-typedef struct JSONParserContext
-{
+typedef struct JSONParserContext {
     Error *err;
     JSONToken *current;
     GQueue *buf;
@@ -55,7 +54,7 @@ static QObject *parse_value(JSONParserContext *ctxt);
 /**
  * Error handler
  */
-static void GCC_FMT_ATTR(3, 4) parse_error(JSONParserContext *ctxt,
+static void G_GNUC_PRINTF(3, 4) parse_error(JSONParserContext *ctxt,
                                            JSONToken *token, const char *msg, ...)
 {
     va_list ap;

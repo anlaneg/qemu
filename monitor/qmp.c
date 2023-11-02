@@ -33,6 +33,30 @@
 #include "qapi/qmp/qlist.h"
 #include "trace.h"
 
+/*
+ * qmp_dispatcher_co_busy is used for synchronisation between the
+ * monitor thread and the main thread to ensure that the dispatcher
+ * coroutine never gets scheduled a second time when it's already
+ * scheduled (scheduling the same coroutine twice is forbidden).
+ *
+ * It is true if the coroutine will process at least one more request
+ * before going to sleep.  Either it has been kicked already, or it
+ * is active and processing requests.  Additional requests may therefore
+ * be pushed onto mon->qmp_requests, and @qmp_dispatcher_co_shutdown may
+ * be set without further ado.  @qmp_dispatcher_co must not be woken up
+ * in this case.
+ *
+ * If false, you have to wake up @qmp_dispatcher_co after pushing new
+ * requests. You also have to set @qmp_dispatcher_co_busy to true
+ * before waking up the coroutine.
+ *
+ * The coroutine will automatically change this variable back to false
+ * before it yields.  Nobody else may set the variable to false.
+ *
+ * Access must be atomic for thread safety.
+ */
+static bool qmp_dispatcher_co_busy = true;
+
 struct QMPRequest {
     /* Owner of the request */
     MonitorQMP *mon;
@@ -76,10 +100,10 @@ static void monitor_qmp_cleanup_req_queue_locked(MonitorQMP *mon)
 
 static void monitor_qmp_cleanup_queue_and_resume(MonitorQMP *mon)
 {
-    qemu_mutex_lock(&mon->qmp_queue_lock);
+    QEMU_LOCK_GUARD(&mon->qmp_queue_lock);
 
     /*
-     * Same condition as in monitor_qmp_bh_dispatcher(), but before
+     * Same condition as in monitor_qmp_dispatcher_co(), but before
      * removing an element from the queue (hence no `- 1`).
      * Also, the queue should not be empty either, otherwise the
      * monitor hasn't been suspended yet (or was already resumed).
@@ -103,7 +127,6 @@ static void monitor_qmp_cleanup_queue_and_resume(MonitorQMP *mon)
         monitor_resume(&mon->common);
     }
 
-    qemu_mutex_unlock(&mon->qmp_queue_lock);
 }
 
 void qmp_send_response(MonitorQMP *mon, const QDict *rsp)
@@ -113,6 +136,7 @@ void qmp_send_response(MonitorQMP *mon, const QDict *rsp)
 
     json = qobject_to_json_pretty(data, mon->pretty);
     assert(json != NULL);
+    trace_monitor_qmp_respond(mon, json->str);
 
     g_string_append_c(json, '\n');
     monitor_puts(&mon->common, json->str);
@@ -178,8 +202,6 @@ static QMPRequest *monitor_qmp_requests_pop_any_with_lock(void)
     Monitor *mon;
     MonitorQMP *qmp_mon;
 
-    qemu_mutex_lock(&monitor_lock);
-
     QTAILQ_FOREACH(mon, &mon_list, entry) {
         if (!monitor_is_qmp(mon)) {
             continue;
@@ -204,52 +226,90 @@ static QMPRequest *monitor_qmp_requests_pop_any_with_lock(void)
         QTAILQ_INSERT_TAIL(&mon_list, mon, entry);
     }
 
-    qemu_mutex_unlock(&monitor_lock);
-
     return req_obj;
 }
 
-void coroutine_fn monitor_qmp_dispatcher_co(void *data)
+static QMPRequest *monitor_qmp_dispatcher_pop_any(void)
 {
-    QMPRequest *req_obj = NULL;
-    QDict *rsp;
-    bool need_resume;
-    MonitorQMP *mon;
-
     while (true) {
-        assert(qatomic_mb_read(&qmp_dispatcher_co_busy) == true);
+        /*
+         * To avoid double scheduling, busy is true on entry to
+         * monitor_qmp_dispatcher_co(), and must be set again before
+         * aio_co_wake()-ing it.
+         */
+        assert(qatomic_read(&qmp_dispatcher_co_busy) == true);
 
         /*
          * Mark the dispatcher as not busy already here so that we
          * don't miss any new requests coming in the middle of our
          * processing.
+         *
+         * Clear qmp_dispatcher_co_busy before reading request.
          */
-        qatomic_mb_set(&qmp_dispatcher_co_busy, false);
+        qatomic_set_mb(&qmp_dispatcher_co_busy, false);
 
-        while (!(req_obj = monitor_qmp_requests_pop_any_with_lock())) {
-            /*
-             * No more requests to process.  Wait to be reentered from
-             * handle_qmp_command() when it pushes more requests, or
-             * from monitor_cleanup() when it requests shutdown.
-             */
-            if (!qmp_dispatcher_co_shutdown) {
-                qemu_coroutine_yield();
+        WITH_QEMU_LOCK_GUARD(&monitor_lock) {
+            QMPRequest *req_obj;
 
-                /*
-                 * busy must be set to true again by whoever
-                 * rescheduled us to avoid double scheduling
-                 */
-                assert(qatomic_xchg(&qmp_dispatcher_co_busy, false) == true);
+            /* On shutdown, don't take any more requests from the queue */
+            if (qmp_dispatcher_co_shutdown) {
+                return NULL;
             }
 
-            /*
-             * qmp_dispatcher_co_shutdown may have changed if we
-             * yielded and were reentered from monitor_cleanup()
-             */
-            if (qmp_dispatcher_co_shutdown) {
-                return;
+            req_obj = monitor_qmp_requests_pop_any_with_lock();
+            if (req_obj) {
+                return req_obj;
             }
         }
+
+        /*
+         * No more requests to process.  Wait to be reentered from
+         * handle_qmp_command() when it pushes more requests, or
+         * from monitor_cleanup() when it requests shutdown.
+         */
+        qemu_coroutine_yield();
+    }
+}
+
+void coroutine_fn monitor_qmp_dispatcher_co(void *data)
+{
+    QMPRequest *req_obj;
+    QDict *rsp;
+    bool oob_enabled;
+    MonitorQMP *mon;
+
+    while ((req_obj = monitor_qmp_dispatcher_pop_any()) != NULL) {
+        trace_monitor_qmp_in_band_dequeue(req_obj,
+                                          req_obj->mon->qmp_requests->length);
+
+        /*
+         * @req_obj has a request, we hold req_obj->mon->qmp_queue_lock
+         */
+
+        mon = req_obj->mon;
+
+        /*
+         * We need to resume the monitor if handle_qmp_command()
+         * suspended it.  Two cases:
+         * 1. OOB enabled: mon->qmp_requests has no more space
+         *    Resume right away, so that OOB commands can get executed while
+         *    this request is being processed.
+         * 2. OOB disabled: always
+         *    Resume only after we're done processing the request,
+         * We need to save qmp_oob_enabled() for later, because
+         * qmp_qmp_capabilities() can change it.
+         */
+        oob_enabled = qmp_oob_enabled(mon);
+        if (oob_enabled
+            && mon->qmp_requests->length == QMP_REQ_QUEUE_LEN_MAX - 1) {
+            monitor_resume(&mon->common);
+        }
+
+        /*
+         * Drop the queue mutex now, before yielding, otherwise we might
+         * deadlock if the main thread tries to lock it.
+         */
+        qemu_mutex_unlock(&mon->qmp_queue_lock);
 
         if (qatomic_xchg(&qmp_dispatcher_co_busy, true) == true) {
             /*
@@ -269,11 +329,7 @@ void coroutine_fn monitor_qmp_dispatcher_co(void *data)
         aio_co_schedule(qemu_get_aio_context(), qmp_dispatcher_co);
         qemu_coroutine_yield();
 
-        mon = req_obj->mon;
-        /* qmp_oob_enabled() might change after "qmp_capabilities" */
-        need_resume = !qmp_oob_enabled(mon) ||
-            mon->qmp_requests->length == QMP_REQ_QUEUE_LEN_MAX - 1;
-        qemu_mutex_unlock(&mon->qmp_queue_lock);
+        /* Process request */
         if (req_obj->req) {
             if (trace_event_get_state(TRACE_MONITOR_QMP_CMD_IN_BAND)) {
                 QDict *qdict = qobject_to(QDict, req_obj->req);
@@ -287,16 +343,17 @@ void coroutine_fn monitor_qmp_dispatcher_co(void *data)
             monitor_qmp_dispatch(mon, req_obj->req);
         } else {
             assert(req_obj->err);
+            trace_monitor_qmp_err_in_band(error_get_pretty(req_obj->err));
             rsp = qmp_error_response(req_obj->err);
             req_obj->err = NULL;
             monitor_qmp_respond(mon, rsp);
             qobject_unref(rsp);
         }
 
-        if (need_resume) {
-            /* Pairs with the monitor_suspend() in handle_qmp_command() */
+        if (!oob_enabled) {
             monitor_resume(&mon->common);
         }
+
         qmp_request_free(req_obj);
 
         /*
@@ -307,6 +364,17 @@ void coroutine_fn monitor_qmp_dispatcher_co(void *data)
          */
         aio_co_schedule(iohandler_get_aio_context(), qmp_dispatcher_co);
         qemu_coroutine_yield();
+    }
+    qatomic_set(&qmp_dispatcher_co, NULL);
+}
+
+void qmp_dispatcher_co_wake(void)
+{
+    /* Write request before reading qmp_dispatcher_co_busy.  */
+    smp_mb__before_rmw();
+
+    if (!qatomic_xchg(&qmp_dispatcher_co_busy, true)) {
+        aio_co_wake(qmp_dispatcher_co);
     }
 }
 
@@ -345,33 +413,33 @@ static void handle_qmp_command(void *opaque, QObject *req, Error *err)
     req_obj->err = err;
 
     /* Protect qmp_requests and fetching its length. */
-    qemu_mutex_lock(&mon->qmp_queue_lock);
+    WITH_QEMU_LOCK_GUARD(&mon->qmp_queue_lock) {
 
-    /*
-     * Suspend the monitor when we can't queue more requests after
-     * this one.  Dequeuing in monitor_qmp_bh_dispatcher() or
-     * monitor_qmp_cleanup_queue_and_resume() will resume it.
-     * Note that when OOB is disabled, we queue at most one command,
-     * for backward compatibility.
-     */
-    if (!qmp_oob_enabled(mon) ||
-        mon->qmp_requests->length == QMP_REQ_QUEUE_LEN_MAX - 1) {
-        monitor_suspend(&mon->common);
+        /*
+         * Suspend the monitor when we can't queue more requests after
+         * this one.  Dequeuing in monitor_qmp_dispatcher_co() or
+         * monitor_qmp_cleanup_queue_and_resume() will resume it.
+         * Note that when OOB is disabled, we queue at most one command,
+         * for backward compatibility.
+         */
+        if (!qmp_oob_enabled(mon) ||
+            mon->qmp_requests->length == QMP_REQ_QUEUE_LEN_MAX - 1) {
+            monitor_suspend(&mon->common);
+        }
+
+        /*
+         * Put the request to the end of queue so that requests will be
+         * handled in time order.  Ownership for req_obj, req,
+         * etc. will be delivered to the handler side.
+         */
+        trace_monitor_qmp_in_band_enqueue(req_obj, mon,
+                                          mon->qmp_requests->length);
+        assert(mon->qmp_requests->length < QMP_REQ_QUEUE_LEN_MAX);
+        g_queue_push_tail(mon->qmp_requests, req_obj);
     }
-
-    /*
-     * Put the request to the end of queue so that requests will be
-     * handled in time order.  Ownership for req_obj, req,
-     * etc. will be delivered to the handler side.
-     */
-    assert(mon->qmp_requests->length < QMP_REQ_QUEUE_LEN_MAX);
-    g_queue_push_tail(mon->qmp_requests, req_obj);
-    qemu_mutex_unlock(&mon->qmp_queue_lock);
 
     /* Kick the dispatcher routine */
-    if (!qatomic_xchg(&qmp_dispatcher_co_busy, true)) {
-        aio_co_wake(qmp_dispatcher_co);
-    }
+    qmp_dispatcher_co_wake();
 }
 
 static void monitor_qmp_read(void *opaque, const uint8_t *buf, int size)

@@ -146,6 +146,18 @@ static void nvdimm_prepare_memory_region(NVDIMMDevice *nvdimm, Error **errp)
         return;
     }
 
+    if (!nvdimm->unarmed && memory_region_is_rom(mr)) {
+        HostMemoryBackend *hostmem = dimm->hostmem;
+
+        error_setg(errp, "'unarmed' property must be 'on' since memdev %s "
+                   "is read-only",
+                   object_get_canonical_path_component(OBJECT(hostmem)));
+        return;
+    }
+    if (memory_region_is_rom(mr)) {
+        nvdimm->readonly = true;
+    }
+
     nvdimm->nvdimm_mr = g_new(MemoryRegion, 1);
     memory_region_init_alias(nvdimm->nvdimm_mr, OBJECT(dimm),
                              "nvdimm-memory", mr, 0, pmem_size);
@@ -172,9 +184,24 @@ static MemoryRegion *nvdimm_md_get_memory_region(MemoryDeviceState *md,
 static void nvdimm_realize(PCDIMMDevice *dimm, Error **errp)
 {
     NVDIMMDevice *nvdimm = NVDIMM(dimm);
+    NVDIMMClass *ndc = NVDIMM_GET_CLASS(nvdimm);
 
     if (!nvdimm->nvdimm_mr) {
         nvdimm_prepare_memory_region(nvdimm, errp);
+    }
+
+    if (ndc->realize) {
+        ndc->realize(nvdimm, errp);
+    }
+}
+
+static void nvdimm_unrealize(PCDIMMDevice *dimm)
+{
+    NVDIMMDevice *nvdimm = NVDIMM(dimm);
+    NVDIMMClass *ndc = NVDIMM_GET_CLASS(nvdimm);
+
+    if (ndc->unrealize) {
+        ndc->unrealize(nvdimm);
     }
 }
 
@@ -183,15 +210,16 @@ static void nvdimm_realize(PCDIMMDevice *dimm, Error **errp)
  * label read/write functions.
  */
 static void nvdimm_validate_rw_label_data(NVDIMMDevice *nvdimm, uint64_t size,
-                                        uint64_t offset)
+                                        uint64_t offset, bool is_write)
 {
     assert((nvdimm->label_size >= size + offset) && (offset + size > offset));
+    assert(!is_write || !nvdimm->readonly);
 }
 
 static void nvdimm_read_label_data(NVDIMMDevice *nvdimm, void *buf,
                                    uint64_t size, uint64_t offset)
 {
-    nvdimm_validate_rw_label_data(nvdimm, size, offset);
+    nvdimm_validate_rw_label_data(nvdimm, size, offset, false);
 
     memcpy(buf, nvdimm->label_data + offset, size);
 }
@@ -205,7 +233,7 @@ static void nvdimm_write_label_data(NVDIMMDevice *nvdimm, const void *buf,
                                             "pmem", NULL);
     uint64_t backend_offset;
 
-    nvdimm_validate_rw_label_data(nvdimm, size, offset);
+    nvdimm_validate_rw_label_data(nvdimm, size, offset, true);
 
     if (!is_pmem) {
         memcpy(nvdimm->label_data + offset, buf, size);
@@ -231,14 +259,16 @@ static void nvdimm_class_init(ObjectClass *oc, void *data)
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     ddc->realize = nvdimm_realize;
+    ddc->unrealize = nvdimm_unrealize;
     mdc->get_memory_region = nvdimm_md_get_memory_region;
     device_class_set_props(dc, nvdimm_properties);
 
     nvc->read_label_data = nvdimm_read_label_data;
     nvc->write_label_data = nvdimm_write_label_data;
+    set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
 }
 
-static TypeInfo nvdimm_info = {
+static const TypeInfo nvdimm_info = {
     .name          = TYPE_NVDIMM,
     .parent        = TYPE_PC_DIMM,
     .class_size    = sizeof(NVDIMMClass),

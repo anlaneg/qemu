@@ -18,19 +18,25 @@
 
 #include "hw/boards.h"
 #include "hw/adc/npcm7xx_adc.h"
+#include "hw/core/split-irq.h"
 #include "hw/cpu/a9mpcore.h"
 #include "hw/gpio/npcm7xx_gpio.h"
+#include "hw/i2c/npcm7xx_smbus.h"
 #include "hw/mem/npcm7xx_mc.h"
 #include "hw/misc/npcm7xx_clk.h"
 #include "hw/misc/npcm7xx_gcr.h"
+#include "hw/misc/npcm7xx_mft.h"
 #include "hw/misc/npcm7xx_pwm.h"
 #include "hw/misc/npcm7xx_rng.h"
+#include "hw/net/npcm7xx_emc.h"
 #include "hw/nvram/npcm7xx_otp.h"
 #include "hw/timer/npcm7xx_timer.h"
 #include "hw/ssi/npcm7xx_fiu.h"
+#include "hw/ssi/npcm_pspi.h"
 #include "hw/usb/hcd-ehci.h"
 #include "hw/usb/hcd-ohci.h"
 #include "target/arm/cpu.h"
+#include "hw/sd/npcm7xx_sdhci.h"
 
 #define NPCM7XX_MAX_NUM_CPUS    (2)
 
@@ -45,13 +51,20 @@
 #define NPCM7XX_GIC_CPU_IF_ADDR         (0xf03fe100)  /* GIC within A9 */
 #define NPCM7XX_BOARD_SETUP_ADDR        (0xffff1000)  /* Boot ROM */
 
-typedef struct NPCM7xxMachine {
+#define NPCM7XX_NR_PWM_MODULES 2
+
+struct NPCM7xxMachine {
     MachineState        parent;
-} NPCM7xxMachine;
+    /*
+     * PWM fan splitter. each splitter connects to one PWM output and
+     * multiple MFT inputs.
+     */
+    SplitIRQ            fan_splitter[NPCM7XX_NR_PWM_MODULES *
+                                     NPCM7XX_PWM_PER_MODULE];
+};
 
 #define TYPE_NPCM7XX_MACHINE MACHINE_TYPE_NAME("npcm7xx")
-#define NPCM7XX_MACHINE(obj)                                            \
-    OBJECT_CHECK(NPCM7xxMachine, (obj), TYPE_NPCM7XX_MACHINE)
+OBJECT_DECLARE_SIMPLE_TYPE(NPCM7xxMachine, NPCM7XX_MACHINE)
 
 typedef struct NPCM7xxMachineClass {
     MachineClass        parent;
@@ -64,7 +77,7 @@ typedef struct NPCM7xxMachineClass {
 #define NPCM7XX_MACHINE_GET_CLASS(obj)                                  \
     OBJECT_GET_CLASS(NPCM7xxMachineClass, (obj), TYPE_NPCM7XX_MACHINE)
 
-typedef struct NPCM7xxState {
+struct NPCM7xxState {
     DeviceState         parent;
 
     ARMCPU              cpu[NPCM7XX_MAX_NUM_CPUS];
@@ -79,19 +92,24 @@ typedef struct NPCM7xxState {
     NPCM7xxCLKState     clk;
     NPCM7xxTimerCtrlState tim[3];
     NPCM7xxADCState     adc;
-    NPCM7xxPWMState     pwm[2];
+    NPCM7xxPWMState     pwm[NPCM7XX_NR_PWM_MODULES];
+    NPCM7xxMFTState     mft[8];
     NPCM7xxOTPState     key_storage;
     NPCM7xxOTPState     fuse_array;
     NPCM7xxMCState      mc;
     NPCM7xxRNGState     rng;
     NPCM7xxGPIOState    gpio[8];
+    NPCM7xxSMBusState   smbus[16];
     EHCISysBusState     ehci;
     OHCISysBusState     ohci;
     NPCM7xxFIUState     fiu[2];
-} NPCM7xxState;
+    NPCM7xxEMCState     emc[2];
+    NPCM7xxSDHCIState   mmc;
+    NPCMPSPIState       pspi[2];
+};
 
 #define TYPE_NPCM7XX    "npcm7xx"
-#define NPCM7XX(obj)    OBJECT_CHECK(NPCM7xxState, (obj), TYPE_NPCM7XX)
+OBJECT_DECLARE_TYPE(NPCM7xxState, NPCM7xxClass, NPCM7XX)
 
 #define TYPE_NPCM730    "npcm730"
 #define TYPE_NPCM750    "npcm750"
@@ -104,11 +122,6 @@ typedef struct NPCM7xxClass {
     /* Number of CPU cores enabled in this SoC class (may be 1 or 2). */
     uint32_t            num_cpus;
 } NPCM7xxClass;
-
-#define NPCM7XX_CLASS(klass)                                            \
-    OBJECT_CLASS_CHECK(NPCM7xxClass, (klass), TYPE_NPCM7XX)
-#define NPCM7XX_GET_CLASS(obj)                                          \
-    OBJECT_GET_CLASS(NPCM7xxClass, (obj), TYPE_NPCM7XX)
 
 /**
  * npcm7xx_load_kernel - Loads memory with everything needed to boot

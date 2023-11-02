@@ -17,15 +17,15 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "cpu.h"
 #include "hw/arm/xlnx-zynqmp.h"
+#include "hw/arm/boot.h"
 #include "hw/boards.h"
 #include "qemu/error-report.h"
 #include "qemu/log.h"
-#include "sysemu/qtest.h"
 #include "sysemu/device_tree.h"
 #include "qom/object.h"
 #include "net/can_emu.h"
+#include "audio/audio.h"
 
 struct XlnxZCU102 {
     MachineState parent_obj;
@@ -100,6 +100,30 @@ static void zcu102_modify_dtb(const struct arm_boot_info *binfo, void *fdt)
     }
 }
 
+static void bbram_attach_drive(XlnxBBRam *dev)
+{
+    DriveInfo *dinfo;
+    BlockBackend *blk;
+
+    dinfo = drive_get_by_index(IF_PFLASH, 2);
+    blk = dinfo ? blk_by_legacy_dinfo(dinfo) : NULL;
+    if (blk) {
+        qdev_prop_set_drive(DEVICE(dev), "drive", blk);
+    }
+}
+
+static void efuse_attach_drive(XlnxEFuse *dev)
+{
+    DriveInfo *dinfo;
+    BlockBackend *blk;
+
+    dinfo = drive_get_by_index(IF_PFLASH, 3);
+    blk = dinfo ? blk_by_legacy_dinfo(dinfo) : NULL;
+    if (blk) {
+        qdev_prop_set_drive(DEVICE(dev), "drive", blk);
+    }
+}
+
 static void xlnx_zcu102_init(MachineState *machine)
 {
     XlnxZCU102 *s = ZCU102_MACHINE(machine);
@@ -121,6 +145,10 @@ static void xlnx_zcu102_init(MachineState *machine)
 
     object_initialize_child(OBJECT(machine), "soc", &s->soc, TYPE_XLNX_ZYNQMP);
 
+    if (machine->audiodev) {
+        qdev_prop_set_string(DEVICE(&s->soc.dp), "audiodev", machine->audiodev);
+    }
+
     object_property_set_link(OBJECT(&s->soc), "ddr-ram", OBJECT(machine->ram),
                              &error_abort);
     object_property_set_bool(OBJECT(&s->soc), "secure", s->secure,
@@ -138,10 +166,16 @@ static void xlnx_zcu102_init(MachineState *machine)
 
     qdev_realize(DEVICE(&s->soc), NULL, &error_fatal);
 
+    /* Attach bbram backend, if given */
+    bbram_attach_drive(&s->soc.bbram);
+
+    /* Attach efuse backend, if given */
+    efuse_attach_drive(&s->soc.efuse);
+
     /* Create and plug in the SD cards */
     for (i = 0; i < XLNX_ZYNQMP_NUM_SDHCI; i++) {
         BusState *bus;
-        DriveInfo *di = drive_get_next(IF_SD);
+        DriveInfo *di = drive_get(IF_SD, 0, i);
         BlockBackend *blk = di ? blk_by_legacy_dinfo(di) : NULL;
         DeviceState *carddev;
         char *bus_name;
@@ -162,7 +196,7 @@ static void xlnx_zcu102_init(MachineState *machine)
         BusState *spi_bus;
         DeviceState *flash_dev;
         qemu_irq cs_line;
-        DriveInfo *dinfo = drive_get_next(IF_MTD);
+        DriveInfo *dinfo = drive_get(IF_MTD, 0, i);
         gchar *bus_name = g_strdup_printf("spi%d", i);
 
         spi_bus = qdev_get_child_bus(DEVICE(&s->soc), bus_name);
@@ -173,6 +207,7 @@ static void xlnx_zcu102_init(MachineState *machine)
             qdev_prop_set_drive_err(flash_dev, "drive",
                                     blk_by_legacy_dinfo(dinfo), &error_fatal);
         }
+        qdev_prop_set_uint8(flash_dev, "cs", i);
         qdev_realize_and_unref(flash_dev, spi_bus, &error_fatal);
 
         cs_line = qdev_get_gpio_in_named(flash_dev, SSI_GPIO_CS, 0);
@@ -184,7 +219,7 @@ static void xlnx_zcu102_init(MachineState *machine)
         BusState *spi_bus;
         DeviceState *flash_dev;
         qemu_irq cs_line;
-        DriveInfo *dinfo = drive_get_next(IF_MTD);
+        DriveInfo *dinfo = drive_get(IF_MTD, 0, XLNX_ZYNQMP_NUM_SPIS + i);
         int bus = i / XLNX_ZYNQMP_NUM_QSPI_BUS_CS;
         gchar *bus_name = g_strdup_printf("qspi%d", bus);
 
@@ -196,6 +231,7 @@ static void xlnx_zcu102_init(MachineState *machine)
             qdev_prop_set_drive_err(flash_dev, "drive",
                                     blk_by_legacy_dinfo(dinfo), &error_fatal);
         }
+        qdev_prop_set_uint8(flash_dev, "cs", i);
         qdev_realize_and_unref(flash_dev, spi_bus, &error_fatal);
 
         cs_line = qdev_get_gpio_in_named(flash_dev, SSI_GPIO_CS, 0);
@@ -208,6 +244,7 @@ static void xlnx_zcu102_init(MachineState *machine)
     s->binfo.ram_size = ram_size;
     s->binfo.loader_start = 0;
     s->binfo.modify_dtb = zcu102_modify_dtb;
+    s->binfo.psci_conduit = QEMU_PSCI_CONDUIT_SMC;
     arm_load_kernel(s->soc.boot_cpu_ptr, machine, &s->binfo);
 }
 
@@ -219,12 +256,12 @@ static void xlnx_zcu102_machine_instance_init(Object *obj)
     s->secure = false;
     /* Default to virt (EL2) being disabled */
     s->virt = false;
-    object_property_add_link(obj, "xlnx-zcu102.canbus0", TYPE_CAN_BUS,
+    object_property_add_link(obj, "canbus0", TYPE_CAN_BUS,
                              (Object **)&s->canbus[0],
                              object_property_allow_set_link,
                              0);
 
-    object_property_add_link(obj, "xlnx-zcu102.canbus1", TYPE_CAN_BUS,
+    object_property_add_link(obj, "canbus1", TYPE_CAN_BUS,
                              (Object **)&s->canbus[1],
                              object_property_allow_set_link,
                              0);
@@ -244,6 +281,7 @@ static void xlnx_zcu102_machine_class_init(ObjectClass *oc, void *data)
     mc->default_cpus = XLNX_ZYNQMP_NUM_APU_CPUS;
     mc->default_ram_id = "ddr-ram";
 
+    machine_add_audiodev_property(mc);
     object_class_property_add_bool(oc, "secure", zcu102_get_secure,
                                    zcu102_set_secure);
     object_class_property_set_description(oc, "secure",

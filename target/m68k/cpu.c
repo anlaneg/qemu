@@ -31,6 +31,26 @@ static void m68k_cpu_set_pc(CPUState *cs, vaddr value)
     cpu->env.pc = value;
 }
 
+static vaddr m68k_cpu_get_pc(CPUState *cs)
+{
+    M68kCPU *cpu = M68K_CPU(cs);
+
+    return cpu->env.pc;
+}
+
+static void m68k_restore_state_to_opc(CPUState *cs,
+                                      const TranslationBlock *tb,
+                                      const uint64_t *data)
+{
+    M68kCPU *cpu = M68K_CPU(cs);
+    int cc_op = data[1];
+
+    cpu->env.pc = data[0];
+    if (cc_op != CC_OP_DYNAMIC) {
+        cpu->env.cc_op = cc_op;
+    }
+}
+
 static bool m68k_cpu_has_work(CPUState *cs)
 {
     return cs->interrupt_request & CPU_INTERRUPT_HARD;
@@ -38,25 +58,32 @@ static bool m68k_cpu_has_work(CPUState *cs)
 
 static void m68k_set_feature(CPUM68KState *env, int feature)
 {
-    env->features |= (1u << feature);
+    env->features |= BIT_ULL(feature);
 }
 
-static void m68k_cpu_reset(DeviceState *dev)
+static void m68k_unset_feature(CPUM68KState *env, int feature)
 {
-    CPUState *s = CPU(dev);
+    env->features &= ~BIT_ULL(feature);
+}
+
+static void m68k_cpu_reset_hold(Object *obj)
+{
+    CPUState *s = CPU(obj);
     M68kCPU *cpu = M68K_CPU(s);
     M68kCPUClass *mcc = M68K_CPU_GET_CLASS(cpu);
     CPUM68KState *env = &cpu->env;
     floatx80 nan = floatx80_default_nan(NULL);
     int i;
 
-    mcc->parent_reset(dev);
+    if (mcc->parent_phases.hold) {
+        mcc->parent_phases.hold(obj);
+    }
 
     memset(env, 0, offsetof(CPUM68KState, end_reset_fields));
-#ifdef CONFIG_SOFTMMU
-    cpu_m68k_set_sr(env, SR_S | SR_I);
-#else
+#ifdef CONFIG_USER_ONLY
     cpu_m68k_set_sr(env, 0);
+#else
+    cpu_m68k_set_sr(env, SR_S | SR_I);
 #endif
     for (i = 0; i < 8; i++) {
         env->fregs[i].d = nan;
@@ -70,12 +97,8 @@ static void m68k_cpu_reset(DeviceState *dev)
 
 static void m68k_cpu_disas_set_info(CPUState *s, disassemble_info *info)
 {
-    M68kCPU *cpu = M68K_CPU(s);
-    CPUM68KState *env = &cpu->env;
     info->print_insn = print_insn_m68k;
-    if (m68k_feature(env, M68K_FEATURE_M68000)) {
-        info->mach = bfd_mach_m68040;
-    }
+    info->mach = 0;
 }
 
 /* CPU models */
@@ -101,25 +124,52 @@ static void m5206_cpu_initfn(Object *obj)
     CPUM68KState *env = &cpu->env;
 
     m68k_set_feature(env, M68K_FEATURE_CF_ISA_A);
+    m68k_set_feature(env, M68K_FEATURE_MOVEFROMSR_PRIV);
 }
 
+/* Base feature set, including isns. for m68k family */
 static void m68000_cpu_initfn(Object *obj)
 {
     M68kCPU *cpu = M68K_CPU(obj);
     CPUM68KState *env = &cpu->env;
 
-    m68k_set_feature(env, M68K_FEATURE_M68000);
+    m68k_set_feature(env, M68K_FEATURE_M68K);
     m68k_set_feature(env, M68K_FEATURE_USP);
     m68k_set_feature(env, M68K_FEATURE_WORD_INDEX);
     m68k_set_feature(env, M68K_FEATURE_MOVEP);
 }
 
-/* common features for 68020, 68030 and 68040 */
-static void m680x0_cpu_common(CPUM68KState *env)
+/*
+ * Adds BKPT, MOVE-from-SR *now priv instr, and MOVEC, MOVES, RTD
+ */
+static void m68010_cpu_initfn(Object *obj)
 {
-    m68k_set_feature(env, M68K_FEATURE_M68000);
-    m68k_set_feature(env, M68K_FEATURE_USP);
-    m68k_set_feature(env, M68K_FEATURE_WORD_INDEX);
+    M68kCPU *cpu = M68K_CPU(obj);
+    CPUM68KState *env = &cpu->env;
+
+    m68000_cpu_initfn(obj);
+    m68k_set_feature(env, M68K_FEATURE_M68010);
+    m68k_set_feature(env, M68K_FEATURE_RTD);
+    m68k_set_feature(env, M68K_FEATURE_BKPT);
+    m68k_set_feature(env, M68K_FEATURE_MOVEC);
+    m68k_set_feature(env, M68K_FEATURE_MOVEFROMSR_PRIV);
+}
+
+/*
+ * Adds BFCHG, BFCLR, BFEXTS, BFEXTU, BFFFO, BFINS, BFSET, BFTST, CAS, CAS2,
+ *      CHK2, CMP2, DIVSL, DIVUL, EXTB, PACK, TRAPcc, UNPK.
+ *
+ * 68020/30 only:
+ *      CALLM, cpBcc, cpDBcc, cpGEN, cpRESTORE, cpSAVE, cpScc, cpTRAPcc
+ */
+static void m68020_cpu_initfn(Object *obj)
+{
+    M68kCPU *cpu = M68K_CPU(obj);
+    CPUM68KState *env = &cpu->env;
+
+    m68010_cpu_initfn(obj);
+    m68k_unset_feature(env, M68K_FEATURE_M68010);
+    m68k_set_feature(env, M68K_FEATURE_M68020);
     m68k_set_feature(env, M68K_FEATURE_QUAD_MULDIV);
     m68k_set_feature(env, M68K_FEATURE_BRAL);
     m68k_set_feature(env, M68K_FEATURE_BCCL);
@@ -129,59 +179,80 @@ static void m680x0_cpu_common(CPUM68KState *env)
     m68k_set_feature(env, M68K_FEATURE_LONG_MULDIV);
     m68k_set_feature(env, M68K_FEATURE_FPU);
     m68k_set_feature(env, M68K_FEATURE_CAS);
-    m68k_set_feature(env, M68K_FEATURE_BKPT);
-    m68k_set_feature(env, M68K_FEATURE_RTD);
     m68k_set_feature(env, M68K_FEATURE_CHK2);
-    m68k_set_feature(env, M68K_FEATURE_MOVEP);
+    m68k_set_feature(env, M68K_FEATURE_MSP);
+    m68k_set_feature(env, M68K_FEATURE_UNALIGNED_DATA);
+    m68k_set_feature(env, M68K_FEATURE_TRAPCC);
 }
 
-static void m68020_cpu_initfn(Object *obj)
-{
-    M68kCPU *cpu = M68K_CPU(obj);
-    CPUM68KState *env = &cpu->env;
-
-    m680x0_cpu_common(env);
-    m68k_set_feature(env, M68K_FEATURE_M68020);
-}
-
+/*
+ * Adds: PFLUSH (*5)
+ * 68030 Only: PFLUSHA (*5), PLOAD (*5), PMOVE
+ * 68030/40 Only: PTEST
+ *
+ * NOTES:
+ *  5. Not valid on MC68EC030
+ */
 static void m68030_cpu_initfn(Object *obj)
 {
     M68kCPU *cpu = M68K_CPU(obj);
     CPUM68KState *env = &cpu->env;
 
-    m680x0_cpu_common(env);
+    m68020_cpu_initfn(obj);
+    m68k_unset_feature(env, M68K_FEATURE_M68020);
     m68k_set_feature(env, M68K_FEATURE_M68030);
 }
 
+/*
+ * Adds: CINV, CPUSH
+ * Adds all with Note *2: FABS, FSABS, FDABS, FADD, FSADD, FDADD, FBcc, FCMP,
+ *                        FDBcc, FDIV, FSDIV, FDDIV, FMOVE, FSMOVE, FDMOVE,
+ *                        FMOVEM, FMUL, FSMUL, FDMUL, FNEG, FSNEG, FDNEG, FNOP,
+ *                        FRESTORE, FSAVE, FScc, FSQRT, FSSQRT, FDSQRT, FSUB,
+ *                        FSSUB, FDSUB, FTRAPcc, FTST
+ *
+ * Adds with Notes *2, and *3: FACOS, FASIN, FATAN, FATANH, FCOS, FCOSH, FETOX,
+ *                             FETOXM, FGETEXP, FGETMAN, FINT, FINTRZ, FLOG10,
+ *                             FLOG2, FLOGN, FLOGNP1, FMOD, FMOVECR, FREM,
+ *                             FSCALE, FSGLDIV, FSGLMUL, FSIN, FSINCOS, FSINH,
+ *                             FTAN, FTANH, FTENTOX, FTWOTOX
+ * NOTES:
+ * 2. Not applicable to the MC68EC040, MC68LC040, MC68EC060, and MC68LC060.
+ * 3. These are software-supported instructions on the MC68040 and MC68060.
+ */
 static void m68040_cpu_initfn(Object *obj)
 {
     M68kCPU *cpu = M68K_CPU(obj);
     CPUM68KState *env = &cpu->env;
 
-    m680x0_cpu_common(env);
+    m68030_cpu_initfn(obj);
+    m68k_unset_feature(env, M68K_FEATURE_M68030);
     m68k_set_feature(env, M68K_FEATURE_M68040);
 }
 
+/*
+ * Adds: PLPA
+ * Adds all with Note *2: CAS, CAS2, MULS, MULU, CHK2, CMP2, DIVS, DIVU
+ * All Fxxxx instructions are as per m68040 with exception to; FMOVEM NOTE3
+ *
+ * Does NOT implement MOVEP
+ *
+ * NOTES:
+ * 2. Not applicable to the MC68EC040, MC68LC040, MC68EC060, and MC68LC060.
+ * 3. These are software-supported instructions on the MC68040 and MC68060.
+ */
 static void m68060_cpu_initfn(Object *obj)
 {
     M68kCPU *cpu = M68K_CPU(obj);
     CPUM68KState *env = &cpu->env;
 
-    m68k_set_feature(env, M68K_FEATURE_M68000);
-    m68k_set_feature(env, M68K_FEATURE_USP);
-    m68k_set_feature(env, M68K_FEATURE_WORD_INDEX);
-    m68k_set_feature(env, M68K_FEATURE_BRAL);
-    m68k_set_feature(env, M68K_FEATURE_BCCL);
-    m68k_set_feature(env, M68K_FEATURE_BITFIELD);
-    m68k_set_feature(env, M68K_FEATURE_EXT_FULL);
-    m68k_set_feature(env, M68K_FEATURE_SCALED_INDEX);
-    m68k_set_feature(env, M68K_FEATURE_LONG_MULDIV);
-    m68k_set_feature(env, M68K_FEATURE_FPU);
-    m68k_set_feature(env, M68K_FEATURE_CAS);
-    m68k_set_feature(env, M68K_FEATURE_BKPT);
-    m68k_set_feature(env, M68K_FEATURE_RTD);
-    m68k_set_feature(env, M68K_FEATURE_CHK2);
+    m68040_cpu_initfn(obj);
+    m68k_unset_feature(env, M68K_FEATURE_M68040);
     m68k_set_feature(env, M68K_FEATURE_M68060);
+    m68k_unset_feature(env, M68K_FEATURE_MOVEP);
+
+    /* Implemented as a software feature */
+    m68k_unset_feature(env, M68K_FEATURE_QUAD_MULDIV);
 }
 
 static void m5208_cpu_initfn(Object *obj)
@@ -194,6 +265,7 @@ static void m5208_cpu_initfn(Object *obj)
     m68k_set_feature(env, M68K_FEATURE_BRAL);
     m68k_set_feature(env, M68K_FEATURE_CF_EMAC);
     m68k_set_feature(env, M68K_FEATURE_USP);
+    m68k_set_feature(env, M68K_FEATURE_MOVEFROMSR_PRIV);
 }
 
 static void cfv4e_cpu_initfn(Object *obj)
@@ -207,6 +279,7 @@ static void cfv4e_cpu_initfn(Object *obj)
     m68k_set_feature(env, M68K_FEATURE_CF_FPU);
     m68k_set_feature(env, M68K_FEATURE_CF_EMAC);
     m68k_set_feature(env, M68K_FEATURE_USP);
+    m68k_set_feature(env, M68K_FEATURE_MOVEFROMSR_PRIV);
 }
 
 static void any_cpu_initfn(Object *obj)
@@ -228,6 +301,7 @@ static void any_cpu_initfn(Object *obj)
     m68k_set_feature(env, M68K_FEATURE_USP);
     m68k_set_feature(env, M68K_FEATURE_EXT_FULL);
     m68k_set_feature(env, M68K_FEATURE_WORD_INDEX);
+    m68k_set_feature(env, M68K_FEATURE_MOVEFROMSR_PRIV);
 }
 
 static void m68k_cpu_realizefn(DeviceState *dev, Error **errp)
@@ -253,14 +327,7 @@ static void m68k_cpu_realizefn(DeviceState *dev, Error **errp)
     mcc->parent_realize(dev, errp);
 }
 
-static void m68k_cpu_initfn(Object *obj)
-{
-    M68kCPU *cpu = M68K_CPU(obj);
-
-    cpu_set_cpustate_pointers(cpu);
-}
-
-#if defined(CONFIG_SOFTMMU)
+#if !defined(CONFIG_USER_ONLY)
 static bool fpu_needed(void *opaque)
 {
     M68kCPU *s = opaque;
@@ -451,36 +518,55 @@ static const VMStateDescription vmstate_m68k_cpu = {
         NULL
     },
 };
-#endif
+
+#include "hw/core/sysemu-cpu-ops.h"
+
+static const struct SysemuCPUOps m68k_sysemu_ops = {
+    .get_phys_page_debug = m68k_cpu_get_phys_page_debug,
+};
+#endif /* !CONFIG_USER_ONLY */
+
+#include "hw/core/tcg-cpu-ops.h"
+
+static const struct TCGCPUOps m68k_tcg_ops = {
+    .initialize = m68k_tcg_init,
+    .restore_state_to_opc = m68k_restore_state_to_opc,
+
+#ifndef CONFIG_USER_ONLY
+    .tlb_fill = m68k_cpu_tlb_fill,
+    .cpu_exec_interrupt = m68k_cpu_exec_interrupt,
+    .do_interrupt = m68k_cpu_do_interrupt,
+    .do_transaction_failed = m68k_cpu_transaction_failed,
+#endif /* !CONFIG_USER_ONLY */
+};
 
 static void m68k_cpu_class_init(ObjectClass *c, void *data)
 {
     M68kCPUClass *mcc = M68K_CPU_CLASS(c);
     CPUClass *cc = CPU_CLASS(c);
     DeviceClass *dc = DEVICE_CLASS(c);
+    ResettableClass *rc = RESETTABLE_CLASS(c);
 
     device_class_set_parent_realize(dc, m68k_cpu_realizefn,
                                     &mcc->parent_realize);
-    device_class_set_parent_reset(dc, m68k_cpu_reset, &mcc->parent_reset);
+    resettable_class_set_parent_phases(rc, NULL, m68k_cpu_reset_hold, NULL,
+                                       &mcc->parent_phases);
 
     cc->class_by_name = m68k_cpu_class_by_name;
     cc->has_work = m68k_cpu_has_work;
-    cc->do_interrupt = m68k_cpu_do_interrupt;
-    cc->cpu_exec_interrupt = m68k_cpu_exec_interrupt;
     cc->dump_state = m68k_cpu_dump_state;
     cc->set_pc = m68k_cpu_set_pc;
+    cc->get_pc = m68k_cpu_get_pc;
     cc->gdb_read_register = m68k_cpu_gdb_read_register;
     cc->gdb_write_register = m68k_cpu_gdb_write_register;
-    cc->tlb_fill = m68k_cpu_tlb_fill;
-#if defined(CONFIG_SOFTMMU)
-    cc->do_transaction_failed = m68k_cpu_transaction_failed;
-    cc->get_phys_page_debug = m68k_cpu_get_phys_page_debug;
+#if !defined(CONFIG_USER_ONLY)
     dc->vmsd = &vmstate_m68k_cpu;
+    cc->sysemu_ops = &m68k_sysemu_ops;
 #endif
     cc->disas_set_info = m68k_cpu_disas_set_info;
-    cc->tcg_initialize = m68k_tcg_init;
 
     cc->gdb_num_core_regs = 18;
+    cc->tcg_ops = &m68k_tcg_ops;
 }
 
 static void m68k_cpu_class_init_cf_core(ObjectClass *c, void *data)
@@ -518,12 +604,13 @@ static const TypeInfo m68k_cpus_type_infos[] = {
         .name = TYPE_M68K_CPU,
         .parent = TYPE_CPU,
         .instance_size = sizeof(M68kCPU),
-        .instance_init = m68k_cpu_initfn,
+        .instance_align = __alignof(M68kCPU),
         .abstract = true,
         .class_size = sizeof(M68kCPUClass),
         .class_init = m68k_cpu_class_init,
     },
     DEFINE_M68K_CPU_TYPE_M68K(m68000),
+    DEFINE_M68K_CPU_TYPE_M68K(m68010),
     DEFINE_M68K_CPU_TYPE_M68K(m68020),
     DEFINE_M68K_CPU_TYPE_M68K(m68030),
     DEFINE_M68K_CPU_TYPE_M68K(m68040),

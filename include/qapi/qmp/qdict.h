@@ -31,6 +31,10 @@ struct QDict {
     QLIST_HEAD(,QDictEntry) table[QDICT_BUCKET_MAX];
 };
 
+void qdict_unref(QDict *q);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(QDict, qdict_unref)
+
 /* Object API */
 QDict *qdict_new(void);
 const char *qdict_entry_key(const QDictEntry *entry);

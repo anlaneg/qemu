@@ -111,7 +111,8 @@ Clock *qdev_init_clock_out(DeviceState *dev, const char *name)
 }
 
 Clock *qdev_init_clock_in(DeviceState *dev, const char *name,
-                            ClockCallback *callback, void *opaque)
+                          ClockCallback *callback, void *opaque,
+                          unsigned int events)
 {
     NamedClockList *ncl;
 
@@ -120,7 +121,7 @@ Clock *qdev_init_clock_in(DeviceState *dev, const char *name,
     ncl = qdev_init_clocklist(dev, name, false, NULL);
 
     if (callback) {
-        clock_set_callback(ncl->clock, callback, opaque);
+        clock_set_callback(ncl->clock, callback, opaque, events);
     }
     return ncl->clock;
 }
@@ -133,11 +134,12 @@ void qdev_init_clocks(DeviceState *dev, const ClockPortInitArray clocks)
         Clock **clkp;
         /* offset cannot be inside the DeviceState part */
         assert(elem->offset > sizeof(DeviceState));
-        clkp = (Clock **)(((void *) dev) + elem->offset);
+        clkp = ((void *)dev) + elem->offset;
         if (elem->is_output) {
             *clkp = qdev_init_clock_out(dev, elem->name);
         } else {
-            *clkp = qdev_init_clock_in(dev, elem->name, elem->callback, dev);
+            *clkp = qdev_init_clock_in(dev, elem->name, elem->callback, dev,
+                                       elem->callback_events);
         }
     }
 }

@@ -125,7 +125,7 @@ aio_flush
 EOF
 
 # Sequential write, but the next cluster is already allocated
-# and phyiscally in the right position
+# and physically in the right position
 cat  <<EOF
 write -P 89 0x80000 0x1000
 write -P 90 0x96000 0x8000
@@ -187,7 +187,8 @@ EOF
 }
 
 overlay_io | $QEMU_IO blkdebug::"$TEST_IMG" | _filter_qemu_io |\
-	sed -e 's/bytes at offset [0-9]*/bytes at offset XXX/g'
+    sed -e 's/[0-9]*\/[0-9]* bytes at offset [0-9]*/XXX\/XXX bytes at offset XXX/g' \
+        -e 's/^[0-9]* KiB/XXX KiB/g'
 
 echo
 echo "== Verify image content =="

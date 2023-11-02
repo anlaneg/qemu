@@ -75,7 +75,7 @@ static uint64_t uart_read(void *opaque, hwaddr addr, unsigned int size)
     return r;
 }
 
-static gboolean uart_transmit(GIOChannel *chan, GIOCondition cond, void *opaque)
+static gboolean uart_transmit(void *do_not_use, GIOCondition cond, void *opaque)
 {
     NRF51UARTState *s = NRF51_UART(opaque);
     int r;
@@ -93,13 +93,13 @@ static gboolean uart_transmit(GIOChannel *chan, GIOCondition cond, void *opaque)
              */
             goto buffer_drained;
         }
-        return FALSE;
+        return G_SOURCE_REMOVE;
     }
 
 buffer_drained:
     s->reg[R_UART_TXDRDY] = 1;
     s->pending_tx_byte = false;
-    return FALSE;
+    return G_SOURCE_REMOVE;
 }
 
 static void uart_cancel_transmit(NRF51UARTState *s)

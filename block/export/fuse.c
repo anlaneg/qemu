@@ -19,18 +19,27 @@
 #define FUSE_USE_VERSION 31
 
 #include "qemu/osdep.h"
+#include "qemu/memalign.h"
 #include "block/aio.h"
-#include "block/block.h"
+#include "block/block_int-common.h"
 #include "block/export.h"
 #include "block/fuse.h"
 #include "block/qapi.h"
 #include "qapi/error.h"
 #include "qapi/qapi-commands-block.h"
+#include "qemu/main-loop.h"
 #include "sysemu/block-backend.h"
 
 #include <fuse.h>
 #include <fuse_lowlevel.h>
 
+#if defined(CONFIG_FALLOCATE_ZERO_RANGE)
+#include <linux/falloc.h>
+#endif
+
+#ifdef __linux__
+#include <linux/fs.h>
+#endif
 
 /* Prevent overly long bounce buffer allocations */
 #define FUSE_MAX_BOUNCE_BYTES (MIN(BDRV_REQUEST_MAX_BYTES, 64 * 1024 * 1024))
@@ -41,11 +50,18 @@ typedef struct FuseExport {
 
     struct fuse_session *fuse_session;
     struct fuse_buf fuse_buf;
+    unsigned int in_flight; /* atomic */
     bool mounted, fd_handler_set_up;
 
     char *mountpoint;
     bool writable;
     bool growable;
+    /* Whether allow_other was used as a mount option or not */
+    bool allow_other;
+
+    mode_t st_mode;
+    uid_t st_uid;
+    gid_t st_gid;
 } FuseExport;
 
 static GHashTable *exports;
@@ -57,11 +73,47 @@ static void fuse_export_delete(BlockExport *exp);
 static void init_exports_table(void);
 
 static int setup_fuse_export(FuseExport *exp, const char *mountpoint,
-                             Error **errp);
+                             bool allow_other, Error **errp);
 static void read_from_fuse_export(void *opaque);
 
 static bool is_regular_file(const char *path, Error **errp);
 
+
+static void fuse_export_drained_begin(void *opaque)
+{
+    FuseExport *exp = opaque;
+
+    aio_set_fd_handler(exp->common.ctx,
+                       fuse_session_fd(exp->fuse_session),
+                       NULL, NULL, NULL, NULL, NULL);
+    exp->fd_handler_set_up = false;
+}
+
+static void fuse_export_drained_end(void *opaque)
+{
+    FuseExport *exp = opaque;
+
+    /* Refresh AioContext in case it changed */
+    exp->common.ctx = blk_get_aio_context(exp->common.blk);
+
+    aio_set_fd_handler(exp->common.ctx,
+                       fuse_session_fd(exp->fuse_session),
+                       read_from_fuse_export, NULL, NULL, NULL, exp);
+    exp->fd_handler_set_up = true;
+}
+
+static bool fuse_export_drained_poll(void *opaque)
+{
+    FuseExport *exp = opaque;
+
+    return qatomic_read(&exp->in_flight) > 0;
+}
+
+static const BlockDevOps fuse_export_blk_dev_ops = {
+    .drained_begin = fuse_export_drained_begin,
+    .drained_end   = fuse_export_drained_end,
+    .drained_poll  = fuse_export_drained_poll,
+};
 
 static int fuse_export_create(BlockExport *blk_exp,
                               BlockExportOptions *blk_exp_args,
@@ -73,8 +125,8 @@ static int fuse_export_create(BlockExport *blk_exp,
 
     assert(blk_exp_args->type == BLOCK_EXPORT_TYPE_FUSE);
 
-    /* For growable exports, take the RESIZE permission */
-    if (args->growable) {
+    /* For growable and writable exports, take the RESIZE permission */
+    if (args->growable || blk_exp_args->writable) {
         uint64_t blk_perm, blk_shared_perm;
 
         blk_get_perm(exp->common.blk, &blk_perm, &blk_shared_perm);
@@ -85,6 +137,15 @@ static int fuse_export_create(BlockExport *blk_exp,
             return ret;
         }
     }
+
+    blk_set_dev_ops(exp->common.blk, &fuse_export_blk_dev_ops, exp);
+
+    /*
+     * We handle draining ourselves using an in-flight counter and by disabling
+     * the FUSE fd handler. Do not queue BlockBackend requests, they need to
+     * complete so the in-flight counter reaches zero.
+     */
+    blk_set_disable_request_queuing(exp->common.blk, true);
 
     init_exports_table();
 
@@ -118,7 +179,29 @@ static int fuse_export_create(BlockExport *blk_exp,
     exp->writable = blk_exp_args->writable;
     exp->growable = args->growable;
 
-    ret = setup_fuse_export(exp, args->mountpoint, errp);
+    /* set default */
+    if (!args->has_allow_other) {
+        args->allow_other = FUSE_EXPORT_ALLOW_OTHER_AUTO;
+    }
+
+    exp->st_mode = S_IFREG | S_IRUSR;
+    if (exp->writable) {
+        exp->st_mode |= S_IWUSR;
+    }
+    exp->st_uid = getuid();
+    exp->st_gid = getgid();
+
+    if (args->allow_other == FUSE_EXPORT_ALLOW_OTHER_AUTO) {
+        /* Ignore errors on our first attempt */
+        ret = setup_fuse_export(exp, args->mountpoint, true, NULL);
+        exp->allow_other = ret == 0;
+        if (ret < 0) {
+            ret = setup_fuse_export(exp, args->mountpoint, false, errp);
+        }
+    } else {
+        exp->allow_other = args->allow_other == FUSE_EXPORT_ALLOW_OTHER_ON;
+        ret = setup_fuse_export(exp, args->mountpoint, exp->allow_other, errp);
+    }
     if (ret < 0) {
         goto fail;
     }
@@ -146,15 +229,20 @@ static void init_exports_table(void)
  * Create exp->fuse_session and mount it.
  */
 static int setup_fuse_export(FuseExport *exp, const char *mountpoint,
-                             Error **errp)
+                             bool allow_other, Error **errp)
 {
     const char *fuse_argv[4];
     char *mount_opts;
     struct fuse_args fuse_args;
     int ret;
 
-    /* Needs to match what fuse_init() sets.  Only max_read must be supplied. */
-    mount_opts = g_strdup_printf("max_read=%zu", FUSE_MAX_BOUNCE_BYTES);
+    /*
+     * max_read needs to match what fuse_init() sets.
+     * max_write need not be supplied.
+     */
+    mount_opts = g_strdup_printf("max_read=%zu,default_permissions%s",
+                                 FUSE_MAX_BOUNCE_BYTES,
+                                 allow_other ? ",allow_other" : "");
 
     fuse_argv[0] = ""; /* Dummy program name */
     fuse_argv[1] = "-o";
@@ -182,8 +270,8 @@ static int setup_fuse_export(FuseExport *exp, const char *mountpoint,
     g_hash_table_insert(exports, g_strdup(mountpoint), NULL);
 
     aio_set_fd_handler(exp->common.ctx,
-                       fuse_session_fd(exp->fuse_session), true,
-                       read_from_fuse_export, NULL, NULL, exp);
+                       fuse_session_fd(exp->fuse_session),
+                       read_from_fuse_export, NULL, NULL, NULL, exp);
     exp->fd_handler_set_up = true;
 
     return 0;
@@ -204,6 +292,8 @@ static void read_from_fuse_export(void *opaque)
 
     blk_exp_ref(&exp->common);
 
+    qatomic_inc(&exp->in_flight);
+
     do {
         ret = fuse_session_receive_buf(exp->fuse_session, &exp->fuse_buf);
     } while (ret == -EINTR);
@@ -214,6 +304,10 @@ static void read_from_fuse_export(void *opaque)
     fuse_session_process_buf(exp->fuse_session, &exp->fuse_buf);
 
 out:
+    if (qatomic_fetch_dec(&exp->in_flight) == 1) {
+        aio_wait_kick(); /* wake AIO_WAIT_WHILE() */
+    }
+
     blk_exp_unref(&exp->common);
 }
 
@@ -226,8 +320,8 @@ static void fuse_export_shutdown(BlockExport *blk_exp)
 
         if (exp->fd_handler_set_up) {
             aio_set_fd_handler(exp->common.ctx,
-                               fuse_session_fd(exp->fuse_session), true,
-                               NULL, NULL, NULL, NULL);
+                               fuse_session_fd(exp->fuse_session),
+                               NULL, NULL, NULL, NULL, NULL);
             exp->fd_handler_set_up = false;
         }
     }
@@ -316,7 +410,6 @@ static void fuse_getattr(fuse_req_t req, fuse_ino_t inode,
     int64_t length, allocated_blocks;
     time_t now = time(NULL);
     FuseExport *exp = fuse_req_userdata(req);
-    mode_t mode;
 
     length = blk_getlength(exp->common.blk);
     if (length < 0) {
@@ -331,17 +424,12 @@ static void fuse_getattr(fuse_req_t req, fuse_ino_t inode,
         allocated_blocks = DIV_ROUND_UP(allocated_blocks, 512);
     }
 
-    mode = S_IFREG | S_IRUSR;
-    if (exp->writable) {
-        mode |= S_IWUSR;
-    }
-
     statbuf = (struct stat) {
         .st_ino     = inode,
-        .st_mode    = mode,
+        .st_mode    = exp->st_mode,
         .st_nlink   = 1,
-        .st_uid     = getuid(),
-        .st_gid     = getgid(),
+        .st_uid     = exp->st_uid,
+        .st_gid     = exp->st_gid,
         .st_size    = length,
         .st_blksize = blk_bs(exp->common.blk)->bl.request_alignment,
         .st_blocks  = allocated_blocks,
@@ -358,14 +446,23 @@ static int fuse_do_truncate(const FuseExport *exp, int64_t size,
 {
     uint64_t blk_perm, blk_shared_perm;
     BdrvRequestFlags truncate_flags = 0;
-    int ret;
+    bool add_resize_perm;
+    int ret, ret_check;
+
+    /* Growable and writable exports have a permanent RESIZE permission */
+    add_resize_perm = !exp->growable && !exp->writable;
 
     if (req_zero_write) {
         truncate_flags |= BDRV_REQ_ZERO_WRITE;
     }
 
-    /* Growable exports have a permanent RESIZE permission */
-    if (!exp->growable) {
+    if (add_resize_perm) {
+
+        if (!qemu_in_main_thread()) {
+            /* Changing permissions like below only works in the main thread */
+            return -EPERM;
+        }
+
         blk_get_perm(exp->common.blk, &blk_perm, &blk_shared_perm);
 
         ret = blk_set_perm(exp->common.blk, blk_perm | BLK_PERM_RESIZE,
@@ -378,37 +475,87 @@ static int fuse_do_truncate(const FuseExport *exp, int64_t size,
     ret = blk_truncate(exp->common.blk, size, true, prealloc,
                        truncate_flags, NULL);
 
-    if (!exp->growable) {
+    if (add_resize_perm) {
         /* Must succeed, because we are only giving up the RESIZE permission */
-        blk_set_perm(exp->common.blk, blk_perm, blk_shared_perm, &error_abort);
+        ret_check = blk_set_perm(exp->common.blk, blk_perm,
+                                 blk_shared_perm, &error_abort);
+        assert(ret_check == 0);
     }
 
     return ret;
 }
 
 /**
- * Let clients set file attributes.  Only resizing is supported.
+ * Let clients set file attributes.  Only resizing and changing
+ * permissions (st_mode, st_uid, st_gid) is allowed.
+ * Changing permissions is only allowed as far as it will actually
+ * permit access: Read-only exports cannot be given +w, and exports
+ * without allow_other cannot be given a different UID or GID, and
+ * they cannot be given non-owner access.
  */
 static void fuse_setattr(fuse_req_t req, fuse_ino_t inode, struct stat *statbuf,
                          int to_set, struct fuse_file_info *fi)
 {
     FuseExport *exp = fuse_req_userdata(req);
+    int supported_attrs;
     int ret;
 
-    if (!exp->writable) {
-        fuse_reply_err(req, EACCES);
-        return;
+    supported_attrs = FUSE_SET_ATTR_SIZE | FUSE_SET_ATTR_MODE;
+    if (exp->allow_other) {
+        supported_attrs |= FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID;
     }
 
-    if (to_set & ~FUSE_SET_ATTR_SIZE) {
+    if (to_set & ~supported_attrs) {
         fuse_reply_err(req, ENOTSUP);
         return;
     }
 
-    ret = fuse_do_truncate(exp, statbuf->st_size, true, PREALLOC_MODE_OFF);
-    if (ret < 0) {
-        fuse_reply_err(req, -ret);
-        return;
+    /* Do some argument checks first before committing to anything */
+    if (to_set & FUSE_SET_ATTR_MODE) {
+        /*
+         * Without allow_other, non-owners can never access the export, so do
+         * not allow setting permissions for them
+         */
+        if (!exp->allow_other &&
+            (statbuf->st_mode & (S_IRWXG | S_IRWXO)) != 0)
+        {
+            fuse_reply_err(req, EPERM);
+            return;
+        }
+
+        /* +w for read-only exports makes no sense, disallow it */
+        if (!exp->writable &&
+            (statbuf->st_mode & (S_IWUSR | S_IWGRP | S_IWOTH)) != 0)
+        {
+            fuse_reply_err(req, EROFS);
+            return;
+        }
+    }
+
+    if (to_set & FUSE_SET_ATTR_SIZE) {
+        if (!exp->writable) {
+            fuse_reply_err(req, EACCES);
+            return;
+        }
+
+        ret = fuse_do_truncate(exp, statbuf->st_size, true, PREALLOC_MODE_OFF);
+        if (ret < 0) {
+            fuse_reply_err(req, -ret);
+            return;
+        }
+    }
+
+    if (to_set & FUSE_SET_ATTR_MODE) {
+        /* Ignore FUSE-supplied file type, only change the mode */
+        exp->st_mode = (statbuf->st_mode & 07777) | S_IFREG;
+    }
+
+    if (to_set & FUSE_SET_ATTR_UID) {
+        exp->st_uid = statbuf->st_uid;
+    }
+
+    if (to_set & FUSE_SET_ATTR_GID) {
+        exp->st_gid = statbuf->st_gid;
     }
 
     fuse_getattr(req, inode, fi);
@@ -460,7 +607,7 @@ static void fuse_read(fuse_req_t req, fuse_ino_t inode,
         return;
     }
 
-    ret = blk_pread(exp->common.blk, offset, buf, size);
+    ret = blk_pread(exp->common.blk, offset, size, buf, 0);
     if (ret >= 0) {
         fuse_reply_buf(req, buf, size);
     } else {
@@ -513,7 +660,7 @@ static void fuse_write(fuse_req_t req, fuse_ino_t inode, const char *buf,
         }
     }
 
-    ret = blk_pwrite(exp->common.blk, offset, buf, size, 0);
+    ret = blk_pwrite(exp->common.blk, offset, size, buf, 0);
     if (ret >= 0) {
         fuse_reply_write(req, size);
     } else {
@@ -543,11 +690,33 @@ static void fuse_fallocate(fuse_req_t req, fuse_ino_t inode, int mode,
         return;
     }
 
+#ifdef CONFIG_FALLOCATE_PUNCH_HOLE
     if (mode & FALLOC_FL_KEEP_SIZE) {
         length = MIN(length, blk_len - offset);
     }
+#endif /* CONFIG_FALLOCATE_PUNCH_HOLE */
 
-    if (mode & FALLOC_FL_PUNCH_HOLE) {
+    if (!mode) {
+        /* We can only fallocate at the EOF with a truncate */
+        if (offset < blk_len) {
+            fuse_reply_err(req, EOPNOTSUPP);
+            return;
+        }
+
+        if (offset > blk_len) {
+            /* No preallocation needed here */
+            ret = fuse_do_truncate(exp, offset, true, PREALLOC_MODE_OFF);
+            if (ret < 0) {
+                fuse_reply_err(req, -ret);
+                return;
+            }
+        }
+
+        ret = fuse_do_truncate(exp, offset + length, true,
+                               PREALLOC_MODE_FALLOC);
+    }
+#ifdef CONFIG_FALLOCATE_PUNCH_HOLE
+    else if (mode & FALLOC_FL_PUNCH_HOLE) {
         if (!(mode & FALLOC_FL_KEEP_SIZE)) {
             fuse_reply_err(req, EINVAL);
             return;
@@ -556,11 +725,23 @@ static void fuse_fallocate(fuse_req_t req, fuse_ino_t inode, int mode,
         do {
             int size = MIN(length, BDRV_REQUEST_MAX_BYTES);
 
-            ret = blk_pdiscard(exp->common.blk, offset, size);
+            ret = blk_pwrite_zeroes(exp->common.blk, offset, size,
+                                    BDRV_REQ_MAY_UNMAP | BDRV_REQ_NO_FALLBACK);
+            if (ret == -ENOTSUP) {
+                /*
+                 * fallocate() specifies to return EOPNOTSUPP for unsupported
+                 * operations
+                 */
+                ret = -EOPNOTSUPP;
+            }
+
             offset += size;
             length -= size;
         } while (ret == 0 && length > 0);
-    } else if (mode & FALLOC_FL_ZERO_RANGE) {
+    }
+#endif /* CONFIG_FALLOCATE_PUNCH_HOLE */
+#ifdef CONFIG_FALLOCATE_ZERO_RANGE
+    else if (mode & FALLOC_FL_ZERO_RANGE) {
         if (!(mode & FALLOC_FL_KEEP_SIZE) && offset + length > blk_len) {
             /* No need for zeroes, we are going to write them ourselves */
             ret = fuse_do_truncate(exp, offset + length, false,
@@ -579,25 +760,9 @@ static void fuse_fallocate(fuse_req_t req, fuse_ino_t inode, int mode,
             offset += size;
             length -= size;
         } while (ret == 0 && length > 0);
-    } else if (!mode) {
-        /* We can only fallocate at the EOF with a truncate */
-        if (offset < blk_len) {
-            fuse_reply_err(req, EOPNOTSUPP);
-            return;
-        }
-
-        if (offset > blk_len) {
-            /* No preallocation needed here */
-            ret = fuse_do_truncate(exp, offset, true, PREALLOC_MODE_OFF);
-            if (ret < 0) {
-                fuse_reply_err(req, -ret);
-                return;
-            }
-        }
-
-        ret = fuse_do_truncate(exp, offset + length, true,
-                               PREALLOC_MODE_FALLOC);
-    } else {
+    }
+#endif /* CONFIG_FALLOCATE_ZERO_RANGE */
+    else {
         ret = -EOPNOTSUPP;
     }
 

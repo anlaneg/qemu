@@ -10,8 +10,12 @@
  *
  */
 
+/* header to be included in non-WHPX-specific code */
+
 #ifndef QEMU_WHPX_H
 #define QEMU_WHPX_H
+
+#ifdef NEED_CPU_H
 
 #ifdef CONFIG_WHPX
 
@@ -24,5 +28,7 @@ bool whpx_apic_in_platform(void);
 #define whpx_apic_in_platform() (0)
 
 #endif /* CONFIG_WHPX */
+
+#endif /* NEED_CPU_H */
 
 #endif /* QEMU_WHPX_H */

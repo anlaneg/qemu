@@ -38,14 +38,14 @@ struct VirtConsole {
  * Callback function that's called from chardevs when backend becomes
  * writable.
  */
-static gboolean chr_write_unblocked(GIOChannel *chan, GIOCondition cond,
+static gboolean chr_write_unblocked(void *do_not_use, GIOCondition cond,
                                     void *opaque)
 {
     VirtConsole *vcon = opaque;
 
     vcon->watch = 0;
     virtio_serial_throttle_port(VIRTIO_SERIAL_PORT(vcon), false);
-    return FALSE;
+    return G_SOURCE_REMOVE;
 }
 
 /* Callback function that's called when the guest sends us data */

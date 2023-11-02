@@ -16,10 +16,12 @@
 #include "qom/object.h"
 #include "qom/object_interfaces.h"
 #include "qemu/cutils.h"
+#include "qemu/memalign.h"
 #include "qapi/visitor.h"
 #include "qapi/string-input-visitor.h"
 #include "qapi/string-output-visitor.h"
 #include "qapi/qobject-input-visitor.h"
+#include "qapi/forward-visitor.h"
 #include "qapi/qapi-builtin-visit.h"
 #include "qapi/qmp/qerror.h"
 #include "qapi/qmp/qjson.h"
@@ -274,6 +276,19 @@ static size_t type_object_get_size(TypeImpl *ti)
     return 0;
 }
 
+static size_t type_object_get_align(TypeImpl *ti)
+{
+    if (ti->instance_align) {
+        return ti->instance_align;
+    }
+
+    if (type_has_parent(ti)) {
+        return type_object_get_align(type_get_parent(ti));
+    }
+
+    return 0;
+}
+
 //获取指定类型的实例大小
 size_t object_type_get_instance_size(const char *typename)
 {
@@ -366,6 +381,7 @@ static void type_initialize(TypeImpl *ti)
     //获取ObjectClass数据大小，实例（对象）大小
     ti->class_size = type_class_get_size(ti);
     ti->instance_size = type_object_get_size(ti);
+    ti->instance_align = type_object_get_align(ti);
     /* Any type with zero instance_size is implicitly abstract.
      * This means interface types are all abstract.
      */
@@ -543,7 +559,8 @@ static GPtrArray *object_compat_props[3];
  * other than "-global".  These are generally used for syntactic
  * sugar and legacy command line options.
  */
-void object_register_sugar_prop(const char *driver, const char *prop, const char *value)
+void object_register_sugar_prop(const char *driver, const char *prop,
+                                const char *value, bool optional)
 {
     GlobalProperty *g;
     if (!object_compat_props[2]) {
@@ -553,6 +570,7 @@ void object_register_sugar_prop(const char *driver, const char *prop, const char
     g->driver = g_strdup(driver);
     g->property = g_strdup(prop);
     g->value = g_strdup(value);
+    g->optional = optional;
     g_ptr_array_add(object_compat_props[2], g);
 }
 
@@ -637,8 +655,13 @@ void object_initialize(void *data, size_t size, const char *typename)
 
 #ifdef CONFIG_MODULES
     if (!type) {
-        module_load_qom_one(typename);
-        type = type_get_by_name(typename);
+        int rv = module_load_qom(typename, &error_fatal);
+        if (rv > 0) {
+            type = type_get_by_name(typename);
+        } else {
+            error_report("missing object type '%s'", typename);
+            exit(1);
+        }
     }
 #endif
     if (!type) {
@@ -819,7 +842,7 @@ static void object_finalize(void *data)
 
 /* Find the minimum alignment guaranteed by the system malloc. */
 #if __STDC_VERSION__ >= 201112L
-typddef max_align_t qemu_max_align_t;
+typedef max_align_t qemu_max_align_t;
 #else
 typedef union {
     long l;
@@ -1186,8 +1209,13 @@ ObjectClass *module_object_class_by_name(const char *typename)
     oc = object_class_by_name(typename);
 #ifdef CONFIG_MODULES
     if (!oc) {
-        module_load_qom_one(typename);
-        oc = object_class_by_name(typename);
+        Error *local_err = NULL;
+        int rv = module_load_qom(typename, &local_err);
+        if (rv > 0) {
+            oc = object_class_by_name(typename);
+        } else if (rv < 0) {
+            error_report_err(local_err);
+        }
     }
 #endif
     return oc;
@@ -1331,10 +1359,14 @@ GSList *object_class_get_list_sorted(const char *implements_type,
 Object *object_ref(void *objptr)
 {
     Object *obj = OBJECT(objptr);
+    uint32_t ref;
+
     if (!obj) {
         return NULL;
     }
-    qatomic_inc(&obj->ref);
+    ref = qatomic_fetch_inc(&obj->ref);
+    /* Assert waaay before the integer overflows */
+    g_assert(ref < INT_MAX);
     return obj;
 }
 
@@ -1571,7 +1603,8 @@ bool object_property_get(Object *obj, const char *name, Visitor *v,
 
     if (!prop->get) {
         /*如果属性无get回调，则报错*/
-        error_setg(errp, QERR_PERMISSION_DENIED);
+        error_setg(errp, "Property '%s.%s' is not readable",
+                   object_get_typename(obj), name);
         return false;
     }
     //通过get回调获属性值
@@ -1584,7 +1617,7 @@ bool object_property_get(Object *obj, const char *name, Visitor *v,
 bool object_property_set(Object *obj, const char *name, Visitor *v,
                          Error **errp)
 {
-    Error *err = NULL;
+    ERRP_GUARD();
     //如果名称为name的属性不存在，则返回
     ObjectProperty *prop = object_property_find_err(obj, name, errp);
 
@@ -1594,13 +1627,13 @@ bool object_property_set(Object *obj, const char *name, Visitor *v,
 
     //如果名称为name的属性存在，但没有set函数，则报错
     if (!prop->set) {
-        error_setg(errp, QERR_PERMISSION_DENIED);
+        error_setg(errp, "Property '%s.%s' is not writable",
+                   object_get_typename(obj), name);
         return false;
     }
     //调用属性的set函数，设置此属性
-    prop->set(obj, v, name, prop->opaque, &err);
-    error_propagate(errp, err);
-    return !err;
+    prop->set(obj, v, name, prop->opaque, errp);
+    return !*errp;
 }
 
 bool object_property_set_str(Object *obj, const char *name,
@@ -2365,6 +2398,17 @@ Object *object_resolve_path(const char *path, bool *ambiguous)
     return object_resolve_path_type(path, TYPE_OBJECT, ambiguous);
 }
 
+Object *object_resolve_path_at(Object *parent, const char *path)
+{
+    g_auto(GStrv) parts = g_strsplit(path, "/", 0);
+
+    if (*path == '/') {
+        return object_resolve_abs_path(object_get_root(), parts + 1,
+                                       TYPE_OBJECT);
+    }
+    return object_resolve_abs_path(parent, parts, TYPE_OBJECT);
+}
+
 //字符串属性
 typedef struct StringProperty
 {
@@ -2927,16 +2971,20 @@ static void property_get_alias(Object *obj, Visitor *v, const char *name,
                                void *opaque, Error **errp)
 {
     AliasProperty *prop = opaque;
+    Visitor *alias_v = visitor_forward_field(v, prop->target_name, name);
 
-    object_property_get(prop->target_obj, prop->target_name, v, errp);
+    object_property_get(prop->target_obj, prop->target_name, alias_v, errp);
+    visit_free(alias_v);
 }
 
 static void property_set_alias(Object *obj, Visitor *v, const char *name,
                                void *opaque, Error **errp)
 {
     AliasProperty *prop = opaque;
+    Visitor *alias_v = visitor_forward_field(v, prop->target_name, name);
 
-    object_property_set(prop->target_obj, prop->target_name, v, errp);
+    object_property_set(prop->target_obj, prop->target_name, alias_v, errp);
+    visit_free(alias_v);
 }
 
 static Object *property_resolve_alias(Object *obj, void *opaque,
@@ -3031,14 +3079,14 @@ static void object_class_init(ObjectClass *klass, void *data)
 static void register_types(void)
 {
     //interface类型信息（interface的class为InterfaceClass)
-    static TypeInfo interface_info = {
+    static const TypeInfo interface_info = {
         .name = TYPE_INTERFACE,
         .class_size = sizeof(InterfaceClass),
         .abstract = true,
     };
 
     //object类型信息
-    static TypeInfo object_info = {
+    static const TypeInfo object_info = {
         .name = TYPE_OBJECT,
         .instance_size = sizeof(Object),
         .class_init = object_class_init,

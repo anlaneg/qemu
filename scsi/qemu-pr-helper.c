@@ -36,7 +36,7 @@
 #include <mpath_persist.h>
 #endif
 
-#include "qemu-common.h"
+#include "qemu/help-texts.h"
 #include "qapi/error.h"
 #include "qemu/cutils.h"
 #include "qemu/main-loop.h"
@@ -77,8 +77,10 @@ static int gid = -1;
 
 static void compute_default_paths(void)
 {
-    socket_path = qemu_get_local_state_pathname("run/qemu-pr-helper.sock");
-    pidfile = qemu_get_local_state_pathname("run/qemu-pr-helper.pid");
+    g_autofree char *state = qemu_get_local_state_dir();
+
+    socket_path = g_build_filename(state, "run", "qemu-pr-helper.sock", NULL);
+    pidfile = g_build_filename(state, "run", "qemu-pr-helper.pid", NULL);
 }
 
 static void usage(const char *name)
@@ -149,26 +151,35 @@ static int do_sgio_worker(void *opaque)
     io_hdr.dxferp = (char *)data->buf;
     io_hdr.dxfer_len = data->sz;
     ret = ioctl(data->fd, SG_IO, &io_hdr);
-    status = sg_io_sense_from_errno(ret < 0 ? errno : 0, &io_hdr,
-                                    &sense_code);
+
+    if (ret < 0) {
+        status = scsi_sense_from_errno(errno, &sense_code);
+        if (status == CHECK_CONDITION) {
+            scsi_build_sense(data->sense, sense_code);
+        }
+    } else if (io_hdr.host_status != SCSI_HOST_OK) {
+        status = scsi_sense_from_host_status(io_hdr.host_status, &sense_code);
+        if (status == CHECK_CONDITION) {
+            scsi_build_sense(data->sense, sense_code);
+        }
+    } else if (io_hdr.driver_status & SG_ERR_DRIVER_TIMEOUT) {
+        status = BUSY;
+    } else {
+        status = io_hdr.status;
+    }
+
     if (status == GOOD) {
         data->sz -= io_hdr.resid;
     } else {
         data->sz = 0;
     }
 
-    if (status == CHECK_CONDITION &&
-        !(io_hdr.driver_status & SG_ERR_DRIVER_SENSE)) {
-        scsi_build_sense(data->sense, sense_code);
-    }
-
     return status;
 }
 
-static int do_sgio(int fd, const uint8_t *cdb, uint8_t *sense,
-                    uint8_t *buf, int *sz, int dir)
+static int coroutine_fn do_sgio(int fd, const uint8_t *cdb, uint8_t *sense,
+                                uint8_t *buf, int *sz, int dir)
 {
-    ThreadPool *pool = aio_get_thread_pool(qemu_get_aio_context());
     int r;
 
     PRHelperSGIOData data = {
@@ -180,7 +191,7 @@ static int do_sgio(int fd, const uint8_t *cdb, uint8_t *sense,
         .dir = dir,
     };
 
-    r = thread_pool_submit_co(pool, do_sgio_worker, &data);
+    r = thread_pool_submit_co(do_sgio_worker, &data);
     *sz = data.sz;
     return r;
 }
@@ -269,11 +280,7 @@ void put_multipath_config(struct config *conf)
 static void multipath_pr_init(void)
 {
     udev = udev_new();
-#ifdef CONFIG_MPATH_NEW_API
     multipath_conf = mpath_lib_init();
-#else
-    mpath_lib_init(udev);
-#endif
 }
 
 static int is_mpath(int fd)
@@ -308,7 +315,7 @@ static SCSISense mpath_generic_sense(int r)
     }
 }
 
-static int mpath_reconstruct_sense(int fd, int r, uint8_t *sense)
+static int coroutine_fn mpath_reconstruct_sense(int fd, int r, uint8_t *sense)
 {
     switch (r) {
     case MPATH_PR_SUCCESS:
@@ -360,8 +367,8 @@ static int mpath_reconstruct_sense(int fd, int r, uint8_t *sense)
     }
 }
 
-static int multipath_pr_in(int fd, const uint8_t *cdb, uint8_t *sense,
-                           uint8_t *data, int sz)
+static int coroutine_fn multipath_pr_in(int fd, const uint8_t *cdb, uint8_t *sense,
+                                        uint8_t *data, int sz)
 {
     int rq_servact = cdb[1];
     struct prin_resp resp;
@@ -415,8 +422,8 @@ static int multipath_pr_in(int fd, const uint8_t *cdb, uint8_t *sense,
     return mpath_reconstruct_sense(fd, r, sense);
 }
 
-static int multipath_pr_out(int fd, const uint8_t *cdb, uint8_t *sense,
-                            const uint8_t *param, int sz)
+static int coroutine_fn multipath_pr_out(int fd, const uint8_t *cdb, uint8_t *sense,
+                                         const uint8_t *param, int sz)
 {
     int rq_servact = cdb[1];
     int rq_scope = cdb[2] >> 4;
@@ -533,8 +540,8 @@ static int multipath_pr_out(int fd, const uint8_t *cdb, uint8_t *sense,
 }
 #endif
 
-static int do_pr_in(int fd, const uint8_t *cdb, uint8_t *sense,
-                    uint8_t *data, int *resp_sz)
+static int coroutine_fn do_pr_in(int fd, const uint8_t *cdb, uint8_t *sense,
+                                 uint8_t *data, int *resp_sz)
 {
 #ifdef CONFIG_MPATH
     if (is_mpath(fd)) {
@@ -551,8 +558,8 @@ static int do_pr_in(int fd, const uint8_t *cdb, uint8_t *sense,
                    SG_DXFER_FROM_DEV);
 }
 
-static int do_pr_out(int fd, const uint8_t *cdb, uint8_t *sense,
-                     const uint8_t *param, int sz)
+static int coroutine_fn do_pr_out(int fd, const uint8_t *cdb, uint8_t *sense,
+                                  const uint8_t *param, int sz)
 {
     int resp_sz;
 
@@ -602,7 +609,7 @@ static int coroutine_fn prh_read(PRHelperClient *client, void *buf, int sz,
         iov.iov_base = buf;
         iov.iov_len = sz;
         n_read = qio_channel_readv_full(QIO_CHANNEL(client->ioc), &iov, 1,
-                                        &fds, &nfds, errp);
+                                        &fds, &nfds, 0, errp);
 
         if (n_read == QIO_CHANNEL_ERR_BLOCK) {
             qio_channel_yield(QIO_CHANNEL(client->ioc), G_IO_IN);
@@ -728,8 +735,7 @@ static void coroutine_fn prh_co_entry(void *opaque)
 
     qio_channel_set_blocking(QIO_CHANNEL(client->ioc),
                              false, NULL);
-    qio_channel_attach_aio_context(QIO_CHANNEL(client->ioc),
-                                   qemu_get_aio_context());
+    qio_channel_set_follow_coroutine_ctx(QIO_CHANNEL(client->ioc), true);
 
     /* A very simple negotiation for future extensibility.  No features
      * are defined so write 0.
@@ -789,7 +795,6 @@ static void coroutine_fn prh_co_entry(void *opaque)
     }
 
 out:
-    qio_channel_detach_aio_context(QIO_CHANNEL(client->ioc));
     object_unref(OBJECT(client->ioc));
     g_free(client);
 }
@@ -991,7 +996,7 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
     trace_init_file();
-    qemu_set_log(LOG_TRACE);
+    qemu_set_log(LOG_TRACE, &error_fatal);
 
 #ifdef CONFIG_MPATH
     dm_init();
@@ -1034,10 +1039,7 @@ int main(int argc, char **argv)
         }
     }
 
-    if (qemu_init_main_loop(&local_err)) {
-        error_report_err(local_err);
-        exit(EXIT_FAILURE);
-    }
+    qemu_init_main_loop(&error_fatal);
 
     server_watch = qio_channel_add_watch(QIO_CHANNEL(server_ioc),
                                          G_IO_IN,
@@ -1051,10 +1053,8 @@ int main(int argc, char **argv)
         }
     }
 
-    if ((daemonize || pidfile_specified) &&
-        !qemu_write_pidfile(pidfile, &local_err)) {
-        error_report_err(local_err);
-        exit(EXIT_FAILURE);
+    if (daemonize || pidfile_specified) {
+        qemu_write_pidfile(pidfile, &error_fatal);
     }
 
 #ifdef CONFIG_LIBCAP_NG

@@ -32,15 +32,17 @@
 #include "sysemu/blockdev.h"
 #include "net/net.h"
 #include "hw/pci/pci.h"
+#include "hw/pci/pcie.h"
+#include "hw/i386/x86.h"
 #include "util/block-helpers.h"
 
 static bool check_prop_still_unset(Object *obj, const char *name,
                                    const void *old_val, const char *new_val,
-                                   Error **errp)
+                                   bool allow_override, Error **errp)
 {
     const GlobalProperty *prop = qdev_find_global_prop(obj, name);
 
-    if (!old_val) {
+    if (!old_val || (!prop && allow_override)) {
         return true;
     }
 
@@ -93,16 +95,34 @@ static void set_drive_helper(Object *obj, Visitor *v, const char *name,
     BlockBackend *blk;
     bool blk_created = false;
     int ret;
+    BlockDriverState *bs;
+    AioContext *ctx;
 
     if (!visit_type_str(v, name, &str, errp)) {
         return;
     }
 
-    /*
-     * TODO Should this really be an error?  If no, the old value
-     * needs to be released before we store the new one.
-     */
-    if (!check_prop_still_unset(obj, name, *ptr, str, errp)) {
+    if (!check_prop_still_unset(obj, name, *ptr, str, true, errp)) {
+        return;
+    }
+
+    if (*ptr) {
+        /* BlockBackend already exists. So, we want to change attached node */
+        blk = *ptr;
+        ctx = blk_get_aio_context(blk);
+        bs = bdrv_lookup_bs(NULL, str, errp);
+        if (!bs) {
+            return;
+        }
+
+        if (ctx != bdrv_get_aio_context(bs)) {
+            error_setg(errp, "Different aio context is not supported for new "
+                       "node");
+        }
+
+        aio_context_acquire(ctx);
+        blk_replace_bs(blk, bs, errp);
+        aio_context_release(ctx);
         return;
     }
 
@@ -114,7 +134,7 @@ static void set_drive_helper(Object *obj, Visitor *v, const char *name,
 
     blk = blk_by_name(str);
     if (!blk) {
-        BlockDriverState *bs = bdrv_lookup_bs(NULL, str, NULL);
+        bs = bdrv_lookup_bs(NULL, str, NULL);
         if (bs) {
             /*
              * If the device supports iothreads, it will make sure to move the
@@ -123,12 +143,15 @@ static void set_drive_helper(Object *obj, Visitor *v, const char *name,
              * aware of iothreads require their BlockBackends to be in the main
              * AioContext.
              */
-            AioContext *ctx = iothread ? bdrv_get_aio_context(bs) :
-                                         qemu_get_aio_context();
-            blk = blk_new(ctx, 0, BLK_PERM_ALL);
+            ctx = bdrv_get_aio_context(bs);
+            blk = blk_new(iothread ? ctx : qemu_get_aio_context(),
+                          0, BLK_PERM_ALL);
             blk_created = true;
 
+            aio_context_acquire(ctx);
             ret = blk_insert_bs(blk, bs, errp);
+            aio_context_release(ctx);
+
             if (ret < 0) {
                 goto fail;
             }
@@ -196,6 +219,7 @@ static void release_drive(Object *obj, const char *name, void *opaque)
 const PropertyInfo qdev_prop_drive = {
     .name  = "str",
     .description = "Node name or ID of a block device to use as a backend",
+    .realized_set_allowed = true,
     .get   = get_drive,
     .set   = set_drive,
     .release = release_drive,
@@ -204,6 +228,7 @@ const PropertyInfo qdev_prop_drive = {
 const PropertyInfo qdev_prop_drive_iothread = {
     .name  = "str",
     .description = "Node name or ID of a block device to use as a backend",
+    .realized_set_allowed = true,
     .get   = get_drive,
     .set   = set_drive_iothread,
     .release = release_drive,
@@ -238,7 +263,7 @@ static void set_chr(Object *obj, Visitor *v, const char *name, void *opaque,
      * TODO Should this really be an error?  If no, the old value
      * needs to be released before we store the new one.
      */
-    if (!check_prop_still_unset(obj, name, be->chr, str, errp)) {
+    if (!check_prop_still_unset(obj, name, be->chr, str, false, errp)) {
         return;
     }
 
@@ -408,8 +433,14 @@ static void set_netdev(Object *obj, Visitor *v, const char *name,
          * TODO Should this really be an error?  If no, the old value
          * needs to be released before we store the new one.
          */
-        if (!check_prop_still_unset(obj, name, ncs[i], str, errp)) {
+        if (!check_prop_still_unset(obj, name, ncs[i], str, false, errp)) {
             goto out;
+        }
+
+        if (peers[i]->info->check_peer_type) {
+            if (!peers[i]->info->check_peer_type(peers[i], obj->class, errp)) {
+                goto out;
+            }
         }
 
         ncs[i] = peers[i];
@@ -449,24 +480,16 @@ static void set_audiodev(Object *obj, Visitor *v, const char* name,
     Property *prop = opaque;
     QEMUSoundCard *card = object_field_prop_ptr(obj, prop);
     AudioState *state;
-    int err = 0;
-    char *str;
+    g_autofree char *str = NULL;
 
     if (!visit_type_str(v, name, &str, errp)) {
         return;
     }
 
-    state = audio_state_by_name(str);
-
-    if (!state) {
-        err = -ENOENT;
-        goto out;
+    state = audio_state_by_name(str, errp);
+    if (state) {
+        card->state = state;
     }
-    card->state = state;
-
-out:
-    error_set_from_qdev_prop_error(errp, err, obj, name, str);
-    g_free(str);
 }
 
 const PropertyInfo qdev_prop_audiodev = {
@@ -532,13 +555,38 @@ void qdev_set_nic_properties(DeviceState *dev, NICInfo *nd)
 
 /* --- lost tick policy --- */
 
+static void qdev_propinfo_set_losttickpolicy(Object *obj, Visitor *v,
+                                             const char *name, void *opaque,
+                                             Error **errp)
+{
+    Property *prop = opaque;
+    int *ptr = object_field_prop_ptr(obj, prop);
+    int value;
+
+    if (!visit_type_enum(v, name, &value, prop->info->enum_table, errp)) {
+        return;
+    }
+
+    if (value == LOST_TICK_POLICY_SLEW) {
+        MachineState *ms = MACHINE(qdev_get_machine());
+
+        if (!object_dynamic_cast(OBJECT(ms), TYPE_X86_MACHINE)) {
+            error_setg(errp,
+                       "the 'slew' policy is only available for x86 machines");
+            return;
+        }
+    }
+
+    *ptr = value;
+}
+
 QEMU_BUILD_BUG_ON(sizeof(LostTickPolicy) != sizeof(int));
 
 const PropertyInfo qdev_prop_losttickpolicy = {
     .name  = "LostTickPolicy",
     .enum_table  = &LostTickPolicy_lookup,
     .get   = qdev_propinfo_get_enum,
-    .set   = qdev_propinfo_set_enum,
+    .set   = qdev_propinfo_set_losttickpolicy,
     .set_default_value = qdev_propinfo_set_default_value_enum,
 };
 
@@ -654,14 +702,11 @@ static void set_reserved_region(Object *obj, Visitor *v, const char *name,
 {
     Property *prop = opaque;
     ReservedRegion *rr = object_field_prop_ptr(obj, prop);
-    Error *local_err = NULL;
     const char *endptr;
     char *str;
     int ret;
 
-    visit_type_str(v, name, &str, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (!visit_type_str(v, name, &str, errp)) {
         return;
     }
 
@@ -1093,4 +1138,17 @@ const PropertyInfo qdev_prop_uuid = {
     .get   = get_uuid,
     .set   = set_uuid,
     .set_default_value = set_default_uuid_auto,
+};
+
+/* --- s390 cpu entitlement policy --- */
+
+QEMU_BUILD_BUG_ON(sizeof(CpuS390Entitlement) != sizeof(int));
+
+const PropertyInfo qdev_prop_cpus390entitlement = {
+    .name  = "CpuS390Entitlement",
+    .description = "low/medium (default)/high",
+    .enum_table  = &CpuS390Entitlement_lookup,
+    .get   = qdev_propinfo_get_enum,
+    .set   = qdev_propinfo_set_enum,
+    .set_default_value = qdev_propinfo_set_default_value_enum,
 };

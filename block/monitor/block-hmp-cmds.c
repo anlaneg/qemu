@@ -48,6 +48,7 @@
 #include "qemu/option.h"
 #include "qemu/sockets.h"
 #include "qemu/cutils.h"
+#include "qemu/error-report.h"
 #include "sysemu/sysemu.h"
 #include "monitor/monitor.h"
 #include "monitor/hmp.h"
@@ -101,7 +102,7 @@ void hmp_drive_add(Monitor *mon, const QDict *qdict)
         return;
     }
 
-    opts = drive_def(optstr);
+    opts = qemu_opts_parse_noisily(qemu_find_opts("drive"), optstr, false);
     if (!opts)
         return;
 
@@ -142,6 +143,9 @@ void hmp_drive_del(Monitor *mon, const QDict *qdict)
     BlockDriverState *bs;
     AioContext *aio_context;
     Error *local_err = NULL;
+
+    GLOBAL_STATE_CODE();
+    GRAPH_RDLOCK_GUARD_MAINLOOP();
 
     bs = bdrv_find_node(id);
     if (bs) {
@@ -213,14 +217,16 @@ void hmp_commit(Monitor *mon, const QDict *qdict)
             error_report("Device '%s' not found", device);
             return;
         }
-        if (!blk_is_available(blk)) {
-            error_report("Device '%s' has no medium", device);
-            return;
-        }
 
         bs = bdrv_skip_implicit_filters(blk_bs(blk));
         aio_context = bdrv_get_aio_context(bs);
         aio_context_acquire(aio_context);
+
+        if (!blk_is_available(blk)) {
+            error_report("Device '%s' has no medium", device);
+            aio_context_release(aio_context);
+            return;
+        }
 
         ret = bdrv_commit(bs);
 
@@ -241,7 +247,6 @@ void hmp_drive_mirror(Monitor *mon, const QDict *qdict)
     DriveMirror mirror = {
         .device = (char *)qdict_get_str(qdict, "device"),
         .target = (char *)filename,
-        .has_format = !!format,
         .format = (char *)format,
         .sync = full ? MIRROR_SYNC_MODE_FULL : MIRROR_SYNC_MODE_TOP,
         .has_mode = true,
@@ -251,10 +256,10 @@ void hmp_drive_mirror(Monitor *mon, const QDict *qdict)
 
     if (!filename) {
         error_setg(&err, QERR_MISSING_PARAMETER, "target");
-        hmp_handle_error(mon, err);
-        return;
+        goto end;
     }
     qmp_drive_mirror(&mirror, &err);
+end:
     hmp_handle_error(mon, err);
 }
 
@@ -270,7 +275,6 @@ void hmp_drive_backup(Monitor *mon, const QDict *qdict)
     DriveBackup backup = {
         .device = (char *)device,
         .target = (char *)filename,
-        .has_format = !!format,
         .format = (char *)format,
         .sync = full ? MIRROR_SYNC_MODE_FULL : MIRROR_SYNC_MODE_TOP,
         .has_mode = true,
@@ -281,11 +285,11 @@ void hmp_drive_backup(Monitor *mon, const QDict *qdict)
 
     if (!filename) {
         error_setg(&err, QERR_MISSING_PARAMETER, "target");
-        hmp_handle_error(mon, err);
-        return;
+        goto end;
     }
 
     qmp_drive_backup(&backup, &err);
+end:
     hmp_handle_error(mon, err);
 }
 
@@ -356,15 +360,13 @@ void hmp_snapshot_blkdev(Monitor *mon, const QDict *qdict)
          * will be taken internally. Today it's actually required.
          */
         error_setg(&err, QERR_MISSING_PARAMETER, "snapshot-file");
-        hmp_handle_error(mon, err);
-        return;
+        goto end;
     }
 
     mode = reuse ? NEW_IMAGE_MODE_EXISTING : NEW_IMAGE_MODE_ABSOLUTE_PATHS;
-    qmp_blockdev_snapshot_sync(true, device, false, NULL,
-                               filename, false, NULL,
-                               !!format, format,
+    qmp_blockdev_snapshot_sync(device, NULL, filename, NULL, format,
                                true, mode, &err);
+end:
     hmp_handle_error(mon, err);
 }
 
@@ -385,8 +387,7 @@ void hmp_snapshot_delete_blkdev_internal(Monitor *mon, const QDict *qdict)
     const char *id = qdict_get_try_str(qdict, "id");
     Error *err = NULL;
 
-    qmp_blockdev_snapshot_delete_internal_sync(device, !!id, id,
-                                               true, name, &err);
+    qmp_blockdev_snapshot_delete_internal_sync(device, id, name, &err);
     hmp_handle_error(mon, err);
 }
 
@@ -427,7 +428,7 @@ void hmp_nbd_server_start(Monitor *mon, const QDict *qdict)
     block_list = qmp_query_block(NULL);
 
     for (info = block_list; info; info = info->next) {
-        if (!info->value->has_inserted) {
+        if (!info->value->inserted) {
             continue;
         }
 
@@ -460,7 +461,6 @@ void hmp_nbd_server_add(Monitor *mon, const QDict *qdict)
 
     NbdServerAddOptions export = {
         .device         = (char *) device,
-        .has_name       = !!name,
         .name           = (char *) name,
         .has_writable   = true,
         .writable       = writable,
@@ -489,13 +489,13 @@ void hmp_nbd_server_stop(Monitor *mon, const QDict *qdict)
     hmp_handle_error(mon, err);
 }
 
-void hmp_block_resize(Monitor *mon, const QDict *qdict)
+void coroutine_fn hmp_block_resize(Monitor *mon, const QDict *qdict)
 {
     const char *device = qdict_get_str(qdict, "device");
     int64_t size = qdict_get_int(qdict, "size");
     Error *err = NULL;
 
-    qmp_block_resize(true, device, false, NULL, size, &err);
+    qmp_block_resize(device, NULL, size, &err);
     hmp_handle_error(mon, err);
 }
 
@@ -506,22 +506,12 @@ void hmp_block_stream(Monitor *mon, const QDict *qdict)
     const char *base = qdict_get_try_str(qdict, "base");
     int64_t speed = qdict_get_try_int(qdict, "speed", 0);
 
-    qmp_block_stream(true, device, device, base != NULL, base, false, NULL,
-                     false, NULL, qdict_haskey(qdict, "speed"), speed, true,
-                     BLOCKDEV_ON_ERROR_REPORT, false, false, false, false,
-                     &error);
+    qmp_block_stream(device, device, base, NULL, NULL, NULL,
+                     qdict_haskey(qdict, "speed"), speed,
+                     true, BLOCKDEV_ON_ERROR_REPORT, NULL,
+                     false, false, false, false, &error);
 
     hmp_handle_error(mon, error);
-}
-
-void hmp_block_passwd(Monitor *mon, const QDict *qdict)
-{
-    const char *device = qdict_get_str(qdict, "device");
-    const char *password = qdict_get_str(qdict, "password");
-    Error *err = NULL;
-
-    qmp_block_passwd(true, device, false, NULL, password, &err);
-    hmp_handle_error(mon, err);
 }
 
 void hmp_block_set_io_throttle(Monitor *mon, const QDict *qdict)
@@ -543,10 +533,8 @@ void hmp_block_set_io_throttle(Monitor *mon, const QDict *qdict)
      * version has only one, so we must decide which one to pass.
      */
     if (blk_by_name(device)) {
-        throttle.has_device = true;
         throttle.device = device;
     } else {
-        throttle.has_id = true;
         throttle.id = device;
     }
 
@@ -560,14 +548,16 @@ void hmp_eject(Monitor *mon, const QDict *qdict)
     const char *device = qdict_get_str(qdict, "device");
     Error *err = NULL;
 
-    qmp_eject(true, device, false, NULL, true, force, &err);
+    qmp_eject(device, NULL, true, force, &err);
     hmp_handle_error(mon, err);
 }
 
 void hmp_qemu_io(Monitor *mon, const QDict *qdict)
 {
-    BlockBackend *blk;
+    BlockBackend *blk = NULL;
+    BlockDriverState *bs = NULL;
     BlockBackend *local_blk = NULL;
+    AioContext *ctx = NULL;
     bool qdev = qdict_get_try_bool(qdict, "qdev", false);
     const char *device = qdict_get_str(qdict, "device");
     const char *command = qdict_get_str(qdict, "command");
@@ -582,17 +572,21 @@ void hmp_qemu_io(Monitor *mon, const QDict *qdict)
     } else {
         blk = blk_by_name(device);
         if (!blk) {
-            BlockDriverState *bs = bdrv_lookup_bs(NULL, device, &err);
-            if (bs) {
-                blk = local_blk = blk_new(bdrv_get_aio_context(bs),
-                                          0, BLK_PERM_ALL);
-                ret = blk_insert_bs(blk, bs, &err);
-                if (ret < 0) {
-                    goto fail;
-                }
-            } else {
+            bs = bdrv_lookup_bs(NULL, device, &err);
+            if (!bs) {
                 goto fail;
             }
+        }
+    }
+
+    ctx = blk ? blk_get_aio_context(blk) : bdrv_get_aio_context(bs);
+    aio_context_acquire(ctx);
+
+    if (bs) {
+        blk = local_blk = blk_new(bdrv_get_aio_context(bs), 0, BLK_PERM_ALL);
+        ret = blk_insert_bs(blk, bs, &err);
+        if (ret < 0) {
+            goto fail;
         }
     }
 
@@ -625,6 +619,11 @@ void hmp_qemu_io(Monitor *mon, const QDict *qdict)
 
 fail:
     blk_unref(local_blk);
+
+    if (ctx) {
+        aio_context_release(ctx);
+    }
+
     hmp_handle_error(mon, err);
 }
 
@@ -633,19 +632,19 @@ static void print_block_info(Monitor *mon, BlockInfo *info,
 {
     ImageInfo *image_info;
 
-    assert(!info || !info->has_inserted || info->inserted == inserted);
+    assert(!info || !info->inserted || info->inserted == inserted);
 
     if (info && *info->device) {
-        monitor_printf(mon, "%s", info->device);
-        if (inserted && inserted->has_node_name) {
+        monitor_puts(mon, info->device);
+        if (inserted && inserted->node_name) {
             monitor_printf(mon, " (%s)", inserted->node_name);
         }
     } else {
         assert(info || inserted);
-        monitor_printf(mon, "%s",
-                       inserted && inserted->has_node_name ? inserted->node_name
-                       : info && info->has_qdev ? info->qdev
-                       : "<anonymous>");
+        monitor_puts(mon,
+                     inserted && inserted->node_name ? inserted->node_name
+                     : info && info->qdev ? info->qdev
+                     : "<anonymous>");
     }
 
     if (inserted) {
@@ -659,7 +658,7 @@ static void print_block_info(Monitor *mon, BlockInfo *info,
     }
 
     if (info) {
-        if (info->has_qdev) {
+        if (info->qdev) {
             monitor_printf(mon, "    Attached to:      %s\n", info->qdev);
         }
         if (info->has_io_status && info->io_status != BLOCK_DEVICE_IO_STATUS_OK) {
@@ -684,7 +683,7 @@ static void print_block_info(Monitor *mon, BlockInfo *info,
                    inserted->cache->direct ? ", direct" : "",
                    inserted->cache->no_flush ? ", ignore flushes" : "");
 
-    if (inserted->has_backing_file) {
+    if (inserted->backing_file) {
         monitor_printf(mon,
                        "    Backing file:     %s "
                        "(chain depth: %" PRId64 ")\n",
@@ -732,8 +731,8 @@ static void print_block_info(Monitor *mon, BlockInfo *info,
         monitor_printf(mon, "\nImages:\n");
         image_info = inserted->image;
         while (1) {
-                bdrv_image_info_dump(image_info);
-            if (image_info->has_backing_image) {
+            bdrv_node_info_dump(qapi_ImageInfo_base(image_info), 0, false);
+            if (image_info->backing_image) {
                 image_info = image_info->backing_image;
             } else {
                 break;
@@ -767,8 +766,7 @@ void hmp_info_block(Monitor *mon, const QDict *qdict)
             monitor_printf(mon, "\n");
         }
 
-        print_block_info(mon, info->value, info->value->has_inserted
-                                           ? info->value->inserted : NULL,
+        print_block_info(mon, info->value, info->value->inserted,
                          verbose);
         printed = true;
     }
@@ -782,7 +780,7 @@ void hmp_info_block(Monitor *mon, const QDict *qdict)
     /* Print node information */
     blockdev_list = qmp_query_named_block_nodes(false, false, NULL);
     for (blockdev = blockdev_list; blockdev; blockdev = blockdev->next) {
-        assert(blockdev->value->has_node_name);
+        assert(blockdev->value->node_name);
         if (device && strcmp(device, blockdev->value->node_name)) {
             continue;
         }
@@ -803,7 +801,7 @@ void hmp_info_blockstats(Monitor *mon, const QDict *qdict)
     stats_list = qmp_query_blockstats(false, false, NULL);
 
     for (stats = stats_list; stats; stats = stats->next) {
-        if (!stats->value->has_device) {
+        if (!stats->value->device) {
             continue;
         }
 
@@ -848,7 +846,7 @@ void hmp_info_block_jobs(Monitor *mon, const QDict *qdict)
     }
 
     while (list) {
-        if (strcmp(list->value->type, "stream") == 0) {
+        if (list->value->type == JOB_TYPE_STREAM) {
             monitor_printf(mon, "Streaming device %s: Completed %" PRId64
                            " of %" PRId64 " bytes, speed limit %" PRId64
                            " bytes/s\n",
@@ -860,7 +858,7 @@ void hmp_info_block_jobs(Monitor *mon, const QDict *qdict)
             monitor_printf(mon, "Type %s, device %s: Completed %" PRId64
                            " of %" PRId64 " bytes, speed limit %" PRId64
                            " bytes/s\n",
-                           list->value->type,
+                           JobType_str(list->value->type),
                            list->value->device,
                            list->value->offset,
                            list->value->len,
@@ -899,10 +897,13 @@ void hmp_info_snapshots(Monitor *mon, const QDict *qdict)
 
     ImageEntry *image_entry, *next_ie;
     SnapshotEntry *snapshot_entry;
+    Error *err = NULL;
 
-    bs = bdrv_all_find_vmstate_bs();
+    GRAPH_RDLOCK_GUARD_MAINLOOP();
+
+    bs = bdrv_all_find_vmstate_bs(NULL, false, NULL, &err);
     if (!bs) {
-        monitor_printf(mon, "No available block device supports snapshots\n");
+        error_report_err(err);
         return;
     }
     aio_context = bdrv_get_aio_context(bs);
@@ -952,7 +953,7 @@ void hmp_info_snapshots(Monitor *mon, const QDict *qdict)
     total = 0;
     for (i = 0; i < nb_sns; i++) {
         SnapshotEntry *next_sn;
-        if (bdrv_all_find_snapshot(sn_tab[i].name, &bs1) == 0) {
+        if (bdrv_all_has_snapshot(sn_tab[i].name, false, NULL, NULL) == 1) {
             global_snapshots[total] = i;
             total++;
             QTAILQ_FOREACH(image_entry, &image_list, next) {
@@ -1011,4 +1012,25 @@ void hmp_info_snapshots(Monitor *mon, const QDict *qdict)
     }
     g_free(sn_tab);
     g_free(global_snapshots);
+}
+
+void hmp_change_medium(Monitor *mon, const char *device, const char *target,
+                       const char *arg, const char *read_only, bool force,
+                       Error **errp)
+{
+    ERRP_GUARD();
+    BlockdevChangeReadOnlyMode read_only_mode = 0;
+
+    if (read_only) {
+        read_only_mode =
+            qapi_enum_parse(&BlockdevChangeReadOnlyMode_lookup,
+                            read_only,
+                            BLOCKDEV_CHANGE_READ_ONLY_MODE_RETAIN, errp);
+        if (*errp) {
+            return;
+        }
+    }
+
+    qmp_blockdev_change_medium(device, NULL, target, arg, true, force,
+                               !!read_only, read_only_mode, errp);
 }

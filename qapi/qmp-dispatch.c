@@ -14,14 +14,32 @@
 #include "qemu/osdep.h"
 
 #include "block/aio.h"
+#include "qapi/compat-policy.h"
 #include "qapi/error.h"
 #include "qapi/qmp/dispatch.h"
 #include "qapi/qmp/qdict.h"
 #include "qapi/qmp/qjson.h"
-#include "sysemu/runstate.h"
+#include "qapi/qobject-input-visitor.h"
+#include "qapi/qobject-output-visitor.h"
 #include "qapi/qmp/qbool.h"
 #include "qemu/coroutine.h"
 #include "qemu/main-loop.h"
+
+Visitor *qobject_input_visitor_new_qmp(QObject *obj)
+{
+    Visitor *v = qobject_input_visitor_new(obj);
+
+    visit_set_policy(v, &compat_policy);
+    return v;
+}
+
+Visitor *qobject_output_visitor_new_qmp(QObject **result)
+{
+    Visitor *v = qobject_output_visitor_new(result);
+
+    visit_set_policy(v, &compat_policy);
+    return v;
+}
 
 static QDict *qmp_dispatch_check_obj(QDict *dict, bool allow_oob,
                                      Error **errp)
@@ -116,8 +134,8 @@ static void do_qmp_dispatch_bh(void *opaque)
  * Runs outside of coroutine context for OOB commands, but in coroutine
  * context for everything else.
  */
-QDict *qmp_dispatch(const QmpCommandList *cmds, QObject *request,
-                    bool allow_oob, Monitor *cur_mon)
+QDict *coroutine_mixed_fn qmp_dispatch(const QmpCommandList *cmds, QObject *request,
+                                       bool allow_oob, Monitor *cur_mon)
 {
     Error *err = NULL;
     bool oob;
@@ -158,10 +176,17 @@ QDict *qmp_dispatch(const QmpCommandList *cmds, QObject *request,
                   "The command %s has not been found", command);
         goto out;
     }
+    if (!compat_policy_input_ok(cmd->special_features, &compat_policy,
+                                ERROR_CLASS_COMMAND_NOT_FOUND,
+                                "command", command, &err)) {
+        goto out;
+    }
     if (!cmd->enabled) {
         error_set(&err, ERROR_CLASS_COMMAND_NOT_FOUND,
-                  "The command %s has been disabled for this instance",
-                  command);
+                  "Command %s has been disabled%s%s",
+                  command,
+                  cmd->disable_reason ? ": " : "",
+                  cmd->disable_reason ?: "");
         goto out;
     }
     if (oob && !(cmd->options & QCO_ALLOW_OOB)) {

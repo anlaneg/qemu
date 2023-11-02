@@ -48,5 +48,5 @@ config PL041
 config CS4231
     bool
 
-config MARVELL_88W8618
+config ASC
     bool

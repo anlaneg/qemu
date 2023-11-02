@@ -17,6 +17,7 @@
 #include "migration/blocker.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "hw/display/edid.h"
 #include "trace.h"
 
 void
@@ -25,7 +26,6 @@ virtio_gpu_base_reset(VirtIOGPUBase *g)
     int i;
 
     g->enable = 0;
-    g->use_virgl_renderer = false;
 
     for (i = 0; i < g->conf.max_outputs; i++) {
         g->scanout[i].resource_id = 0;
@@ -52,6 +52,22 @@ virtio_gpu_base_fill_display_info(VirtIOGPUBase *g,
     }
 }
 
+void
+virtio_gpu_base_generate_edid(VirtIOGPUBase *g, int scanout,
+                              struct virtio_gpu_resp_edid *edid)
+{
+    qemu_edid_info info = {
+        .width_mm = g->req_state[scanout].width_mm,
+        .height_mm = g->req_state[scanout].height_mm,
+        .prefx = g->req_state[scanout].width,
+        .prefy = g->req_state[scanout].height,
+        .refresh_rate = g->req_state[scanout].refresh_rate,
+    };
+
+    edid->size = cpu_to_le32(sizeof(edid->edid));
+    qemu_edid_generate(edid->edid, sizeof(edid->edid), &info);
+}
+
 static void virtio_gpu_invalidate_display(void *opaque)
 {
 }
@@ -70,16 +86,17 @@ static void virtio_gpu_notify_event(VirtIOGPUBase *g, uint32_t event_type)
     virtio_notify_config(&g->parent_obj);
 }
 
-static int virtio_gpu_ui_info(void *opaque, uint32_t idx, QemuUIInfo *info)
+static void virtio_gpu_ui_info(void *opaque, uint32_t idx, QemuUIInfo *info)
 {
     VirtIOGPUBase *g = opaque;
 
     if (idx >= g->conf.max_outputs) {
-        return -1;
+        return;
     }
 
     g->req_state[idx].x = info->xoff;
     g->req_state[idx].y = info->yoff;
+    g->req_state[idx].refresh_rate = info->refresh_rate;
     g->req_state[idx].width = info->width;
     g->req_state[idx].height = info->height;
     g->req_state[idx].width_mm = info->width_mm;
@@ -93,14 +110,24 @@ static int virtio_gpu_ui_info(void *opaque, uint32_t idx, QemuUIInfo *info)
 
     /* send event to guest */
     virtio_gpu_notify_event(g, VIRTIO_GPU_EVENT_DISPLAY);
-    return 0;
+    return;
+}
+
+static void
+virtio_gpu_gl_flushed(void *opaque)
+{
+    VirtIOGPUBase *g = opaque;
+    VirtIOGPUBaseClass *vgc = VIRTIO_GPU_BASE_GET_CLASS(g);
+
+    if (vgc->gl_flushed) {
+        vgc->gl_flushed(g);
+    }
 }
 
 static void
 virtio_gpu_gl_block(void *opaque, bool block)
 {
     VirtIOGPUBase *g = opaque;
-    VirtIOGPUBaseClass *vgc = VIRTIO_GPU_BASE_GET_CLASS(g);
 
     if (block) {
         g->renderer_blocked++;
@@ -109,12 +136,30 @@ virtio_gpu_gl_block(void *opaque, bool block)
     }
     assert(g->renderer_blocked >= 0);
 
-    if (g->renderer_blocked == 0) {
-        vgc->gl_unblock(g);
+    if (!block && g->renderer_blocked == 0) {
+        virtio_gpu_gl_flushed(g);
     }
 }
 
+static int
+virtio_gpu_get_flags(void *opaque)
+{
+    VirtIOGPUBase *g = opaque;
+    int flags = GRAPHIC_FLAGS_NONE;
+
+    if (virtio_gpu_virgl_enabled(g->conf)) {
+        flags |= GRAPHIC_FLAGS_GL;
+    }
+
+    if (virtio_gpu_dmabuf_enabled(g->conf)) {
+        flags |= GRAPHIC_FLAGS_DMABUF;
+    }
+
+    return flags;
+}
+
 static const GraphicHwOps virtio_gpu_ops = {
+    .get_flags = virtio_gpu_get_flags,
     .invalidate = virtio_gpu_invalidate_display,
     .gfx_update = virtio_gpu_update_display,
     .text_update = virtio_gpu_text_update,
@@ -137,17 +182,15 @@ virtio_gpu_base_device_realize(DeviceState *qdev,
         return false;
     }
 
-    g->use_virgl_renderer = false;
     if (virtio_gpu_virgl_enabled(g->conf)) {
         error_setg(&g->migration_blocker, "virgl is not yet migratable");
-        if (migrate_add_blocker(g->migration_blocker, errp) < 0) {
-            error_free(g->migration_blocker);
+        if (migrate_add_blocker(&g->migration_blocker, errp) < 0) {
             return false;
         }
     }
 
     g->virtio_config.num_scanouts = cpu_to_le32(g->conf.max_outputs);
-    virtio_init(VIRTIO_DEVICE(g), "virtio-gpu", VIRTIO_ID_GPU,
+    virtio_init(VIRTIO_DEVICE(g), VIRTIO_ID_GPU,
                 sizeof(struct virtio_gpu_config));
 
     if (virtio_gpu_virgl_enabled(g->conf)) {
@@ -168,9 +211,6 @@ virtio_gpu_base_device_realize(DeviceState *qdev,
     for (i = 0; i < g->conf.max_outputs; i++) {
         g->scanout[i].con =
             graphic_console_init(DEVICE(g), i, &virtio_gpu_ops, g);
-        if (i > 0) {
-            dpy_gfx_replace_surface(g->scanout[i].con, NULL);
-        }
     }
 
     return true;
@@ -182,11 +222,18 @@ virtio_gpu_base_get_features(VirtIODevice *vdev, uint64_t features,
 {
     VirtIOGPUBase *g = VIRTIO_GPU_BASE(vdev);
 
-    if (virtio_gpu_virgl_enabled(g->conf)) {
+    if (virtio_gpu_virgl_enabled(g->conf) ||
+        virtio_gpu_rutabaga_enabled(g->conf)) {
         features |= (1 << VIRTIO_GPU_F_VIRGL);
     }
     if (virtio_gpu_edid_enabled(g->conf)) {
         features |= (1 << VIRTIO_GPU_F_EDID);
+    }
+    if (virtio_gpu_blob_enabled(g->conf)) {
+        features |= (1 << VIRTIO_GPU_F_RESOURCE_BLOB);
+    }
+    if (virtio_gpu_context_init_enabled(g->conf)) {
+        features |= (1 << VIRTIO_GPU_F_CONTEXT_INIT);
     }
 
     return features;
@@ -196,21 +243,16 @@ static void
 virtio_gpu_base_set_features(VirtIODevice *vdev, uint64_t features)
 {
     static const uint32_t virgl = (1 << VIRTIO_GPU_F_VIRGL);
-    VirtIOGPUBase *g = VIRTIO_GPU_BASE(vdev);
 
-    g->use_virgl_renderer = ((features & virgl) == virgl);
-    trace_virtio_gpu_features(g->use_virgl_renderer);
+    trace_virtio_gpu_features(((features & virgl) == virgl));
 }
 
-static void
+void
 virtio_gpu_base_device_unrealize(DeviceState *qdev)
 {
     VirtIOGPUBase *g = VIRTIO_GPU_BASE(qdev);
 
-    if (g->migration_blocker) {
-        migrate_del_blocker(g->migration_blocker);
-        error_free(g->migration_blocker);
-    }
+    migrate_del_blocker(&g->migration_blocker);
 }
 
 static void
@@ -235,6 +277,8 @@ static const TypeInfo virtio_gpu_base_info = {
     .class_init = virtio_gpu_base_class_init,
     .abstract = true
 };
+module_obj(TYPE_VIRTIO_GPU_BASE);
+module_kconfig(VIRTIO_GPU);
 
 static void
 virtio_register_types(void)

@@ -18,7 +18,7 @@
  */
 
 #include "qemu/osdep.h"
-
+#include "qemu/log.h"
 #include "cpu.h"
 #include "fpu/softfloat.h"
 #include "exec/exec-all.h"
@@ -71,7 +71,7 @@ void cpu_hppa_put_psw(CPUHPPAState *env, target_ureg psw)
     /* If PSW_P changes, it affects how we translate addresses.  */
     if ((psw ^ old_psw) & PSW_P) {
 #ifndef CONFIG_USER_ONLY
-        tlb_flush_by_mmuidx(env_cpu(env), 0xf);
+        tlb_flush_by_mmuidx(env_cpu(env), HPPA_MMU_FLUSH_MASK);
 #endif
     }
 }
@@ -85,9 +85,11 @@ void hppa_cpu_dump_state(CPUState *cs, FILE *f, int flags)
     char psw_c[20];
     int i;
 
-    qemu_fprintf(f, "IA_F " TARGET_FMT_lx " IA_B " TARGET_FMT_lx "\n",
+    qemu_fprintf(f, "IA_F " TARGET_FMT_lx " IA_B " TARGET_FMT_lx
+                 " IIR " TREG_FMT_lx  "\n",
                  hppa_form_gva_psw(psw, env->iasq_f, env->iaoq_f),
-                 hppa_form_gva_psw(psw, env->iasq_b, env->iaoq_b));
+                 hppa_form_gva_psw(psw, env->iasq_b, env->iaoq_b),
+                 env->cr[CR_IIR]);
 
     psw_c[0]  = (psw & PSW_W ? 'W' : '-');
     psw_c[1]  = (psw & PSW_E ? 'E' : '-');

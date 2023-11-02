@@ -13,19 +13,12 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "qapi/qmp/qerror.h"
 #include "qemu/error-report.h"
 #include "qom/object_interfaces.h"
 #include "sysemu/vhost-user-backend.h"
 #include "sysemu/kvm.h"
 #include "io/channel-command.h"
 #include "hw/virtio/virtio-bus.h"
-
-static bool
-ioeventfd_enabled(void)
-{
-    return kvm_enabled() && kvm_eventfds_enabled();
-}
 
 /*vhost user后端设备初始化*/
 int
@@ -36,11 +29,6 @@ vhost_user_backend_dev_init(VhostUserBackend *b, VirtIODevice *vdev,
 
     assert(!b->vdev && vdev);
 
-    if (!ioeventfd_enabled()) {
-        error_setg(errp, "vhost initialization failed: requires kvm");
-        return -1;
-    }
-
     if (!vhost_user_init(&b->vhost_user, &b->chr, errp)) {
         return -1;
     }
@@ -50,9 +38,9 @@ vhost_user_backend_dev_init(VhostUserBackend *b, VirtIODevice *vdev,
     b->dev.vqs = g_new0(struct vhost_virtqueue, nvqs);
 
     /*vhost user类型的vhost设备初始化*/
-    ret = vhost_dev_init(&b->dev, &b->vhost_user, VHOST_BACKEND_TYPE_USER, 0);
+    ret = vhost_dev_init(&b->dev, &b->vhost_user, VHOST_BACKEND_TYPE_USER, 0,
+                         errp);
     if (ret < 0) {
-        error_setg_errno(errp, -ret, "vhost initialization failed");
         return -1;
     }
 
@@ -87,7 +75,7 @@ vhost_user_backend_start(VhostUserBackend *b)
     }
 
     b->dev.acked_features = b->vdev->guest_features;
-    ret = vhost_dev_start(&b->dev, b->vdev);
+    ret = vhost_dev_start(&b->dev, b->vdev, true);
     if (ret < 0) {
         error_report("Error start vhost dev");
         goto err_guest_notifiers;
@@ -122,7 +110,7 @@ vhost_user_backend_stop(VhostUserBackend *b)
         return;
     }
 
-    vhost_dev_stop(&b->dev, b->vdev);
+    vhost_dev_stop(&b->dev, b->vdev, true);
 
     if (k->set_guest_notifiers) {
         ret = k->set_guest_notifiers(qbus->parent,
@@ -143,7 +131,7 @@ static void set_chardev(Object *obj, const char *value, Error **errp)
     Chardev *chr;
 
     if (b->completed) {
-        error_setg(errp, QERR_PERMISSION_DENIED);
+        error_setg(errp, "Property 'chardev' can no longer be set");
         return;
     }
 

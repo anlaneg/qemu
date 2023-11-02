@@ -22,7 +22,18 @@
 #define TYPE_CLOCK "clock"
 OBJECT_DECLARE_SIMPLE_TYPE(Clock, CLOCK)
 
-typedef void ClockCallback(void *opaque);
+/*
+ * Argument to ClockCallback functions indicating why the callback
+ * has been called. A mask of these values logically ORed together
+ * is used to specify which events are interesting when the callback
+ * is registered, so these values must all be different bit values.
+ */
+typedef enum ClockEvent {
+    ClockUpdate = 1, /* Clock period has just updated */
+    ClockPreUpdate = 2, /* Clock period is about to update */
+} ClockEvent;
+
+typedef void ClockCallback(void *opaque, ClockEvent event);
 
 /*
  * clock store a value representing the clock's period in 2^-32ns unit.
@@ -50,6 +61,7 @@ typedef void ClockCallback(void *opaque);
  * @canonical_path: clock path string cache (used for trace purpose)
  * @callback: called when clock changes
  * @callback_opaque: argument for @callback
+ * @callback_events: mask of events when callback should be called
  * @source: source (or parent in clock tree) of the clock
  * @children: list of clocks connected to this one (it is their source)
  * @sibling: structure used to form a clock list
@@ -67,6 +79,11 @@ struct Clock {
     char *canonical_path;
     ClockCallback *callback;
     void *callback_opaque;
+    unsigned int callback_events;
+
+    /* Ratio of the parent clock to run the child clocks at */
+    uint32_t multiplier;
+    uint32_t divider;
 
     /* Clocks are organized in a clock tree */
     Clock *source;
@@ -114,10 +131,15 @@ Clock *clock_new(Object *parent, const char *name);
  * @clk: the clock to register the callback into
  * @cb: the callback function
  * @opaque: the argument to the callback
+ * @events: the events the callback should be called for
+ *          (logical OR of ClockEvent enum values)
  *
  * Register a callback called on every clock update.
+ * Note that a clock has only one callback: you cannot register
+ * different callback functions for different events.
  */
-void clock_set_callback(Clock *clk, ClockCallback *cb, void *opaque);
+void clock_set_callback(Clock *clk, ClockCallback *cb,
+                        void *opaque, unsigned int events);
 
 /**
  * clock_clear_callback:
@@ -138,6 +160,21 @@ void clock_clear_callback(Clock *clk);
  * Further @src update will be propagated to @clk and its subtree.
  */
 void clock_set_source(Clock *clk, Clock *src);
+
+/**
+ * clock_has_source:
+ * @clk: the clock
+ *
+ * Returns true if the clock has a source clock connected to it.
+ * This is useful for devices which have input clocks which must
+ * be connected by the board/SoC code which creates them. The
+ * device code can use this to check in its realize method that
+ * the clock has been connected.
+ */
+static inline bool clock_has_source(const Clock *clk)
+{
+    return clk->source != NULL;
+}
 
 /**
  * clock_set:
@@ -167,7 +204,7 @@ static inline bool clock_set_ns(Clock *clk, unsigned ns)
  * Propagate the clock period that has been previously configured using
  * @clock_set(). This will update recursively all connected clocks.
  * It is an error to call this function on a clock which has a source.
- * Note: this function must not be called during device inititialization
+ * Note: this function must not be called during device initialization
  * or migration.
  */
 void clock_propagate(Clock *clk);
@@ -254,6 +291,44 @@ static inline uint64_t clock_ticks_to_ns(const Clock *clk, uint64_t ticks)
 }
 
 /**
+ * clock_ns_to_ticks:
+ * @clk: the clock to query
+ * @ns: duration in nanoseconds
+ *
+ * Returns the number of ticks this clock would make in the given
+ * number of nanoseconds. Because a clock can have a period which
+ * is not a whole number of nanoseconds, it is important to use this
+ * function rather than attempting to obtain a "period in nanoseconds"
+ * value and then dividing the duration by that value.
+ *
+ * If the clock is stopped (ie it has period zero), returns 0.
+ *
+ * For some inputs the result could overflow a 64-bit value (because
+ * the clock's period is short and the duration is long). In these
+ * cases we truncate the result to a 64-bit value. This is on the
+ * assumption that generally the result is going to be used to report
+ * a 32-bit or 64-bit guest register value, so wrapping either cannot
+ * happen or is the desired behaviour.
+ */
+static inline uint64_t clock_ns_to_ticks(const Clock *clk, uint64_t ns)
+{
+    /*
+     * ticks = duration_in_ns / period_in_ns
+     *       = ns / (period / 2^32)
+     *       = (ns * 2^32) / period
+     * The hi, lo inputs to divu128() are (ns << 32) as a 128 bit value.
+     */
+    uint64_t lo = ns << 32;
+    uint64_t hi = ns >> 32;
+    if (clk->period == 0) {
+        return 0;
+    }
+
+    divu128(&lo, &hi, clk->period);
+    return lo;
+}
+
+/**
  * clock_is_enabled:
  * @clk: a clock
  *
@@ -275,5 +350,30 @@ static inline bool clock_is_enabled(const Clock *clk)
  * The caller is responsible for freeing the string with g_free().
  */
 char *clock_display_freq(Clock *clk);
+
+/**
+ * clock_set_mul_div: set multiplier/divider for child clocks
+ * @clk: clock
+ * @multiplier: multiplier value
+ * @divider: divider value
+ *
+ * By default, a Clock's children will all run with the same period
+ * as their parent. This function allows you to adjust the multiplier
+ * and divider used to derive the child clock frequency.
+ * For example, setting a multiplier of 2 and a divider of 3
+ * will run child clocks with a period 2/3 of the parent clock,
+ * so if the parent clock is an 8MHz clock the children will
+ * be 12MHz.
+ *
+ * Setting the multiplier to 0 will stop the child clocks.
+ * Setting the divider to 0 is a programming error (diagnosed with
+ * an assertion failure).
+ * Setting a multiplier value that results in the child period
+ * overflowing is not diagnosed.
+ *
+ * Note that this function does not call clock_propagate(); the
+ * caller should do that if necessary.
+ */
+void clock_set_mul_div(Clock *clk, uint32_t multiplier, uint32_t divider);
 
 #endif /* QEMU_HW_CLOCK_H */

@@ -19,32 +19,26 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu/datadir.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
 #include "cpu.h"
 #include "hw/clock.h"
-#include "hw/intc/i8259.h"
-#include "hw/dma/i8257.h"
-#include "hw/isa/superio.h"
 #include "net/net.h"
 #include "hw/boards.h"
 #include "hw/i2c/smbus_eeprom.h"
 #include "hw/block/flash.h"
 #include "hw/mips/mips.h"
-#include "hw/mips/cpudevs.h"
+#include "hw/mips/bootloader.h"
 #include "hw/pci/pci.h"
-#include "qemu/log.h"
 #include "hw/loader.h"
 #include "hw/ide/pci.h"
+#include "hw/qdev-properties.h"
 #include "elf.h"
 #include "hw/isa/vt82c686.h"
-#include "hw/rtc/mc146818rtc.h"
-#include "hw/timer/i8254.h"
-#include "exec/address-spaces.h"
 #include "sysemu/qtest.h"
 #include "sysemu/reset.h"
+#include "sysemu/sysemu.h"
 #include "qemu/error-report.h"
 
 #define ENVP_PADDR              0x2000
@@ -54,7 +48,6 @@
 
 /* Fuloong 2e has a 512k flash: Winbond W39L040AP70Z */
 #define BIOS_SIZE               (512 * KiB)
-#define MAX_IDE_BUS             2
 
 /*
  * PMON is not part of qemu and released with BSD license, anyone
@@ -76,7 +69,7 @@ static struct _loaderparams {
     const char *initrd_filename;
 } loaderparams;
 
-static void GCC_FMT_ATTR(3, 4) prom_set(uint32_t *prom_buf, int index,
+static void G_GNUC_PRINTF(3, 4) prom_set(uint32_t *prom_buf, int index,
                                         const char *string, ...)
 {
     va_list ap;
@@ -185,30 +178,12 @@ static void write_bootloader(CPUMIPSState *env, uint8_t *base,
     /* Second part of the bootloader */
     p = (uint32_t *)(base + 0x040);
 
-    /* lui a0, 0 */
-    stl_p(p++, 0x3c040000);
-    /* ori a0, a0, 2 */
-    stl_p(p++, 0x34840002);
-    /* lui a1, high(ENVP_VADDR) */
-    stl_p(p++, 0x3c050000 | ((ENVP_VADDR >> 16) & 0xffff));
-    /* ori a1, a0, low(ENVP_VADDR) */
-    stl_p(p++, 0x34a50000 | (ENVP_VADDR & 0xffff));
-    /* lui a2, high(ENVP_VADDR + 8) */
-    stl_p(p++, 0x3c060000 | (((ENVP_VADDR + 8) >> 16) & 0xffff));
-    /* ori a2, a2, low(ENVP_VADDR + 8) */
-    stl_p(p++, 0x34c60000 | ((ENVP_VADDR + 8) & 0xffff));
-    /* lui a3, high(env->ram_size) */
-    stl_p(p++, 0x3c070000 | (loaderparams.ram_size >> 16));
-    /* ori a3, a3, low(env->ram_size) */
-    stl_p(p++, 0x34e70000 | (loaderparams.ram_size & 0xffff));
-    /* lui ra, high(kernel_addr) */
-    stl_p(p++, 0x3c1f0000 | ((kernel_addr >> 16) & 0xffff));
-    /* ori ra, ra, low(kernel_addr) */
-    stl_p(p++, 0x37ff0000 | (kernel_addr & 0xffff));
-    /* jr ra */
-    stl_p(p++, 0x03e00008);
-    /* nop */
-    stl_p(p++, 0x00000000);
+    bl_gen_jump_kernel((void **)&p,
+                       true, ENVP_VADDR - 64,
+                       true, 2, true, ENVP_VADDR,
+                       true, ENVP_VADDR + 8,
+                       true, loaderparams.ram_size,
+                       kernel_addr);
 }
 
 static void main_cpu_reset(void *opaque)
@@ -221,44 +196,6 @@ static void main_cpu_reset(void *opaque)
     if (loaderparams.kernel_filename) {
         env->CP0_Status &= ~((1 << CP0St_BEV) | (1 << CP0St_ERL));
     }
-}
-
-static void vt82c686b_southbridge_init(PCIBus *pci_bus, int slot, qemu_irq intc,
-                                       I2CBus **i2c_bus, ISABus **p_isa_bus)
-{
-    qemu_irq *i8259;
-    ISABus *isa_bus;
-    PCIDevice *dev;
-
-    dev = pci_create_simple_multifunction(pci_bus, PCI_DEVFN(slot, 0), true,
-                                          TYPE_VT82C686B_ISA);
-    isa_bus = ISA_BUS(qdev_get_child_bus(DEVICE(dev), "isa.0"));
-    assert(isa_bus);
-    *p_isa_bus = isa_bus;
-    /* Interrupt controller */
-    /* The 8259 -> IP5  */
-    i8259 = i8259_init(isa_bus, intc);
-    isa_bus_irqs(isa_bus, i8259);
-    /* init other devices */
-    i8254_pit_init(isa_bus, 0x40, 0, NULL);
-    i8257_dma_init(isa_bus, 0);
-    /* Super I/O */
-    isa_create_simple(isa_bus, TYPE_VT82C686B_SUPERIO);
-
-    dev = pci_create_simple(pci_bus, PCI_DEVFN(slot, 1), "via-ide");
-    pci_ide_create_devs(dev);
-
-    pci_create_simple(pci_bus, PCI_DEVFN(slot, 2), "vt82c686b-usb-uhci");
-    pci_create_simple(pci_bus, PCI_DEVFN(slot, 3), "vt82c686b-usb-uhci");
-
-    dev = pci_new(PCI_DEVFN(slot, 4), TYPE_VT82C686B_PM);
-    qdev_prop_set_uint32(DEVICE(dev), "smb_io_base", 0xeee1);
-    pci_realize_and_unref(dev, pci_bus, &error_fatal);
-    *i2c_bus = I2C_BUS(qdev_get_child_bus(DEVICE(dev), "i2c"));
-
-    /* Audio support */
-    pci_create_simple(pci_bus, PCI_DEVFN(slot, 5), TYPE_VIA_AC97);
-    pci_create_simple(pci_bus, PCI_DEVFN(slot, 6), TYPE_VIA_MC97);
 }
 
 /* Network support */
@@ -292,7 +229,6 @@ static void mips_fuloong2e_init(MachineState *machine)
     uint64_t kernel_entry;
     PCIDevice *pci_dev;
     PCIBus *pci_bus;
-    ISABus *isa_bus;
     I2CBus *smbus;
     Clock *cpuclk;
     MIPSCPU *cpu;
@@ -358,11 +294,32 @@ static void mips_fuloong2e_init(MachineState *machine)
     pci_bus = bonito_init((qemu_irq *)&(env->irq[2]));
 
     /* South bridge -> IP5 */
-    vt82c686b_southbridge_init(pci_bus, FULOONG2E_VIA_SLOT, env->irq[5],
-                               &smbus, &isa_bus);
+    pci_dev = pci_new_multifunction(PCI_DEVFN(FULOONG2E_VIA_SLOT, 0),
+                                    TYPE_VT82C686B_ISA);
+
+    /* Set properties on individual devices before realizing the south bridge */
+    if (machine->audiodev) {
+        dev = DEVICE(object_resolve_path_component(OBJECT(pci_dev), "ac97"));
+        qdev_prop_set_string(dev, "audiodev", machine->audiodev);
+    }
+
+    pci_realize_and_unref(pci_dev, pci_bus, &error_abort);
+
+    object_property_add_alias(OBJECT(machine), "rtc-time",
+                              object_resolve_path_component(OBJECT(pci_dev),
+                                                            "rtc"),
+                              "date");
+    qdev_connect_gpio_out(DEVICE(pci_dev), 0, env->irq[5]);
+
+    dev = DEVICE(object_resolve_path_component(OBJECT(pci_dev), "ide"));
+    pci_ide_create_devs(PCI_DEVICE(dev));
+
+    dev = DEVICE(object_resolve_path_component(OBJECT(pci_dev), "pm"));
+    smbus = I2C_BUS(qdev_get_child_bus(dev, "i2c"));
 
     /* GPU */
     if (vga_interface_type != VGA_NONE) {
+        vga_interface_created = true;
         pci_dev = pci_new(-1, "ati-vga");
         dev = DEVICE(pci_dev);
         qdev_prop_set_uint32(dev, "vgamem_mb", 16);
@@ -373,8 +330,6 @@ static void mips_fuloong2e_init(MachineState *machine)
     /* Populate SPD eeprom data */
     spd_data = spd_data_generate(DDR, machine->ram_size);
     smbus_eeprom_init_one(smbus, 0x50, spd_data);
-
-    mc146818_rtc_init(isa_bus, 2000, NULL);
 
     /* Network card: RTL8139D */
     network_init(pci_bus);
@@ -389,6 +344,7 @@ static void mips_fuloong2e_machine_init(MachineClass *mc)
     mc->default_ram_size = 256 * MiB;
     mc->default_ram_id = "fuloong2e.ram";
     mc->minimum_page_bits = 14;
+    machine_add_audiodev_property(mc);
 }
 
 DEFINE_MACHINE("fuloong2e", mips_fuloong2e_machine_init)

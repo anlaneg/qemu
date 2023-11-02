@@ -22,7 +22,7 @@ typedef enum VhostBackendType {
 } VhostBackendType;
 
 typedef enum VhostSetConfigType {
-    VHOST_SET_CONFIG_TYPE_MASTER = 0,
+    VHOST_SET_CONFIG_TYPE_FRONTEND = 0,
     VHOST_SET_CONFIG_TYPE_MIGRATION = 1,
 } VhostSetConfigType;
 
@@ -38,7 +38,8 @@ struct vhost_iotlb_msg;
 struct vhost_virtqueue;
 
 //vhost后端初始化
-typedef int (*vhost_backend_init)(struct vhost_dev *dev, void *opaque);
+typedef int (*vhost_backend_init)(struct vhost_dev *dev, void *opaque,
+                                  Error **errp);
 //vhost后端清理
 typedef int (*vhost_backend_cleanup)(struct vhost_dev *dev);
 typedef int (*vhost_backend_memslots_limit)(struct vhost_dev *dev);
@@ -70,6 +71,8 @@ typedef int (*vhost_set_vring_kick_op)(struct vhost_dev *dev,
                                        struct vhost_vring_file *file);
 typedef int (*vhost_set_vring_call_op)(struct vhost_dev *dev,
                                        struct vhost_vring_file *file);
+typedef int (*vhost_set_vring_err_op)(struct vhost_dev *dev,
+                                      struct vhost_vring_file *file);
 typedef int (*vhost_set_vring_busyloop_timeout_op)(struct vhost_dev *dev,
                                                    struct vhost_vring_state *r);
 typedef int (*vhost_set_features_op)(struct vhost_dev *dev,
@@ -85,9 +88,6 @@ typedef int (*vhost_set_vring_enable_op)(struct vhost_dev *dev,
 typedef bool (*vhost_requires_shm_log_op)(struct vhost_dev *dev);
 typedef int (*vhost_migration_done_op)(struct vhost_dev *dev,
                                        char *mac_addr);
-typedef bool (*vhost_backend_can_merge_op)(struct vhost_dev *dev,
-                                           uint64_t start1, uint64_t size1,
-                                           uint64_t start2, uint64_t size2);
 typedef int (*vhost_vsock_set_guest_cid_op)(struct vhost_dev *dev,
                                             uint64_t guest_cid);
 typedef int (*vhost_vsock_set_running_op)(struct vhost_dev *dev, int start);
@@ -99,7 +99,7 @@ typedef int (*vhost_set_config_op)(struct vhost_dev *dev, const uint8_t *data,
                                    uint32_t offset, uint32_t size,
                                    uint32_t flags);
 typedef int (*vhost_get_config_op)(struct vhost_dev *dev, uint8_t *config,
-                                   uint32_t config_len);
+                                   uint32_t config_len, Error **errp);
 
 typedef int (*vhost_crypto_create_session_op)(struct vhost_dev *dev,
                                               void *session_info,
@@ -107,8 +107,7 @@ typedef int (*vhost_crypto_create_session_op)(struct vhost_dev *dev,
 typedef int (*vhost_crypto_close_session_op)(struct vhost_dev *dev,
                                              uint64_t session_id);
 
-typedef bool (*vhost_backend_mem_section_filter_op)(struct vhost_dev *dev,
-                                                MemoryRegionSection *section);
+typedef bool (*vhost_backend_no_private_memslots_op)(struct vhost_dev *dev);
 
 typedef int (*vhost_get_inflight_fd_op)(struct vhost_dev *dev,
                                         uint16_t queue_size,
@@ -127,6 +126,11 @@ typedef int (*vhost_get_device_id_op)(struct vhost_dev *dev, uint32_t *dev_id);
 
 typedef bool (*vhost_force_iommu_op)(struct vhost_dev *dev);
 
+typedef int (*vhost_set_config_call_op)(struct vhost_dev *dev,
+                                       int fd);
+
+typedef void (*vhost_reset_status_op)(struct vhost_dev *dev);
+
 typedef struct VhostOps {
     //后端类型
     VhostBackendType backend_type;
@@ -134,6 +138,7 @@ typedef struct VhostOps {
     vhost_backend_init vhost_backend_init;
     vhost_backend_cleanup vhost_backend_cleanup;
     vhost_backend_memslots_limit vhost_backend_memslots_limit;
+    vhost_backend_no_private_memslots_op vhost_backend_no_private_memslots;
     vhost_net_set_backend_op vhost_net_set_backend;
     vhost_net_set_mtu_op vhost_net_set_mtu;
     vhost_scsi_set_endpoint_op vhost_scsi_set_endpoint;
@@ -149,6 +154,7 @@ typedef struct VhostOps {
     vhost_get_vring_base_op vhost_get_vring_base;
     vhost_set_vring_kick_op vhost_set_vring_kick;
     vhost_set_vring_call_op vhost_set_vring_call;
+    vhost_set_vring_err_op vhost_set_vring_err;
     vhost_set_vring_busyloop_timeout_op vhost_set_vring_busyloop_timeout;
     vhost_set_features_op vhost_set_features;
     /*获取后端对应的功能*/
@@ -161,7 +167,6 @@ typedef struct VhostOps {
     vhost_set_vring_enable_op vhost_set_vring_enable;
     vhost_requires_shm_log_op vhost_requires_shm_log;
     vhost_migration_done_op vhost_migration_done;
-    vhost_backend_can_merge_op vhost_backend_can_merge;
     vhost_vsock_set_guest_cid_op vhost_vsock_set_guest_cid;
     vhost_vsock_set_running_op vhost_vsock_set_running;
     /*设置iotlb处理回调*/
@@ -172,20 +177,15 @@ typedef struct VhostOps {
     vhost_set_config_op vhost_set_config;
     vhost_crypto_create_session_op vhost_crypto_create_session;
     vhost_crypto_close_session_op vhost_crypto_close_session;
-    vhost_backend_mem_section_filter_op vhost_backend_mem_section_filter;
     vhost_get_inflight_fd_op vhost_get_inflight_fd;
     vhost_set_inflight_fd_op vhost_set_inflight_fd;
     vhost_dev_start_op vhost_dev_start;
     vhost_vq_get_addr_op  vhost_vq_get_addr;
     vhost_get_device_id_op vhost_get_device_id;
     vhost_force_iommu_op vhost_force_iommu;
+    vhost_set_config_call_op vhost_set_config_call;
+    vhost_reset_status_op vhost_reset_status;
 } VhostOps;
-
-extern const VhostOps user_ops;
-extern const VhostOps vdpa_ops;
-
-int vhost_set_backend_type(struct vhost_dev *dev,
-                           VhostBackendType backend_type);
 
 int vhost_backend_update_device_iotlb(struct vhost_dev *dev,
                                              uint64_t iova, uint64_t uaddr,
@@ -199,5 +199,8 @@ int vhost_backend_handle_iotlb_msg(struct vhost_dev *dev,
                                           struct vhost_iotlb_msg *imsg);
 
 int vhost_user_gpu_set_socket(struct vhost_dev *dev, int fd);
+
+int vhost_user_get_shared_object(struct vhost_dev *dev, unsigned char *uuid,
+                                        int *dmabuf_fd);
 
 #endif /* VHOST_BACKEND_H */

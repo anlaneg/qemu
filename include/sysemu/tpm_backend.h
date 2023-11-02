@@ -18,6 +18,8 @@
 #include "sysemu/tpm.h"
 #include "qapi/error.h"
 
+#ifdef CONFIG_TPM
+
 #define TYPE_TPM_BACKEND "tpm-backend"
 OBJECT_DECLARE_TYPE(TPMBackend, TPMBackendClass,
                     TPM_BACKEND)
@@ -113,7 +115,7 @@ int tpm_backend_startup_tpm(TPMBackend *s, size_t buffersize);
 
 /**
  * tpm_backend_had_startup_error:
- * @s: the backend to query for a statup error
+ * @s: the backend to query for a startup error
  *
  * Check whether the backend had an error during startup. Returns
  * false if no error occurred and the backend can be used, true
@@ -209,4 +211,6 @@ TPMInfo *tpm_backend_query_tpm(TPMBackend *s);
 
 TPMBackend *qemu_find_tpm_be(const char *id);
 
-#endif
+#endif /* CONFIG_TPM */
+
+#endif /* TPM_BACKEND_H */

@@ -114,7 +114,7 @@ static int handle_primary_tcp_pkt(RewriterState *rf,
             tcp_pkt->th_ack = htonl(ntohl(tcp_pkt->th_ack) + conn->offset);
 
             net_checksum_calculate((uint8_t *)pkt->data + pkt->vnet_hdr_len,
-                                   pkt->size - pkt->vnet_hdr_len);
+                                   pkt->size - pkt->vnet_hdr_len, CSUM_TCP);
         }
 
         /*
@@ -216,7 +216,7 @@ static int handle_secondary_tcp_pkt(RewriterState *rf,
             tcp_pkt->th_seq = htonl(ntohl(tcp_pkt->th_seq) - conn->offset);
 
             net_checksum_calculate((uint8_t *)pkt->data + pkt->vnet_hdr_len,
-                                   pkt->size - pkt->vnet_hdr_len);
+                                   pkt->size - pkt->vnet_hdr_len, CSUM_TCP);
         }
     }
 
@@ -270,8 +270,7 @@ static ssize_t colo_rewriter_receive_iov(NetFilterState *nf,
         vnet_hdr_len = nf->netdev->vnet_hdr_len;
     }
 
-    pkt = packet_new(buf, size, vnet_hdr_len);
-    g_free(buf);
+    pkt = packet_new_nocopy(buf, size, vnet_hdr_len);
 
     /*
      * if we get tcp packet
@@ -280,15 +279,7 @@ static ssize_t colo_rewriter_receive_iov(NetFilterState *nf,
      */
     if (pkt && is_tcp_packet(pkt)) {
 
-        fill_connection_key(pkt, &key);
-
-        if (sender == nf->netdev) {
-            /*
-             * We need make tcp TX and RX packet
-             * into one connection.
-             */
-            reverse_connection_key(&key);
-        }
+        fill_connection_key(pkt, &key, sender == nf->netdev);
 
         /* After failover we needn't change new TCP packet */
         if (s->failover_mode &&
@@ -392,7 +383,7 @@ static void colo_rewriter_setup(NetFilterState *nf, Error **errp)
     s->connection_track_table = g_hash_table_new_full(connection_key_hash,
                                                       connection_key_equal,
                                                       g_free,
-                                                      connection_destroy);
+                                                      NULL);
     s->incoming_queue = qemu_new_net_queue(qemu_netfilter_pass_to_next, nf);
 }
 

@@ -34,7 +34,7 @@
 typedef struct XilinxSPIPS XilinxSPIPS;
 
 #define XLNX_SPIPS_R_MAX        (0x100 / 4)
-#define XLNX_ZYNQMP_SPIPS_R_MAX (0x830 / 4)
+#define XLNX_ZYNQMP_SPIPS_R_MAX (0x200 / 4)
 
 /* Bite off 4k chunks at a time */
 #define LQSPI_CACHE_SIZE 1024
@@ -104,7 +104,7 @@ struct XlnxZynqMPQSPIPS {
 
     uint32_t regs[XLNX_ZYNQMP_SPIPS_R_MAX];
 
-    /* GQSPI has seperate tx/rx fifos */
+    /* GQSPI has separate tx/rx fifos */
     Fifo8 rx_fifo_g;
     Fifo8 tx_fifo_g;
     Fifo32 fifo_g;

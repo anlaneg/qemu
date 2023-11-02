@@ -29,10 +29,17 @@
 #define TYPE_POWERPC_CPU "powerpc-cpu"
 #endif
 
-OBJECT_DECLARE_TYPE(PowerPCCPU, PowerPCCPUClass,
-                    POWERPC_CPU)
+OBJECT_DECLARE_CPU_TYPE(PowerPCCPU, PowerPCCPUClass, POWERPC_CPU)
 
-typedef struct CPUPPCState CPUPPCState;
+#define POWERPC_CPU_TYPE_SUFFIX "-" TYPE_POWERPC_CPU
+#define POWERPC_CPU_TYPE_NAME(model) model POWERPC_CPU_TYPE_SUFFIX
+#define CPU_RESOLVING_TYPE TYPE_POWERPC_CPU
+
+#define TYPE_HOST_POWERPC_CPU POWERPC_CPU_TYPE_NAME("host")
+
+ObjectClass *ppc_cpu_class_by_name(const char *name);
+
+typedef struct CPUArchState CPUPPCState;
 typedef struct ppc_tb_t ppc_tb_t;
 typedef struct ppc_dcr_t ppc_dcr_t;
 
@@ -45,12 +52,14 @@ enum powerpc_mmu_t {
     POWERPC_MMU_32B        = 0x00000001,
     /* PowerPC 6xx MMU with software TLB                       */
     POWERPC_MMU_SOFT_6xx   = 0x00000002,
-    /* PowerPC 74xx MMU with software TLB                      */
+    /*
+     * PowerPC 74xx MMU with software TLB (this has been
+     * disabled, see git history for more information.
+     * keywords: tlbld tlbli TLBMISS PTEHI PTELO)
+     */
     POWERPC_MMU_SOFT_74xx  = 0x00000003,
     /* PowerPC 4xx MMU with software TLB                       */
     POWERPC_MMU_SOFT_4xx   = 0x00000004,
-    /* PowerPC 4xx MMU with software TLB and zones protections */
-    POWERPC_MMU_SOFT_4xx_Z = 0x00000005,
     /* PowerPC MMU in real mode only                           */
     POWERPC_MMU_REAL       = 0x00000006,
     /* Freescale MPC8xx MMU model                              */
@@ -59,8 +68,6 @@ enum powerpc_mmu_t {
     POWERPC_MMU_BOOKE      = 0x00000008,
     /* BookE 2.06 MMU model                                    */
     POWERPC_MMU_BOOKE206   = 0x00000009,
-    /* PowerPC 601 MMU model (specific BATs format)            */
-    POWERPC_MMU_601        = 0x0000000A,
 #define POWERPC_MMU_64       0x00010000
     /* 64 bits PowerPC MMU                                     */
     POWERPC_MMU_64B        = POWERPC_MMU_64 | 0x00000001,
@@ -88,22 +95,10 @@ enum powerpc_excp_t {
     POWERPC_EXCP_STD,
     /* PowerPC 40x exception model      */
     POWERPC_EXCP_40x,
-    /* PowerPC 601 exception model      */
-    POWERPC_EXCP_601,
-    /* PowerPC 602 exception model      */
-    POWERPC_EXCP_602,
-    /* PowerPC 603 exception model      */
-    POWERPC_EXCP_603,
-    /* PowerPC 603e exception model     */
-    POWERPC_EXCP_603E,
-    /* PowerPC G2 exception model       */
-    POWERPC_EXCP_G2,
-    /* PowerPC 604 exception model      */
-    POWERPC_EXCP_604,
-    /* PowerPC 7x0 exception model      */
-    POWERPC_EXCP_7x0,
-    /* PowerPC 7x5 exception model      */
-    POWERPC_EXCP_7x5,
+    /* PowerPC 603/604/G2 exception model */
+    POWERPC_EXCP_6xx,
+    /* PowerPC 7xx exception model      */
+    POWERPC_EXCP_7xx,
     /* PowerPC 74xx exception model     */
     POWERPC_EXCP_74xx,
     /* BookE exception model            */
@@ -116,6 +111,8 @@ enum powerpc_excp_t {
     POWERPC_EXCP_POWER8,
     /* POWER9 exception model           */
     POWERPC_EXCP_POWER9,
+    /* POWER10 exception model           */
+    POWERPC_EXCP_POWER10,
 };
 
 /*****************************************************************************/
@@ -145,8 +142,6 @@ enum powerpc_input_t {
     PPC_FLAGS_INPUT_POWER7,
     /* PowerPC POWER9 bus               */
     PPC_FLAGS_INPUT_POWER9,
-    /* PowerPC 401 bus                  */
-    PPC_FLAGS_INPUT_401,
     /* Freescale RCPU bus               */
     PPC_FLAGS_INPUT_RCPU,
 };
@@ -156,7 +151,7 @@ typedef struct PPCHash64Options PPCHash64Options;
 /**
  * PowerPCCPUClass:
  * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
+ * @parent_phases: The parent class' reset phase handlers.
  *
  * A PowerPC CPU model.
  */
@@ -167,11 +162,15 @@ struct PowerPCCPUClass {
 
     DeviceRealize parent_realize;
     DeviceUnrealize parent_unrealize;
-    DeviceReset parent_reset;
+    ResettablePhases parent_phases;
     void (*parent_parse_features)(const char *type, char *str, Error **errp);
 
     uint32_t pvr;
-    bool (*pvr_match)(struct PowerPCCPUClass *pcc, uint32_t pvr);
+    /*
+     * If @best is false, match if pcc is in the family of pvr
+     * Else match only if pcc is the best match for pvr in this family.
+     */
+    bool (*pvr_match)(struct PowerPCCPUClass *pcc, uint32_t pvr, bool best);
     uint64_t pcr_mask;          /* Available bits in PCR register */
     uint64_t pcr_supported;     /* Bits for supported PowerISA versions */
     uint32_t svr;
@@ -196,8 +195,6 @@ struct PowerPCCPUClass {
     int n_host_threads;
     void (*init_proc)(CPUPPCState *env);
     int  (*check_pow)(CPUPPCState *env);
-    int (*handle_mmu_fault)(PowerPCCPU *cpu, vaddr eaddr, int rwx, int mmu_idx);
-    bool (*interrupts_big_endian)(PowerPCCPU *cpu);
 };
 
 #ifndef CONFIG_USER_ONLY
@@ -218,7 +215,7 @@ extern const VMStateDescription vmstate_ppc_timebase;
     .offset     = vmstate_offset_value(_state, _field, PPCTimebase),  \
 }
 
-void cpu_ppc_clock_vm_state_change(void *opaque, int running,
+void cpu_ppc_clock_vm_state_change(void *opaque, bool running,
                                    RunState state);
 #endif
 

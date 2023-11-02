@@ -58,6 +58,9 @@ REG32(NPCM7XX_PWM_PWDR3, 0x50);
 #define NPCM7XX_CH_INV              BIT(2)
 #define NPCM7XX_CH_MOD              BIT(3)
 
+#define NPCM7XX_MAX_CMR             65535
+#define NPCM7XX_MAX_CNR             65535
+
 /* Offset of each PWM channel's prescaler in the PPR register. */
 static const int npcm7xx_ppr_base[] = { 0, 0, 8, 8 };
 /* Offset of each PWM channel's clock selector in the CSR register. */
@@ -96,7 +99,7 @@ static uint32_t npcm7xx_pwm_calculate_freq(NPCM7xxPWM *p)
 
 static uint32_t npcm7xx_pwm_calculate_duty(NPCM7xxPWM *p)
 {
-    uint64_t duty;
+    uint32_t duty;
 
     if (p->running) {
         if (p->cnr == 0) {
@@ -104,7 +107,7 @@ static uint32_t npcm7xx_pwm_calculate_duty(NPCM7xxPWM *p)
         } else if (p->cmr >= p->cnr) {
             duty = NPCM7XX_PWM_MAX_DUTY;
         } else {
-            duty = NPCM7XX_PWM_MAX_DUTY * (p->cmr + 1) / (p->cnr + 1);
+            duty = (uint64_t)NPCM7XX_PWM_MAX_DUTY * (p->cmr + 1) / (p->cnr + 1);
         }
     } else {
         duty = 0;
@@ -136,6 +139,7 @@ static void npcm7xx_pwm_update_duty(NPCM7xxPWM *p)
         trace_npcm7xx_pwm_update_duty(DEVICE(p->module)->canonical_path,
                                       p->index, p->duty, duty);
         p->duty = duty;
+        qemu_set_irq(p->module->duty_gpio_out[p->index], p->duty);
     }
 }
 
@@ -357,7 +361,13 @@ static void npcm7xx_pwm_write(void *opaque, hwaddr offset,
     case A_NPCM7XX_PWM_CNR2:
     case A_NPCM7XX_PWM_CNR3:
         p = &s->pwm[npcm7xx_cnr_index(offset)];
-        p->cnr = value;
+        if (value > NPCM7XX_MAX_CNR) {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "%s: invalid cnr value: %u", __func__, value);
+            p->cnr = NPCM7XX_MAX_CNR;
+        } else {
+            p->cnr = value;
+        }
         npcm7xx_pwm_update_output(p);
         break;
 
@@ -366,7 +376,13 @@ static void npcm7xx_pwm_write(void *opaque, hwaddr offset,
     case A_NPCM7XX_PWM_CMR2:
     case A_NPCM7XX_PWM_CMR3:
         p = &s->pwm[npcm7xx_cmr_index(offset)];
-        p->cmr = value;
+        if (value > NPCM7XX_MAX_CMR) {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "%s: invalid cmr value: %u", __func__, value);
+            p->cmr = NPCM7XX_MAX_CMR;
+        } else {
+            p->cmr = value;
+        }
         npcm7xx_pwm_update_output(p);
         break;
 
@@ -468,6 +484,7 @@ static void npcm7xx_pwm_init(Object *obj)
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
     int i;
 
+    QEMU_BUILD_BUG_ON(ARRAY_SIZE(s->pwm) != NPCM7XX_PWM_PER_MODULE);
     for (i = 0; i < NPCM7XX_PWM_PER_MODULE; i++) {
         NPCM7xxPWM *p = &s->pwm[i];
         p->module = s;
@@ -478,7 +495,7 @@ static void npcm7xx_pwm_init(Object *obj)
     memory_region_init_io(&s->iomem, obj, &npcm7xx_pwm_ops, s,
                           TYPE_NPCM7XX_PWM, 4 * KiB);
     sysbus_init_mmio(sbd, &s->iomem);
-    s->clock = qdev_init_clock_in(DEVICE(s), "clock", NULL, NULL);
+    s->clock = qdev_init_clock_in(DEVICE(s), "clock", NULL, NULL, 0);
 
     for (i = 0; i < NPCM7XX_PWM_PER_MODULE; ++i) {
         object_property_add_uint32_ptr(obj, "freq[*]",
@@ -486,6 +503,8 @@ static void npcm7xx_pwm_init(Object *obj)
         object_property_add_uint32_ptr(obj, "duty[*]",
                 &s->pwm[i].duty, OBJ_PROP_FLAG_READ);
     }
+    qdev_init_gpio_out_named(DEVICE(s), s->duty_gpio_out,
+                             "duty-gpio-out", NPCM7XX_PWM_PER_MODULE);
 }
 
 static const VMStateDescription vmstate_npcm7xx_pwm = {

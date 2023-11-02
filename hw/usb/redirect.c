@@ -26,7 +26,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
+#include "qemu/cutils.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
 #include "qemu/timer.h"
@@ -270,7 +270,7 @@ static int usbredir_read(void *priv, uint8_t *data, int count)
     return count;
 }
 
-static gboolean usbredir_write_unblocked(GIOChannel *chan, GIOCondition cond,
+static gboolean usbredir_write_unblocked(void *do_not_use, GIOCondition cond,
                                          void *opaque)
 {
     USBRedirDevice *dev = opaque;
@@ -278,7 +278,7 @@ static gboolean usbredir_write_unblocked(GIOChannel *chan, GIOCondition cond,
     dev->watch = 0;
     usbredirparser_do_write(dev->parser);
 
-    return FALSE;
+    return G_SOURCE_REMOVE;
 }
 
 static int usbredir_write(void *priv, uint8_t *data, int count)
@@ -471,12 +471,12 @@ static int bufp_alloc(USBRedirDevice *dev, uint8_t *data, uint16_t len,
         DPRINTF("bufpq overflow, dropping packets ep %02X\n", ep);
         dev->endpoint[EP2I(ep)].bufpq_dropping_packets = 1;
     }
-    /* Since we're interupting the stream anyways, drop enough packets to get
+    /* Since we're interrupting the stream anyways, drop enough packets to get
        back to our target buffer size */
     if (dev->endpoint[EP2I(ep)].bufpq_dropping_packets) {
         if (dev->endpoint[EP2I(ep)].bufpq_size >
                 dev->endpoint[EP2I(ep)].bufpq_target_size) {
-            free(data);
+            free(free_on_destroy);
             return -1;
         }
         dev->endpoint[EP2I(ep)].bufpq_dropping_packets = 0;
@@ -620,7 +620,7 @@ static void usbredir_handle_iso_data(USBRedirDevice *dev, USBPacket *p,
                 .endpoint = ep,
                 .length = p->iov.size
             };
-            uint8_t buf[p->iov.size];
+            g_autofree uint8_t *buf = g_malloc(p->iov.size);
             /* No id, we look at the ep when receiving a status back */
             usb_packet_copy(p, buf, p->iov.size);
             usbredirparser_send_iso_packet(dev->parser, 0, &iso_packet,
@@ -818,7 +818,7 @@ static void usbredir_handle_bulk_data(USBRedirDevice *dev, USBPacket *p,
         usbredirparser_send_bulk_packet(dev->parser, p->id,
                                         &bulk_packet, NULL, 0);
     } else {
-        uint8_t buf[size];
+        g_autofree uint8_t *buf = g_malloc(size);
         usb_packet_copy(p, buf, size);
         usbredir_log_data(dev, "bulk data out:", buf, size);
         usbredirparser_send_bulk_packet(dev->parser, p->id,
@@ -923,7 +923,7 @@ static void usbredir_handle_interrupt_out_data(USBRedirDevice *dev,
                                                USBPacket *p, uint8_t ep)
 {
     struct usb_redir_interrupt_packet_header interrupt_packet;
-    uint8_t buf[p->iov.size];
+    g_autofree uint8_t *buf = g_malloc(p->iov.size);
 
     DPRINTF("interrupt-out ep %02X len %zd id %"PRIu64"\n", ep,
             p->iov.size, p->id);
@@ -1239,7 +1239,11 @@ static void usbredir_create_parser(USBRedirDevice *dev)
 
     DPRINTF("creating usbredirparser\n");
 
-    dev->parser = qemu_oom_check(usbredirparser_create());
+    dev->parser = usbredirparser_create();
+    if (!dev->parser) {
+        error_report("usbredirparser_create() failed");
+        exit(1);
+    }
     dev->parser->priv = dev;
     dev->parser->log_func = usbredir_log;
     dev->parser->read_func = usbredir_read;
@@ -1395,7 +1399,7 @@ static void usbredir_chardev_event(void *opaque, QEMUChrEvent event)
  * init + destroy
  */
 
-static void usbredir_vm_state_change(void *priv, int running, RunState state)
+static void usbredir_vm_state_change(void *priv, bool running, RunState state)
 {
     USBRedirDevice *dev = priv;
 
@@ -1437,8 +1441,10 @@ static void usbredir_realize(USBDevice *udev, Error **errp)
         }
     }
 
-    dev->chardev_close_bh = qemu_bh_new(usbredir_chardev_close_bh, dev);
-    dev->device_reject_bh = qemu_bh_new(usbredir_device_reject_bh, dev);
+    dev->chardev_close_bh = qemu_bh_new_guarded(usbredir_chardev_close_bh, dev,
+                                                &DEVICE(dev)->mem_reentrancy_guard);
+    dev->device_reject_bh = qemu_bh_new_guarded(usbredir_device_reject_bh, dev,
+                                                &DEVICE(dev)->mem_reentrancy_guard);
     dev->attach_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, usbredir_do_attach, dev);
 
     packet_id_queue_init(&dev->cancelled, dev, "cancelled");
@@ -2239,7 +2245,10 @@ static int usbredir_put_parser(QEMUFile *f, void *priv, size_t unused,
     }
 
     usbredirparser_serialize(dev->parser, &data, &len);
-    qemu_oom_check(data);
+    if (!data) {
+        error_report("usbredirparser_serialize failed");
+        exit(1);
+    }
 
     qemu_put_be32(f, len);
     qemu_put_buffer(f, data, len);
@@ -2330,7 +2339,11 @@ static int usbredir_get_bufpq(QEMUFile *f, void *priv, size_t unused,
         bufp->len = qemu_get_be32(f);
         bufp->status = qemu_get_be32(f);
         bufp->offset = 0;
-        bufp->data = qemu_oom_check(malloc(bufp->len)); /* regular malloc! */
+        bufp->data = malloc(bufp->len); /* regular malloc! */
+        if (!bufp->data) {
+            error_report("usbredir_get_bufpq: out of memory");
+            exit(1);
+        }
         bufp->free_on_destroy = bufp->data;
         qemu_get_buffer(f, bufp->data, bufp->len);
         QTAILQ_INSERT_TAIL(&endp->bufpq, bufp, next);
@@ -2608,6 +2621,8 @@ static const TypeInfo usbredir_dev_info = {
     .class_init    = usbredir_class_initfn,
     .instance_init = usbredir_instance_init,
 };
+module_obj(TYPE_USB_REDIR);
+module_kconfig(USB);
 
 static void usbredir_register_types(void)
 {

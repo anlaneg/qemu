@@ -20,9 +20,22 @@
 #include "hw/virtio/virtio-bus.h"
 #include "hw/virtio/virtio-access.h"
 #include "qemu/error-report.h"
+#include "hw/virtio/vhost.h"
 #include "hw/virtio/vhost-user-fs.h"
 #include "monitor/monitor.h"
 #include "sysemu/sysemu.h"
+
+static const int user_feature_bits[] = {
+    VIRTIO_F_VERSION_1,
+    VIRTIO_RING_F_INDIRECT_DESC,
+    VIRTIO_RING_F_EVENT_IDX,
+    VIRTIO_F_NOTIFY_ON_EMPTY,
+    VIRTIO_F_RING_PACKED,
+    VIRTIO_F_IOMMU_PLATFORM,
+    VIRTIO_F_RING_RESET,
+
+    VHOST_INVALID_FEATURE_BIT
+};
 
 static void vuf_get_config(VirtIODevice *vdev, uint8_t *config)
 {
@@ -63,7 +76,7 @@ static void vuf_start(VirtIODevice *vdev)
     }
 
     fs->vhost_dev.acked_features = vdev->guest_features;
-    ret = vhost_dev_start(&fs->vhost_dev, vdev);
+    ret = vhost_dev_start(&fs->vhost_dev, vdev, true);
     if (ret < 0) {
         error_report("Error starting vhost: %d", -ret);
         goto err_guest_notifiers;
@@ -97,7 +110,7 @@ static void vuf_stop(VirtIODevice *vdev)
         return;
     }
 
-    vhost_dev_stop(&fs->vhost_dev, vdev);
+    vhost_dev_stop(&fs->vhost_dev, vdev, true);
 
     ret = k->set_guest_notifiers(qbus->parent, fs->vhost_dev.nvqs, false);
     if (ret < 0) {
@@ -111,13 +124,9 @@ static void vuf_stop(VirtIODevice *vdev)
 static void vuf_set_status(VirtIODevice *vdev, uint8_t status)
 {
     VHostUserFS *fs = VHOST_USER_FS(vdev);
-    bool should_start = status & VIRTIO_CONFIG_S_DRIVER_OK;
+    bool should_start = virtio_device_should_start(vdev, status);
 
-    if (!vdev->vm_running) {
-        should_start = false;
-    }
-
-    if (fs->vhost_dev.started == should_start) {
+    if (vhost_dev_is_started(&fs->vhost_dev) == should_start) {
         return;
     }
 
@@ -129,11 +138,12 @@ static void vuf_set_status(VirtIODevice *vdev, uint8_t status)
 }
 
 static uint64_t vuf_get_features(VirtIODevice *vdev,
-                                      uint64_t requested_features,
-                                      Error **errp)
+                                 uint64_t features,
+                                 Error **errp)
 {
-    /* No feature bits used yet */
-    return requested_features;
+    VHostUserFS *fs = VHOST_USER_FS(vdev);
+
+    return vhost_get_features(&fs->vhost_dev, user_feature_bits, features);
 }
 
 static void vuf_handle_output(VirtIODevice *vdev, VirtQueue *vq)
@@ -149,6 +159,15 @@ static void vuf_guest_notifier_mask(VirtIODevice *vdev, int idx,
 {
     VHostUserFS *fs = VHOST_USER_FS(vdev);
 
+    /*
+     * Add the check for configure interrupt, Use VIRTIO_CONFIG_IRQ_IDX -1
+     * as the macro of configure interrupt's IDX, If this driver does not
+     * support, the function will return
+     */
+
+    if (idx == VIRTIO_CONFIG_IRQ_IDX) {
+        return;
+    }
     vhost_virtqueue_mask(&fs->vhost_dev, vdev, idx, mask);
 }
 
@@ -156,6 +175,15 @@ static bool vuf_guest_notifier_pending(VirtIODevice *vdev, int idx)
 {
     VHostUserFS *fs = VHOST_USER_FS(vdev);
 
+    /*
+     * Add the check for configure interrupt, Use VIRTIO_CONFIG_IRQ_IDX -1
+     * as the macro of configure interrupt's IDX, If this driver does not
+     * support, the function will return
+     */
+
+    if (idx == VIRTIO_CONFIG_IRQ_IDX) {
+        return false;
+    }
     return vhost_virtqueue_pending(&fs->vhost_dev, idx);
 }
 
@@ -207,8 +235,7 @@ static void vuf_device_realize(DeviceState *dev, Error **errp)
         return;
     }
 
-    virtio_init(vdev, "vhost-user-fs", VIRTIO_ID_FS,
-                sizeof(struct virtio_fs_config));
+    virtio_init(vdev, VIRTIO_ID_FS, sizeof(struct virtio_fs_config));
 
     /* Hiprio queue */
     fs->hiprio_vq = virtio_add_queue(vdev, fs->conf.queue_size, vuf_handle_output);
@@ -224,9 +251,8 @@ static void vuf_device_realize(DeviceState *dev, Error **errp)
     fs->vhost_dev.vqs = g_new0(struct vhost_virtqueue, fs->vhost_dev.nvqs);
     /*vhost_user类型的vhost设备初始化*/
     ret = vhost_dev_init(&fs->vhost_dev, &fs->vhost_user,
-                         VHOST_BACKEND_TYPE_USER, 0);
+                         VHOST_BACKEND_TYPE_USER, 0, errp);
     if (ret < 0) {
-        error_setg_errno(errp, -ret, "vhost_dev_init failed");
         goto err_virtio;
     }
 
@@ -248,6 +274,7 @@ static void vuf_device_unrealize(DeviceState *dev)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
     VHostUserFS *fs = VHOST_USER_FS(dev);
+    struct vhost_virtqueue *vhost_vqs = fs->vhost_dev.vqs;
     int i;
 
     /* This will stop vhost backend if appropriate. */
@@ -263,8 +290,13 @@ static void vuf_device_unrealize(DeviceState *dev)
     }
     g_free(fs->req_vqs);
     virtio_cleanup(vdev);
-    g_free(fs->vhost_dev.vqs);
-    fs->vhost_dev.vqs = NULL;
+    g_free(vhost_vqs);
+}
+
+static struct vhost_dev *vuf_get_vhost(VirtIODevice *vdev)
+{
+    VHostUserFS *fs = VHOST_USER_FS(vdev);
+    return &fs->vhost_dev;
 }
 
 static const VMStateDescription vuf_vmstate = {
@@ -304,6 +336,7 @@ static void vuf_class_init(ObjectClass *klass, void *data)
     vdc->set_status = vuf_set_status;
     vdc->guest_notifier_mask = vuf_guest_notifier_mask;
     vdc->guest_notifier_pending = vuf_guest_notifier_pending;
+    vdc->get_vhost = vuf_get_vhost;
 }
 
 static const TypeInfo vuf_info = {

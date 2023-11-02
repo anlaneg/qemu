@@ -25,7 +25,7 @@ typedef void (YankFn)(void *opaque);
  * @instance: The instance.
  * @errp: Error object.
  *
- * Returns true on success or false if an error occured.
+ * Returns true on success or false if an error occurred.
  */
 bool yank_register_instance(const YankInstance *instance, Error **errp);
 
@@ -72,16 +72,6 @@ void yank_register_function(const YankInstance *instance,
 void yank_unregister_function(const YankInstance *instance,
                               YankFn *func,
                               void *opaque);
-
-/**
- * yank_generic_iochannel: Generic yank function for iochannel
- *
- * This is a generic yank function which will call qio_channel_shutdown on the
- * provided QIOChannel.
- *
- * @opaque: QIOChannel to shutdown
- */
-void yank_generic_iochannel(void *opaque);
 
 #define BLOCKDEV_YANK_INSTANCE(the_node_name) (&(YankInstance) { \
         .type = YANK_INSTANCE_TYPE_BLOCK_NODE, \

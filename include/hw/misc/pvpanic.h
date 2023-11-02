@@ -15,22 +15,23 @@
 #ifndef HW_MISC_PVPANIC_H
 #define HW_MISC_PVPANIC_H
 
+#include "exec/memory.h"
 #include "qom/object.h"
 
-#define TYPE_PVPANIC "pvpanic"
+#define TYPE_PVPANIC_ISA_DEVICE "pvpanic"
+#define TYPE_PVPANIC_PCI_DEVICE "pvpanic-pci"
 
 #define PVPANIC_IOPORT_PROP "ioport"
 
-//取inport属性
-static inline uint16_t pvpanic_port(void)
-{
-    //通过path获取Object
-    Object *o = object_resolve_path_type("", TYPE_PVPANIC, NULL);
-    if (!o) {
-        return 0;
-    }
-    //取Object中的'ioport'属性，其为一个无符号整数
-    return object_property_get_uint(o, PVPANIC_IOPORT_PROP, NULL);
-}
+/*
+ * PVPanicState for any device type
+ */
+typedef struct PVPanicState PVPanicState;
+struct PVPanicState {
+    MemoryRegion mr;
+    uint8_t events;
+};
+
+void pvpanic_setup_io(PVPanicState *s, DeviceState *dev, unsigned size);
 
 #endif

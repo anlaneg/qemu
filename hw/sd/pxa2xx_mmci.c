@@ -479,15 +479,10 @@ PXA2xxMMCIState *pxa2xx_mmci_init(MemoryRegion *sysmem,
                 qemu_irq irq, qemu_irq rx_dma, qemu_irq tx_dma)
 {
     DeviceState *dev;
-    SysBusDevice *sbd;
 
-    dev = qdev_new(TYPE_PXA2XX_MMCI);
-    sbd = SYS_BUS_DEVICE(dev);
-    sysbus_mmio_map(sbd, 0, base);
-    sysbus_connect_irq(sbd, 0, irq);
+    dev = sysbus_create_simple(TYPE_PXA2XX_MMCI, base, irq);
     qdev_connect_gpio_out_named(dev, "rx-dma", 0, rx_dma);
     qdev_connect_gpio_out_named(dev, "tx-dma", 0, tx_dma);
-    sysbus_realize_and_unref(sbd, &error_fatal);
 
     return PXA2XX_MMCI(dev);
 }
@@ -560,8 +555,8 @@ static void pxa2xx_mmci_instance_init(Object *obj)
     qdev_init_gpio_out_named(dev, &s->rx_dma, "rx-dma", 1);
     qdev_init_gpio_out_named(dev, &s->tx_dma, "tx-dma", 1);
 
-    qbus_create_inplace(&s->sdbus, sizeof(s->sdbus),
-                        TYPE_PXA2XX_MMCI_BUS, DEVICE(obj), "sd-bus");
+    qbus_init(&s->sdbus, sizeof(s->sdbus),
+              TYPE_PXA2XX_MMCI_BUS, DEVICE(obj), "sd-bus");
 }
 
 static void pxa2xx_mmci_class_init(ObjectClass *klass, void *data)

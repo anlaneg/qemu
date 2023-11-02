@@ -45,10 +45,23 @@ uint64_t vhost_user_get_acked_features(NetClientState *nc)
     return s->acked_features;
 }
 
-static void vhost_user_stop(int queues, NetClientState *ncs[])
+void vhost_user_save_acked_features(NetClientState *nc)
 {
     NetVhostUserState *s;
+
+    s = DO_UPCAST(NetVhostUserState, nc, nc);
+    if (s->vhost_net) {
+        uint64_t features = vhost_net_get_acked_features(s->vhost_net);
+        if (features) {
+            s->acked_features = features;
+        }
+    }
+}
+
+static void vhost_user_stop(int queues, NetClientState *ncs[])
+{
     int i;
+    NetVhostUserState *s;
 
     for (i = 0; i < queues; i++) {
         assert(ncs[i]->info->type == NET_CLIENT_DRIVER_VHOST_USER);
@@ -56,11 +69,7 @@ static void vhost_user_stop(int queues, NetClientState *ncs[])
         s = DO_UPCAST(NetVhostUserState, nc, ncs[i]);
 
         if (s->vhost_net) {
-            /* save acked features */
-            uint64_t features = vhost_net_get_acked_features(s->vhost_net);
-            if (features) {
-                s->acked_features = features;
-            }
+            vhost_user_save_acked_features(ncs[i]);
             vhost_net_cleanup(s->vhost_net);
         }
     }
@@ -87,6 +96,7 @@ static int vhost_user_start(int queues, NetClientState *ncs[],
         options.net_backend = ncs[i];
         options.opaque      = be;//设置为后端
         options.busyloop_timeout = 0;
+        options.nvqs = 2;
         /*初始化vhost_net*/
         net = vhost_net_init(&options);
         if (!net) {
@@ -200,6 +210,19 @@ static bool vhost_user_has_ufo(NetClientState *nc)
     return true;
 }
 
+static bool vhost_user_check_peer_type(NetClientState *nc, ObjectClass *oc,
+                                       Error **errp)
+{
+    const char *driver = object_class_get_name(oc);
+
+    if (!g_str_has_prefix(driver, "virtio-net-")) {
+        error_setg(errp, "vhost-user requires frontend driver virtio-net-*");
+        return false;
+    }
+
+    return true;
+}
+
 static NetClientInfo net_vhost_user_info = {
         .type = NET_CLIENT_DRIVER_VHOST_USER,
         .size = sizeof(NetVhostUserState),
@@ -209,16 +232,17 @@ static NetClientInfo net_vhost_user_info = {
         .has_ufo = vhost_user_has_ufo,
         .set_vnet_be = vhost_user_set_vnet_endianness,
         .set_vnet_le = vhost_user_set_vnet_endianness,
+        .check_peer_type = vhost_user_check_peer_type,
 };
 
-static gboolean net_vhost_user_watch(GIOChannel *chan, GIOCondition cond,
-                                           void *opaque)
+static gboolean net_vhost_user_watch(void *do_not_use, GIOCondition cond,
+                                     void *opaque)
 {
     NetVhostUserState *s = opaque;
 
     qemu_chr_fe_disconnect(&s->chr);
 
-    return TRUE;
+    return G_SOURCE_CONTINUE;
 }
 
 static void net_vhost_user_event(void *opaque, QEMUChrEvent event);
@@ -239,11 +263,7 @@ static void chr_closed_bh(void *opaque)
     s = DO_UPCAST(NetVhostUserState, nc, ncs[0]);
 
     for (i = queues -1; i >= 0; i--) {
-        s = DO_UPCAST(NetVhostUserState, nc, ncs[i]);
-
-        if (s->vhost_net) {
-            s->acked_features = vhost_net_get_acked_features(s->vhost_net);
-        }
+        vhost_user_save_acked_features(ncs[i]);
     }
 
     qmp_set_link(name, false, &err);
@@ -333,8 +353,7 @@ static int net_vhost_user_init(NetClientState *peer, const char *device,
     //初始化多个队列(每个队列对应一个net_client)
     for (i = 0; i < queues; i++) {
         nc = qemu_new_net_client(&net_vhost_user_info, peer, device, name);
-        snprintf(nc->info_str, sizeof(nc->info_str), "vhost-user%d to %s",
-                 i, chr->label);
+        qemu_set_info_str(nc, "vhost-user%d to %s", i, chr->label);
         nc->queue_index = i;//队列索引
         if (!nc0) {
         	//首个nc
@@ -415,29 +434,6 @@ static Chardev *net_vhost_claim_chardev(
     return chr;
 }
 
-static int net_vhost_check_net(void *opaque, QemuOpts *opts, Error **errp)
-{
-    const char *name = opaque;
-    const char *driver, *netdev;
-
-    driver = qemu_opt_get(opts, "driver");
-    netdev = qemu_opt_get(opts, "netdev");
-
-    //没有指定netdev的不看
-    if (!driver || !netdev) {
-        return 0;
-    }
-
-    //vhost-user要求前端driver是virtio-net-X
-    //例如-device virtio-net-pci,netdev=mynet1,mac=52:54:00:02:d9:01
-    if (strcmp(netdev, name) == 0 &&
-        !g_str_has_prefix(driver, "virtio-net-")) {
-        error_setg(errp, "vhost-user requires frontend driver virtio-net-*");
-        return -1;
-    }
-
-    return 0;
-}
 
 int net_init_vhost_user(const Netdev *netdev, const char *name,//netdev配置时指定的id名称，例如mynet1
                         NetClientState *peer, Error **errp)
@@ -452,13 +448,6 @@ int net_init_vhost_user(const Netdev *netdev, const char *name,//netdev配置时
     //取得此opts指定的chardev
     chr = net_vhost_claim_chardev(vhost_user_opts, errp);
     if (!chr) {
-        return -1;
-    }
-
-    /* verify net frontend */
-    //遍历device选项，检查本dev对应的那一条device,是否正确使用前端driver
-    if (qemu_opts_foreach(qemu_find_opts("device"), net_vhost_check_net,
-                          (char *)name, errp)) {
         return -1;
     }
 

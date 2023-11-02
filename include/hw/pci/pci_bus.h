@@ -25,7 +25,11 @@ enum PCIBusFlags {
     PCI_BUS_IS_ROOT                                         = 0x0001,
     /* PCIe extended configuration space is accessible on this bus */
     PCI_BUS_EXTENDED_CONFIG_SPACE                           = 0x0002,
+    /* This is a CXL Type BUS */
+    PCI_BUS_CXL                                             = 0x0004,
 };
+
+#define PCI_NO_PASID UINT32_MAX
 
 struct PCIBus {
     BusState qbus;
@@ -54,6 +58,11 @@ struct PCIBus {
 
     Notifier machine_done;
 };
+
+static inline bool pci_bus_is_cxl(PCIBus *bus)
+{
+    return !!(bus->flags & PCI_BUS_CXL);
+}
 
 /*是否pci root bus*/
 static inline bool pci_bus_is_root(PCIBus *bus)

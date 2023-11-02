@@ -78,7 +78,7 @@ bool qemu_chr_fe_backend_open(CharBackend *be);
  *             is not supported and will not be attempted
  * @opaque: an opaque pointer for the callbacks
  * @context: a main loop context or NULL for the default
- * @set_open: whether to call qemu_chr_fe_set_open() implicitely when
+ * @set_open: whether to call qemu_chr_fe_set_open() implicitly when
  * any of the handler is non-NULL
  * @sync_state: whether to issue event callback with updated state
  *
@@ -138,7 +138,7 @@ void qemu_chr_fe_disconnect(CharBackend *be);
 /**
  * qemu_chr_fe_wait_connected:
  *
- * Wait for characted backend to be connected, return < 0 on error or
+ * Wait for character backend to be connected, return < 0 on error or
  * if no associated Chardev.
  */
 int qemu_chr_fe_wait_connected(CharBackend *be, Error **errp);
@@ -172,7 +172,24 @@ void qemu_chr_fe_set_open(CharBackend *be, int fe_open);
  * Chardev.
  */
 void qemu_chr_fe_printf(CharBackend *be, const char *fmt, ...)
-    GCC_FMT_ATTR(2, 3);
+    G_GNUC_PRINTF(2, 3);
+
+
+/**
+ * FEWatchFunc: a #GSourceFunc called when any conditions requested by
+ *              qemu_chr_fe_add_watch() is satisfied.
+ * @do_not_use: depending on the underlying chardev, a GIOChannel or a
+ *              QIOChannel. DO NOT USE!
+ * @cond: bitwise combination of conditions watched and satisfied
+ *              before calling this callback.
+ * @data: user data passed at creation to qemu_chr_fe_add_watch(). Can
+ *              be NULL.
+ *
+ * Returns: G_SOURCE_REMOVE if the GSource should be removed from the
+ *              main loop, or G_SOURCE_CONTINUE to leave the GSource in
+ *              the main loop.
+ */
+typedef gboolean (*FEWatchFunc)(void *do_not_use, GIOCondition condition, void *data);
 
 /**
  * qemu_chr_fe_add_watch:
@@ -188,10 +205,13 @@ void qemu_chr_fe_printf(CharBackend *be, const char *fmt, ...)
  * Note that you are responsible to update the front-end sources if
  * you are switching the main context with qemu_chr_fe_set_handlers().
  *
+ * Warning: DO NOT use the first callback argument (it may be either
+ * a GIOChannel or a QIOChannel, depending on the underlying chardev)
+ *
  * Returns: the source tag
  */
 guint qemu_chr_fe_add_watch(CharBackend *be, GIOCondition cond,
-                            GIOFunc func, void *user_data);
+                            FEWatchFunc func, void *user_data);
 
 /**
  * qemu_chr_fe_write:

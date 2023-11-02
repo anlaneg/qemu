@@ -1,15 +1,15 @@
-softmmu_ss.add(files('accel.c'))
+specific_ss.add(files('accel-target.c'))
+system_ss.add(files('accel-system.c', 'accel-blocker.c'))
+user_ss.add(files('accel-user.c'))
 
-subdir('qtest')
-subdir('kvm')
 subdir('tcg')
-subdir('xen')
-subdir('stubs')
+if have_system
+  subdir('hvf')
+  subdir('qtest')
+  subdir('kvm')
+  subdir('xen')
+  subdir('stubs')
+endif
 
-dummy_ss = ss.source_set()
-dummy_ss.add(files(
-  'dummy-cpus.c',
-))
-
-specific_ss.add_all(when: ['CONFIG_SOFTMMU', 'CONFIG_POSIX'], if_true: dummy_ss)
-specific_ss.add_all(when: ['CONFIG_XEN'], if_true: dummy_ss)
+# qtest
+system_ss.add(files('dummy-cpus.c'))

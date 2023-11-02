@@ -27,4 +27,8 @@ static inline QNull *qnull(void)
     return qobject_ref(&qnull_);
 }
 
+void qnull_unref(QNull *q);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(QNull, qnull_unref)
+
 #endif /* QNULL_H */

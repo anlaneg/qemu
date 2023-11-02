@@ -32,12 +32,12 @@
 #include <sys/socket.h>
 #include <net/if.h>
 
+#include "net/eth.h"
 #include "net/net.h"
 #include "clients.h"
 #include "monitor/monitor.h"
 #include "sysemu/sysemu.h"
 #include "qapi/error.h"
-#include "qemu-common.h"
 #include "qemu/cutils.h"
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
@@ -65,6 +65,7 @@ typedef struct TAPState {
     bool using_vnet_hdr;
     /*是否支持ufo*/
     bool has_ufo;
+    bool has_uso;
     /*此tap设备是否被使能*/
     bool enabled;
     VHostNetState *vhost_net;
@@ -116,10 +117,8 @@ static ssize_t tap_write_packet(TAPState *s, const struct iovec *iov, int iovcnt
 {
     ssize_t len;
 
-    do {
-        //向tap口发送报文
-        len = writev(s->fd, iov, iovcnt);
-    } while (len == -1 && errno == EINTR);
+    //向tap口发送报文
+    len = RETRY_ON_EINTR(writev(s->fd, iov, iovcnt));
 
     //发送出错，且出错原因为需要again时，返回0
     if (len == -1 && errno == EAGAIN) {
@@ -136,11 +135,12 @@ static ssize_t tap_receive_iov(NetClientState *nc, const struct iovec *iov,
 {
     TAPState *s = DO_UPCAST(TAPState, nc, nc);
     const struct iovec *iovp = iov;
-    struct iovec iov_copy[iovcnt + 1];
+    g_autofree struct iovec *iov_copy = NULL;
     struct virtio_net_hdr_mrg_rxbuf hdr = { };
 
     //构造空的hdr_mrg内容，并自tap口发出
     if (s->host_vnet_hdr_len && !s->using_vnet_hdr) {
+        iov_copy = g_new(struct iovec, iovcnt + 1);
         iov_copy[0].iov_base = &hdr;
         iov_copy[0].iov_len =  s->host_vnet_hdr_len;
         memcpy(&iov_copy[1], iov, iovcnt * sizeof(*iov));
@@ -214,6 +214,8 @@ static void tap_send(void *opaque)
 
     while (true) {
         uint8_t *buf = s->buf;
+        uint8_t min_pkt[ETH_ZLEN];
+        size_t min_pktsz = sizeof(min_pkt);
 
         //自tap口中读取报文,存入s->buf中
         size = tap_read_packet(s->fd, s->buf, sizeof(s->buf));
@@ -225,6 +227,13 @@ static void tap_send(void *opaque)
         if (s->host_vnet_hdr_len && !s->using_vnet_hdr) {
             buf  += s->host_vnet_hdr_len;
             size -= s->host_vnet_hdr_len;
+        }
+
+        if (net_peer_needs_padding(&s->nc)) {
+            if (eth_pad_short_frame(min_pkt, &min_pktsz, buf, size)) {
+                buf = min_pkt;
+                size = min_pktsz;
+            }
         }
 
         //异步完成向s->nc对端报文投递（需要过filter)
@@ -259,6 +268,15 @@ static bool tap_has_ufo(NetClientState *nc)
     return s->has_ufo;
 }
 
+static bool tap_has_uso(NetClientState *nc)
+{
+    TAPState *s = DO_UPCAST(TAPState, nc, nc);
+
+    assert(nc->info->type == NET_CLIENT_DRIVER_TAP);
+
+    return s->has_uso;
+}
+
 static bool tap_has_vnet_hdr(NetClientState *nc)
 {
     TAPState *s = DO_UPCAST(TAPState, nc, nc);
@@ -277,6 +295,13 @@ static bool tap_has_vnet_hdr_len(NetClientState *nc, int len)
     return !!tap_probe_vnet_hdr_len(s->fd, len);
 }
 
+static int tap_get_vnet_hdr_len(NetClientState *nc)
+{
+    TAPState *s = DO_UPCAST(TAPState, nc, nc);
+
+    return s->host_vnet_hdr_len;
+}
+
 static void tap_set_vnet_hdr_len(NetClientState *nc, int len)
 {
     TAPState *s = DO_UPCAST(TAPState, nc, nc);
@@ -288,6 +313,13 @@ static void tap_set_vnet_hdr_len(NetClientState *nc, int len)
 
     tap_fd_set_vnet_hdr_len(s->fd, len);
     s->host_vnet_hdr_len = len;
+}
+
+static bool tap_get_using_vnet_hdr(NetClientState *nc)
+{
+    TAPState *s = DO_UPCAST(TAPState, nc, nc);
+
+    return s->using_vnet_hdr;
 }
 
 static void tap_using_vnet_hdr(NetClientState *nc, bool using_vnet_hdr)
@@ -316,14 +348,14 @@ static int tap_set_vnet_be(NetClientState *nc, bool is_be)
 
 //使tap打开相应的offload功能
 static void tap_set_offload(NetClientState *nc, int csum, int tso4,
-                     int tso6, int ecn, int ufo)
+                     int tso6, int ecn, int ufo, int uso4, int uso6)
 {
     TAPState *s = DO_UPCAST(TAPState, nc, nc);
     if (s->fd < 0) {
         return;
     }
 
-    tap_fd_set_offload(s->fd, csum, tso4, tso6, ecn, ufo);
+    tap_fd_set_offload(s->fd, csum, tso4, tso6, ecn, ufo, uso4, uso6);
 }
 
 //如果配置了down_script,则触发down_script脚本调用
@@ -394,13 +426,17 @@ static NetClientInfo net_tap_info = {
     //指明tap类设备在nc移除时，需要执行清理工作
     .cleanup = tap_cleanup,
     .has_ufo = tap_has_ufo,
+    .has_uso = tap_has_uso,
     .has_vnet_hdr = tap_has_vnet_hdr,
     .has_vnet_hdr_len = tap_has_vnet_hdr_len,
+    .get_using_vnet_hdr = tap_get_using_vnet_hdr,
     .using_vnet_hdr = tap_using_vnet_hdr,
     .set_offload = tap_set_offload,
+    .get_vnet_hdr_len = tap_get_vnet_hdr_len,
     .set_vnet_hdr_len = tap_set_vnet_hdr_len,
     .set_vnet_le = tap_set_vnet_le,
     .set_vnet_be = tap_set_vnet_be,
+    .set_steering_ebpf = tap_set_steering_ebpf,
 };
 
 //利用fd创建TAPstate
@@ -423,9 +459,10 @@ static TAPState *net_tap_fd_init(NetClientState *peer,
     s->host_vnet_hdr_len = vnet_hdr ? sizeof(struct virtio_net_hdr) : 0;
     s->using_vnet_hdr = false;
     s->has_ufo = tap_probe_has_ufo(s->fd);
+    s->has_uso = tap_probe_has_uso(s->fd);
     s->enabled = true;
     /*默认关闭offload功能*/
-    tap_set_offload(&s->nc, 0, 0, 0, 0, 0);
+    tap_set_offload(&s->nc, 0, 0, 0, 0, 0, 0, 0);
     /*
      * Make sure host header length is set correctly in tap:
      * it might have been modified by another instance of qemu.
@@ -613,9 +650,7 @@ static int net_bridge_run_helper(const char *helper, const char *bridge,
         close(sv[1]);
 
         //获取helper打开的fd
-        do {
-            fd = recv_fd(sv[0]);
-        } while (fd == -1 && errno == EINTR);
+        fd = RETRY_ON_EINTR(recv_fd(sv[0]));
         saved_errno = errno;
 
         close(sv[0]);
@@ -651,8 +686,8 @@ int net_init_bridge(const Netdev *netdev, const char *name,
     assert(netdev->type == NET_CLIENT_DRIVER_BRIDGE);
     bridge = &netdev->u.bridge;
     //桥的helper命令行
-    helper = bridge->has_helper ? bridge->helper : NULL;
-    br     = bridge->has_br     ? bridge->br     : DEFAULT_BRIDGE_INTERFACE;
+    helper = bridge->helper;
+    br     = bridge->br ?: DEFAULT_BRIDGE_INTERFACE;
 
     //运行bridge的命令，创建tap口，并加入到桥$br中，返回tap对应的fd,准备加入事件
     fd = net_bridge_run_helper(helper, br, errp);
@@ -660,7 +695,10 @@ int net_init_bridge(const Netdev *netdev, const char *name,
         return -1;
     }
 
-    qemu_set_nonblock(fd);
+    if (!g_unix_set_fd_nonblocking(fd, true, NULL)) {
+        error_setg_errno(errp, errno, "Failed to set FD nonblocking");
+        return -1;
+    }
     vnet_hdr = tap_probe_vnet_hdr(fd, errp);
     if (vnet_hdr < 0) {
         close(fd);
@@ -668,8 +706,7 @@ int net_init_bridge(const Netdev *netdev, const char *name,
     }
     s = net_tap_fd_init(peer, "bridge", name, fd, vnet_hdr);
 
-    snprintf(s->nc.info_str, sizeof(s->nc.info_str), "helper=%s,br=%s", helper,
-             br);
+    qemu_set_info_str(&s->nc, "helper=%s,br=%s", helper, br);
 
     return 0;
 }
@@ -691,7 +728,7 @@ static int net_tap_init(const NetdevTapOptions *tap, int *vnet_hdr,
     }
 
     //打开tap设备
-    TFR(fd = tap_open(ifname, ifname_sz, vnet_hdr, vnet_hdr_required,
+    fd = RETRY_ON_EINTR(tap_open(ifname, ifname_sz, vnet_hdr, vnet_hdr_required,
                       mq_required, errp));
     if (fd < 0) {
         return -1;
@@ -729,20 +766,18 @@ static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer/*
     tap_set_sndbuf(s->fd, tap, &err);
     if (err) {
         error_propagate(errp, err);
-        return;
+        goto failed;
     }
 
     //填充info_str
-    if (tap->has_fd || tap->has_fds) {
-        snprintf(s->nc.info_str, sizeof(s->nc.info_str), "fd=%d", fd);
-    } else if (tap->has_helper) {
-        snprintf(s->nc.info_str, sizeof(s->nc.info_str), "helper=%s",
-                 tap->helper);
+    if (tap->fd || tap->fds) {
+        qemu_set_info_str(&s->nc, "fd=%d", fd);
+    } else if (tap->helper) {
+        qemu_set_info_str(&s->nc, "helper=%s", tap->helper);
     } else {
         /*设备移除时需执行脚本，参数为ifname*/
-        snprintf(s->nc.info_str, sizeof(s->nc.info_str),
-                 "ifname=%s,script=%s,downscript=%s", ifname, script,
-                 downscript);
+        qemu_set_info_str(&s->nc, "ifname=%s,script=%s,downscript=%s", ifname,
+                          script, downscript);
 
         if (strcmp(downscript, "no") != 0) {
             snprintf(s->down_script, sizeof(s->down_script), "%s", downscript);
@@ -765,8 +800,6 @@ static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer/*
         }
 
         if (vhostfdname) {
-            int ret;
-
             /*通过vhostfd字符串，获得vhostfd*/
             vhostfd = monitor_fd_param(monitor_cur(), vhostfdname, &err);
             if (vhostfd == -1) {
@@ -775,13 +808,12 @@ static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer/*
                 } else {
                     warn_report_err(err);
                 }
-                return;
+                goto failed;
             }
-            ret = qemu_try_set_nonblock(vhostfd);
-            if (ret < 0) {
-                error_setg_errno(errp, -ret, "%s: Can't use file descriptor %d",
+            if (!g_unix_set_fd_nonblocking(vhostfd, true, NULL)) {
+                error_setg_errno(errp, errno, "%s: Can't use file descriptor %d",
                                  name, fd);
-                return;
+                goto failed;
             }
         } else {
             /*打开vhost-net字符设备，获得对应的fd*/
@@ -794,11 +826,15 @@ static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer/*
                     warn_report("tap: open vhost char device failed: %s",
                                 strerror(errno));
                 }
-                return;
+                goto failed;
             }
-            qemu_set_nonblock(vhostfd);
+            if (!g_unix_set_fd_nonblocking(vhostfd, true, NULL)) {
+                error_setg_errno(errp, errno, "Failed to set FD nonblocking");
+                goto failed;
+            }
         }
         options.opaque = (void *)(uintptr_t)vhostfd;
+        options.nvqs = 2;
 
         /*初始化vhost-net*/
         s->vhost_net = vhost_net_init(&options);
@@ -808,11 +844,17 @@ static void net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer/*
             } else {
                 warn_report(VHOST_NET_INIT_FAILED);
             }
-            return;
+            goto failed;
         }
     } else if (vhostfdname) {
         error_setg(errp, "vhostfd(s)= is not valid without vhost");
+        goto failed;
     }
+
+    return;
+
+failed:
+    qemu_del_net_client(&s->nc);
 }
 
 static int get_fds(char *str, char *fds[], int max)
@@ -860,22 +902,22 @@ int net_init_tap(const Netdev *netdev, const char *name/*net client唯一标识*
     assert(netdev->type == NET_CLIENT_DRIVER_TAP);
     tap = &netdev->u.tap;
     queues = tap->has_queues ? tap->queues : 1;
-    vhostfdname = tap->has_vhostfd ? tap->vhostfd : NULL;
-    script = tap->has_script ? tap->script : NULL;
-    downscript = tap->has_downscript ? tap->downscript : NULL;
+    vhostfdname = tap->vhostfd;
+    script = tap->script;
+    downscript = tap->downscript;
 
     /* QEMU hubs do not support multiqueue tap, in this case peer is set.
      * For -netdev, peer is always NULL. */
-    if (peer && (tap->has_queues || tap->has_fds || tap->has_vhostfds)) {
+    if (peer && (tap->has_queues || tap->fds || tap->vhostfds)) {
         error_setg(errp, "Multiqueue tap cannot be used with hubs");
         return -1;
     }
 
-    if (tap->has_fd) {
+    if (tap->fd) {
         /*如果指供了fd,则以下参数不得提供*/
-        if (tap->has_ifname || tap->has_script || tap->has_downscript ||
-            tap->has_vnet_hdr || tap->has_helper || tap->has_queues ||
-            tap->has_fds || tap->has_vhostfds) {
+        if (tap->ifname || tap->script || tap->downscript ||
+            tap->has_vnet_hdr || tap->helper || tap->has_queues ||
+            tap->fds || tap->vhostfds) {
             error_setg(errp, "ifname=, script=, downscript=, vnet_hdr=, "
                        "helper=, queues=, fds=, and vhostfds= "
                        "are invalid with fd=");
@@ -888,9 +930,8 @@ int net_init_tap(const Netdev *netdev, const char *name/*net client唯一标识*
             return -1;
         }
 
-        ret = qemu_try_set_nonblock(fd);
-        if (ret < 0) {
-            error_setg_errno(errp, -ret, "%s: Can't use file descriptor %d",
+        if (!g_unix_set_fd_nonblocking(fd, true, NULL)) {
+            error_setg_errno(errp, errno, "%s: Can't use file descriptor %d",
                              name, fd);
             close(fd);
             return -1;
@@ -911,16 +952,16 @@ int net_init_tap(const Netdev *netdev, const char *name/*net client唯一标识*
             close(fd);
             return -1;
         }
-    } else if (tap->has_fds) {
+    } else if (tap->fds) {
         //如果提供了fds，多队列情况
         char **fds;
         char **vhost_fds;
         int nfds = 0, nvhosts = 0;
 
         //与以下参数相冲突
-        if (tap->has_ifname || tap->has_script || tap->has_downscript ||
-            tap->has_vnet_hdr || tap->has_helper || tap->has_queues ||
-            tap->has_vhostfd) {
+        if (tap->ifname || tap->script || tap->downscript ||
+            tap->has_vnet_hdr || tap->helper || tap->has_queues ||
+            tap->vhostfd) {
             error_setg(errp, "ifname=, script=, downscript=, vnet_hdr=, "
                        "helper=, queues=, and vhostfd= "
                        "are invalid with fds=");
@@ -932,7 +973,7 @@ int net_init_tap(const Netdev *netdev, const char *name/*net client唯一标识*
 
         //分隔tap->fds中配置了多少个fd,存入到fds中
         nfds = get_fds(tap->fds, fds, MAX_TAP_QUEUES);
-        if (tap->has_vhostfds) {
+        if (tap->vhostfds) {
             //如果还配置了vhostfds,则split并存入vhost_fds中
             nvhosts = get_fds(tap->vhostfds, vhost_fds, MAX_TAP_QUEUES);
             if (nfds != nvhosts) {
@@ -951,9 +992,9 @@ int net_init_tap(const Netdev *netdev, const char *name/*net client唯一标识*
                 goto free_fail;
             }
 
-            ret = qemu_try_set_nonblock(fd);
-            if (ret < 0) {
-                error_setg_errno(errp, -ret, "%s: Can't use file descriptor %d",
+            ret = g_unix_set_fd_nonblocking(fd, true, NULL);
+            if (!ret) {
+                error_setg_errno(errp, errno, "%s: Can't use file descriptor %d",
                                  name, fd);
                 goto free_fail;
             }
@@ -961,6 +1002,7 @@ int net_init_tap(const Netdev *netdev, const char *name/*net client唯一标识*
             if (i == 0) {
                 vnet_hdr = tap_probe_vnet_hdr(fd, errp);
                 if (vnet_hdr < 0) {
+                    ret = -1;
                     goto free_fail;
                 }
             } else if (vnet_hdr != tap_probe_vnet_hdr(fd, NULL)) {
@@ -973,7 +1015,7 @@ int net_init_tap(const Netdev *netdev, const char *name/*net client唯一标识*
             //创建此TAPState
             net_init_tap_one(tap, peer, "tap", name, ifname,
                              script, downscript,
-                             tap->has_vhostfds ? vhost_fds[i] : NULL/*传入此tap对应的vhostfd*/,
+                             tap->vhostfds ? vhost_fds[i] : NULL/*传入此tap对应的vhostfd*/,
                              vnet_hdr, fd, &err);
             if (err) {
                 error_propagate(errp, err);
@@ -992,24 +1034,26 @@ free_fail:
         g_free(fds);
         g_free(vhost_fds);
         return ret;
-    } else if (tap->has_helper) {
+    } else if (tap->helper) {
         /*如果提供了helper,则以下参数与之冲突*/
-        if (tap->has_ifname || tap->has_script || tap->has_downscript ||
-            tap->has_vnet_hdr || tap->has_queues || tap->has_vhostfds) {
+        if (tap->ifname || tap->script || tap->downscript ||
+            tap->has_vnet_hdr || tap->has_queues || tap->vhostfds) {
             error_setg(errp, "ifname=, script=, downscript=, vnet_hdr=, "
                        "queues=, and vhostfds= are invalid with helper=");
             return -1;
         }
 
         fd = net_bridge_run_helper(tap->helper,
-                                   tap->has_br ?
-                                   tap->br : DEFAULT_BRIDGE_INTERFACE,
+                                   tap->br ?: DEFAULT_BRIDGE_INTERFACE,
                                    errp);
         if (fd == -1) {
             return -1;
         }
 
-        qemu_set_nonblock(fd);
+        if (!g_unix_set_fd_nonblocking(fd, true, NULL)) {
+            error_setg_errno(errp, errno, "Failed to set FD nonblocking");
+            return -1;
+        }
         vnet_hdr = tap_probe_vnet_hdr(fd, errp);
         if (vnet_hdr < 0) {
             close(fd);
@@ -1029,7 +1073,7 @@ free_fail:
         g_autofree char *default_script = NULL;
         g_autofree char *default_downscript = NULL;
         /*其它方式，与hash_vhostfds相冲突*/
-        if (tap->has_vhostfds) {
+        if (tap->vhostfds) {
             error_setg(errp, "vhostfds= is invalid if fds= wasn't specified");
             return -1;
         }
@@ -1043,7 +1087,7 @@ free_fail:
                                  get_relocated_path(DEFAULT_NETWORK_DOWN_SCRIPT);
         }
 
-        if (tap->has_ifname) {
+        if (tap->ifname) {
             pstrcpy(ifname, sizeof ifname, tap->ifname);
         } else {
             ifname[0] = '\0';
@@ -1057,7 +1101,7 @@ free_fail:
                 return -1;
             }
 
-            if (queues > 1 && i == 0 && !tap->has_ifname) {
+            if (queues > 1 && i == 0 && !tap->ifname) {
                 if (tap_fd_get_ifname(fd, ifname)) {
                     error_setg(errp, "Fail to get ifname");
                     close(fd);
