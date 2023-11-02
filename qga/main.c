@@ -105,6 +105,7 @@ struct GAState {
 };
 
 struct GAState *ga_state;
+/*记录guest agent支持的命令*/
 QmpCommandList ga_commands;
 
 /* commands that are safe to issue while filesystems are frozen */
@@ -961,13 +962,17 @@ static void config_load(GAConfig *config)
 {
     GError *gerr = NULL;
     GKeyFile *keyfile;
+    /*从环境变量/绝对路径下提供配置文件*/
     g_autofree char *conf = g_strdup(g_getenv("QGA_CONF")) ?: get_relocated_path(QGA_CONF_DEFAULT);
 
     /* read system config */
     keyfile = g_key_file_new();
+    /*读取配置文件到keyfile*/
     if (!g_key_file_load_from_file(keyfile, conf, 0, &gerr)) {
         goto end;
     }
+
+    /*检查general段下是否有daemon对应的配置*/
     if (g_key_file_has_key(keyfile, "general", "daemon", NULL)) {
         config->daemonize =
             g_key_file_get_boolean(keyfile, "general", "daemon", &gerr);
@@ -1336,6 +1341,7 @@ static GAState *initialize_agent(GAConfig *config, int socket_activation)
     s->command_state = ga_command_state_new();
     ga_command_state_init(s, s->command_state);
     ga_command_state_init_all(s->command_state);
+    /*处理收到的命令*/
     json_message_parser_init(&s->parser, process_event, s, NULL);
 
 #ifndef _WIN32
@@ -1446,7 +1452,7 @@ static void stop_agent(GAState *s, bool requested)
         g_main_loop_quit(s->main_loop);
     }
 }
-
+/*qemu-ga命令入口，用于配合host完成命令执行*/
 int main(int argc, char **argv)
 {
     int ret = EXIT_SUCCESS;

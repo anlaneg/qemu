@@ -72,6 +72,7 @@ bool qmp_command_is_enabled(const QmpCommand *cmd)
     return cmd->enabled;
 }
 
+/*取命令名称*/
 const char *qmp_command_name(const QmpCommand *cmd)
 {
     return cmd->name;

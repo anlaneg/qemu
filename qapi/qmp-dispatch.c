@@ -142,6 +142,7 @@ QDict *qmp_dispatch(const QmpCommandList *cmds, QObject *request,
         goto out;
     }
 
+    /*取用户输入的command*/
     command = qdict_get_try_str(dict, "execute");
     oob = false;
     if (!command) {
@@ -149,6 +150,8 @@ QDict *qmp_dispatch(const QmpCommandList *cmds, QObject *request,
         command = qdict_get_str(dict, "exec-oob");
         oob = true;
     }
+
+    /*检查command是否已列在cmds中*/
     cmd = qmp_find_command(cmds, command);
     if (cmd == NULL) {
         error_set(&err, ERROR_CLASS_COMMAND_NOT_FOUND,
