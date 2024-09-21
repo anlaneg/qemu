@@ -358,6 +358,7 @@ BlockBackend *blk_new(AioContext *ctx, uint64_t perm, uint64_t shared_perm)
 
     GLOBAL_STATE_CODE();
 
+    /*创建blockBackend*/
     blk = g_new0(BlockBackend, 1);
     blk->refcnt = 1;
     blk->ctx = ctx;
@@ -424,8 +425,8 @@ BlockBackend *blk_new_with_bs(BlockDriverState *bs, uint64_t perm,
  * though, so callers of this function have to be able to specify @filename and
  * @flags.
  */
-BlockBackend *blk_new_open(const char *filename, const char *reference,
-                           QDict *options, int flags, Error **errp)
+BlockBackend *blk_new_open(const char *filename/*image路径*/, const char *reference,
+                           QDict *options/*指定的参数*/, int flags, Error **errp)
 {
     BlockBackend *blk;
     BlockDriverState *bs;
@@ -1375,7 +1376,7 @@ int coroutine_fn blk_co_pread(BlockBackend *blk, int64_t offset, int64_t bytes,
 
     assert(bytes <= SIZE_MAX);
 
-    return blk_co_preadv(blk, offset, bytes, &qiov, flags);
+    return blk_co_preadv(blk, offset/*偏移量*/, bytes/*读取的长度*/, &qiov, flags);
 }
 
 int coroutine_fn blk_co_preadv(BlockBackend *blk, int64_t offset,
@@ -1385,7 +1386,7 @@ int coroutine_fn blk_co_preadv(BlockBackend *blk, int64_t offset,
     int ret;
     IO_OR_GS_CODE();
 
-    blk_inc_in_flight(blk);
+    blk_inc_in_flight(blk);/*增加in flight的*/
     ret = blk_co_do_preadv_part(blk, offset, bytes, qiov, 0, flags);
     blk_dec_in_flight(blk);
 

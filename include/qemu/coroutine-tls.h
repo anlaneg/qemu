@@ -151,13 +151,17 @@
  *   *(&my_count) = 0;
  */
 #define QEMU_DEFINE_STATIC_CO_TLS(type, var)                                 \
+		/*声明线程变量*/\
     static __thread type co_tls_##var;                                       \
+    /*定义获取函数*/\
     static __attribute__((noinline, unused))                                 \
     type get_##var(void)                                                     \
     { asm volatile(""); return co_tls_##var; }                               \
+	/*定义设置函数*/\
     static __attribute__((noinline, unused))                                 \
     void set_##var(type v)                                                   \
     { asm volatile(""); co_tls_##var = v; }                                  \
+	/*定义获取此变量指针函数*/\
     static __attribute__((noinline, unused))                                 \
     type *get_ptr_##var(void)                                                \
     { type *ptr = &co_tls_##var; asm volatile("" : "+rm" (ptr)); return ptr; }

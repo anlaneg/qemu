@@ -259,8 +259,11 @@ unsigned iov_copy(struct iovec *dst_iov, unsigned int dst_iov_cnt,
             offset -= iov[i].iov_len;
             continue;
         }
+
+        /*可复制的内容长度*/
         len = MIN(bytes, iov[i].iov_len - offset);
 
+        /*复制（这里采用指针指向）*/
         dst_iov[j].iov_base = iov[i].iov_base + offset;
         dst_iov[j].iov_len = len;
         j++;
@@ -268,7 +271,7 @@ unsigned iov_copy(struct iovec *dst_iov, unsigned int dst_iov_cnt,
         offset = 0;
     }
     assert(offset == 0);
-    return j;
+    return j;/*返回dst_iov的被填充长度*/
 }
 
 /* io vectors */

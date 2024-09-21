@@ -406,7 +406,7 @@ char *bdrv_get_full_backing_filename(BlockDriverState *bs, Error **errp)
 //注册块驱动，块驱动将被加入一bdrv_drivers链上
 void bdrv_register(BlockDriver *bdrv)
 {
-    assert(bdrv->format_name);
+    assert(bdrv->format_name);/*必须配置format_name*/
     GLOBAL_STATE_CODE();
     //将bdrv加入到bdrv_drviers链表上
     QLIST_INSERT_HEAD(&bdrv_drivers, bdrv, list);
@@ -898,7 +898,7 @@ static BlockDriver *find_hdev_driver(const char *filename)
     GLOBAL_STATE_CODE();
 
     QLIST_FOREACH(d, &bdrv_drivers, list) {
-    	//只有有bdrv_probe_device的driver才有被选择的可能
+    	//只有有bdrv_probe_device回调的driver才有被选择的可能
         if (d->bdrv_probe_device) {
         	//驱动会探测自已是否支持，通过score来反映匹配度，我们选择匹配度最大的
             score = d->bdrv_probe_device(filename);
@@ -912,7 +912,7 @@ static BlockDriver *find_hdev_driver(const char *filename)
     return drv;
 }
 
-//给出协议名称，比对protocol_name
+//给出协议名称，比对protocol_name，选择blockDriver
 static BlockDriver *bdrv_do_find_protocol(const char *protocol)
 {
     BlockDriver *drv1;
@@ -1015,6 +1015,7 @@ BlockDriver *bdrv_probe_all(const uint8_t *buf, int buf_size,
     BlockDriver *drv = NULL, *d;
     IO_CODE();
 
+    /*通过bdrv_probe回调进行选择得分最高的认为是blockDriver*/
     QLIST_FOREACH(d, &bdrv_drivers, list) {
         if (d->bdrv_probe) {
             score = d->bdrv_probe(buf, buf_size, filename);
@@ -2080,7 +2081,7 @@ static int bdrv_fill_options(QDict **options, const char *filename,
      */
     drvname = qdict_get_try_str(*options, "driver");
     if (drvname) {
-        drv = bdrv_find_format(drvname);
+        drv = bdrv_find_format(drvname);/*由format-name获取block driver*/
         if (!drv) {
             error_setg(errp, "Unknown driver '%s'", drvname);
             return -ENOENT;
@@ -4102,9 +4103,9 @@ bdrv_open_inherit(const char *filename, const char *reference, QDict *options,
 
     /* Find the right image format driver */
     /* See cautionary note on accessing @options above */
-    drvname = qdict_get_try_str(options, "driver");
+    drvname = qdict_get_try_str(options, "driver");/*取driver名称*/
     if (drvname) {
-        drv = bdrv_find_format(drvname);
+        drv = bdrv_find_format(drvname);/*通过format获取blockDriver*/
         if (!drv) {
             error_setg(errp, "Unknown driver: '%s'", drvname);
             goto fail;

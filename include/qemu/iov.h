@@ -188,6 +188,7 @@ typedef struct QEMUIOVector {
 QEMU_BUILD_BUG_ON(offsetof(QEMUIOVector, size) !=
                   offsetof(QEMUIOVector, local_iov.iov_len));
 
+/*初始化单iov的buffer*/
 #define QEMU_IOVEC_INIT_BUF(self, buf, len)              \
 {                                                        \
     .iov = &(self).local_iov,                            \
@@ -195,7 +196,7 @@ QEMU_BUILD_BUG_ON(offsetof(QEMUIOVector, size) !=
     .nalloc = -1,                                        \
     .local_iov = {                                       \
         .iov_base = (void *)(buf), /* cast away const */ \
-        .iov_len = (len),                                \
+        .iov_len = (len),/*buffer长度*/                   \
     },                                                   \
 }
 

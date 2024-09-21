@@ -90,7 +90,7 @@ void coroutine_fn aio_task_pool_start_task(AioTaskPool *pool, AioTask *task)
 {
     aio_task_pool_wait_slot(pool);
 
-    task->pool = pool;
+    task->pool = pool;/*task对应的pool*/
     qemu_coroutine_enter(qemu_coroutine_create(aio_task_co, task));
 }
 

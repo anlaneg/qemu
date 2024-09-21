@@ -904,6 +904,7 @@ static int unix_listen_saddr(UnixSocketAddress *saddr,
     size_t pathlen;
     size_t addrlen;
 
+    /*创建socket*/
     sock = qemu_socket(PF_UNIX, SOCK_STREAM, 0);
     if (sock < 0) {
         error_setg_errno(errp, errno, "Failed to create Unix socket");
@@ -964,6 +965,7 @@ static int unix_listen_saddr(UnixSocketAddress *saddr,
         memcpy(un.sun_path, path, pathlen);
     }
 
+    /*绑定地址*/
     if (bind(sock, (struct sockaddr *) &un, addrlen) < 0) {
         error_setg_errno(errp, errno, "Failed to bind socket to %s", path);
         goto err;
@@ -1211,6 +1213,7 @@ int socket_connect(SocketAddress *addr, Error **errp)
     return fd;
 }
 
+/*创建socket,并返回*/
 int socket_listen(SocketAddress *addr, int num, Error **errp)
 {
     int fd;
@@ -1222,6 +1225,7 @@ int socket_listen(SocketAddress *addr, int num, Error **errp)
         break;
 
     case SOCKET_ADDRESS_TYPE_UNIX:
+    	/*创建unix socket*/
         fd = unix_listen_saddr(&addr->u.q_unix, num, errp);
         break;
 

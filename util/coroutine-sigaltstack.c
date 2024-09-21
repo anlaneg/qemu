@@ -35,8 +35,8 @@
 
 typedef struct {
     Coroutine base;
-    void *stack;
-    size_t stack_size;
+    void *stack;/*栈指针*/
+    size_t stack_size;/*栈大小*/
     sigjmp_buf env;
 } CoroutineSigAltStack;
 
@@ -63,6 +63,7 @@ static CoroutineThreadState *coroutine_get_thread_state(void)
     CoroutineThreadState *s = pthread_getspecific(thread_state_key);
 
     if (!s) {
+    	/*此线程没有threadState,初始化*/
         s = g_malloc0(sizeof(*s));
         s->current = &s->leader.base;
         pthread_setspecific(thread_state_key, s);
@@ -168,8 +169,8 @@ Coroutine *qemu_coroutine_new(void)
      */
 
     co = g_malloc0(sizeof(*co));
-    co->stack_size = COROUTINE_STACK_SIZE;
-    co->stack = qemu_alloc_stack(&co->stack_size);
+    co->stack_size = COROUTINE_STACK_SIZE;/*申请栈大小*/
+    co->stack = qemu_alloc_stack(&co->stack_size);/*申请栈指针*/
     co->base.entry_arg = &old_env; /* stash away our jmp_buf */
 
     coTS = coroutine_get_thread_state();
@@ -181,8 +182,8 @@ Coroutine *qemu_coroutine_new(void)
      * later transfer control onto the signal stack.
      */
     sigemptyset(&sigs);
-    sigaddset(&sigs, SIGUSR2);
-    pthread_sigmask(SIG_BLOCK, &sigs, &osigs);
+    sigaddset(&sigs, SIGUSR2);/*增加信号*/
+    pthread_sigmask(SIG_BLOCK, &sigs, &osigs);/*阻塞此信号*/
     sa.sa_handler = coroutine_trampoline;
     sigfillset(&sa.sa_mask);
     sa.sa_flags = SA_ONSTACK;

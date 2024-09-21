@@ -30,6 +30,7 @@ int nbd_drop(QIOChannel *ioc, size_t size, Error **errp)
 
     buffer = sizeof(small) >= size ? small : g_malloc(MIN(65536, size));
     while (size > 0) {
+    	/*自ioc中尝试读取size内容*/
         ssize_t count = MIN(65536, size);
         ret = nbd_read(ioc, buffer, MIN(65536, size), NULL, errp);
 
@@ -43,7 +44,7 @@ int nbd_drop(QIOChannel *ioc, size_t size, Error **errp)
     if (buffer != small) {
         g_free(buffer);
     }
-    return ret;
+    return ret;/*返回状态*/
 }
 
 

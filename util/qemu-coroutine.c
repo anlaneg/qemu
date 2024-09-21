@@ -37,8 +37,8 @@ static unsigned int pool_max_size = POOL_INITIAL_MAX_SIZE;
 static unsigned int release_pool_size;
 
 typedef QSLIST_HEAD(, Coroutine) CoroutineQSList;
-QEMU_DEFINE_STATIC_CO_TLS(CoroutineQSList, alloc_pool);
-QEMU_DEFINE_STATIC_CO_TLS(unsigned int, alloc_pool_size);
+QEMU_DEFINE_STATIC_CO_TLS(CoroutineQSList, alloc_pool);/*per线程的协程pool*/
+QEMU_DEFINE_STATIC_CO_TLS(unsigned int, alloc_pool_size);/*per线程的pool size*/
 QEMU_DEFINE_STATIC_CO_TLS(Notifier, coroutine_pool_cleanup_notifier);
 
 static void coroutine_pool_cleanup(Notifier *n, void *value)
@@ -53,15 +53,18 @@ static void coroutine_pool_cleanup(Notifier *n, void *value)
     }
 }
 
+/*coroutine创建*/
 Coroutine *qemu_coroutine_create(CoroutineEntry *entry, void *opaque)
 {
     Coroutine *co = NULL;
 
     if (IS_ENABLED(CONFIG_COROUTINE_POOL)) {
+    	/*协程pool被开启情况*/
         CoroutineQSList *alloc_pool = get_ptr_alloc_pool();
 
-        co = QSLIST_FIRST(alloc_pool);
+        co = QSLIST_FIRST(alloc_pool);/*取首个协程pool*/
         if (!co) {
+        	/*此pool中元素已被申请完，*/
             if (release_pool_size > POOL_MIN_BATCH_SIZE) {
                 /* Slow path; a good place to register the destructor, too.  */
                 Notifier *notifier = get_ptr_coroutine_pool_cleanup_notifier();
@@ -75,17 +78,20 @@ Coroutine *qemu_coroutine_create(CoroutineEntry *entry, void *opaque)
                  * it is just a heuristic, it does not need to be perfect.
                  */
                 set_alloc_pool_size(qatomic_xchg(&release_pool_size, 0));
-                QSLIST_MOVE_ATOMIC(alloc_pool, &release_pool);
-                co = QSLIST_FIRST(alloc_pool);
+                QSLIST_MOVE_ATOMIC(alloc_pool, &release_pool);/*自release pool中申请*/
+                co = QSLIST_FIRST(alloc_pool);/*申请*/
             }
         }
         if (co) {
+        	/*co已指向了首个元素，将首个元素自pool中移除*/
             QSLIST_REMOVE_HEAD(alloc_pool, pool_next);
+            /*此线程pool上元素数减1*/
             set_alloc_pool_size(get_alloc_pool_size() - 1);
         }
     }
 
     if (!co) {
+    	/*未开启pool或者pool中元素已消费完，采用malloc申请*/
         co = qemu_coroutine_new();
     }
 

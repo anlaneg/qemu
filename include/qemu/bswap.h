@@ -45,6 +45,7 @@ static inline void bswap64s(uint64_t *s)
 #else
 #define le_bswap(v, size) (v)
 #define le_bswap24(v) (v)
+/*执行v交换*/
 #define be_bswap(v, size) glue(__builtin_bswap, size)(v)
 #define le_bswaps(v, size)
 #define be_bswaps(p, size) \
@@ -362,6 +363,7 @@ static inline void stl_be_p(void *ptr, uint32_t v)
     stl_he_p(ptr, be_bswap(v, 32));
 }
 
+/*v按大端处理，并设置ptr*/
 static inline void stq_be_p(void *ptr, uint64_t v)
 {
     stq_he_p(ptr, be_bswap(v, 64));

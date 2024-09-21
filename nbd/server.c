@@ -80,7 +80,7 @@ static int system_errno_to_nbd_errno(int err)
 typedef struct NBDRequestData NBDRequestData;
 
 struct NBDRequestData {
-    NBDClient *client;
+    NBDClient *client;/*对应的client*/
     uint8_t *data;
     bool complete;
 };
@@ -140,7 +140,7 @@ struct NBDClient {
     bool quiescing;
 
     QTAILQ_ENTRY(NBDClient) next;
-    int nb_requests;
+    int nb_requests;/*统计信息，申请了多少request*/
     bool closing;
 
     uint32_t check_align; /* If non-zero, check for aligned client requests */
@@ -1166,11 +1166,13 @@ static int nbd_negotiate_options(NBDClient *client, Error **errp)
         }
         trace_nbd_negotiate_options_check_magic(magic);
         if (magic != NBD_OPTS_MAGIC) {
+        	/*读取的magic与预期不一致*/
             error_setg(errp, "Bad magic received");
             return -EINVAL;
         }
 
         if (nbd_read32(client->ioc, &option, "option", errp) < 0) {
+        	/*读取option失败*/
             return -EINVAL;
         }
         client->opt = option;
@@ -1372,11 +1374,12 @@ static coroutine_fn int nbd_negotiate(NBDClient *client, Error **errp)
     qio_channel_set_follow_coroutine_ctx(client->ioc, true);
 
     trace_nbd_negotiate_begin();
-    memcpy(buf, "NBDMAGIC", 8);
+    memcpy(buf, "NBDMAGIC", 8);/*填写字符串*/
 
-    stq_be_p(buf + 8, NBD_OPTS_MAGIC);
+    stq_be_p(buf + 8, NBD_OPTS_MAGIC);/*填写magic*/
     stw_be_p(buf + 16, NBD_FLAG_FIXED_NEWSTYLE | NBD_FLAG_NO_ZEROES);
 
+    /*向clinet写响应header*/
     if (nbd_write(client->ioc, buf, 18, errp) < 0) {
         error_prepend(errp, "write failed: ");
         return -EINVAL;
@@ -1441,7 +1444,7 @@ nbd_read_eof(NBDClient *client, void *buffer, size_t size, Error **errp)
     return 1;
 }
 
-static int coroutine_fn nbd_receive_request(NBDClient *client, NBDRequest *request,
+static int coroutine_fn nbd_receive_request(NBDClient *client, NBDRequest *request/*出参，返回读取到的request*/,
                                             Error **errp)
 {
     uint8_t buf[NBD_EXTENDED_REQUEST_SIZE];
@@ -1450,7 +1453,7 @@ static int coroutine_fn nbd_receive_request(NBDClient *client, NBDRequest *reque
     size_t size = client->mode >= NBD_MODE_EXTENDED ?
         NBD_EXTENDED_REQUEST_SIZE : NBD_REQUEST_SIZE;
 
-    ret = nbd_read_eof(client, buf, size, errp);
+    ret = nbd_read_eof(client, buf, size, errp);/*对应server端，请求收到后需要响应，故一次读取全*/
     if (ret < 0) {
         return ret;
     }
@@ -1475,15 +1478,17 @@ static int coroutine_fn nbd_receive_request(NBDClient *client, NBDRequest *reque
      *  [24 .. 31]   len
      */
 
-    magic = ldl_be_p(buf);
+    magic = ldl_be_p(buf);/*取magic*/
     request->flags  = lduw_be_p(buf + 4);
     request->type   = lduw_be_p(buf + 6);
     request->cookie = ldq_be_p(buf + 8);
     request->from   = ldq_be_p(buf + 16);
     if (client->mode >= NBD_MODE_EXTENDED) {
+    	/*扩展模式，其len为64位*/
         request->len = ldq_be_p(buf + 24);
         expect = NBD_EXTENDED_REQUEST_MAGIC;
     } else {
+    	/*非扩展模式，其len为32位*/
         request->len = (uint32_t)ldl_be_p(buf + 24); /* widen 32 to 64 bits */
         expect = NBD_REQUEST_MAGIC;
     }
@@ -1492,10 +1497,12 @@ static int coroutine_fn nbd_receive_request(NBDClient *client, NBDRequest *reque
                               request->from, request->len);
 
     if (magic != expect) {
+    	/*magic匹配不成功*/
         error_setg(errp, "invalid magic (got 0x%" PRIx32 ", expected 0x%"
                    PRIx32 ")", magic, expect);
         return -EINVAL;
     }
+    /*解析成功，返回0*/
     return 0;
 }
 
@@ -1556,7 +1563,7 @@ static NBDRequestData *nbd_request_get(NBDClient *client)
     assert(client->nb_requests <= MAX_NBD_REQUESTS - 1);
     client->nb_requests++;
 
-    req = g_new0(NBDRequestData, 1);
+    req = g_new0(NBDRequestData, 1);/*申请request变量*/
     nbd_client_get(client);
     req->client = client;
     return req;
@@ -2522,7 +2529,7 @@ static int coroutine_fn nbd_co_receive_request(NBDRequestData *req,
                                                NBDRequest *request,
                                                Error **errp)
 {
-    NBDClient *client = req->client;
+    NBDClient *client = req->client;/*取req对应的client*/
     bool extended_with_payload;
     bool check_length = false;
     bool check_rofs = false;
@@ -2534,6 +2541,7 @@ static int coroutine_fn nbd_co_receive_request(NBDRequestData *req,
 
     g_assert(qemu_in_coroutine());
     assert(client->recv_coroutine == qemu_coroutine_self());
+    /*收取一个request*/
     ret = nbd_receive_request(client, request, errp);
     if (ret < 0) {
         return ret;
@@ -2548,22 +2556,23 @@ static int coroutine_fn nbd_co_receive_request(NBDRequestData *req,
         check_length = true;
     }
 
+    /*按请求类型处理*/
     switch (request->type) {
-    case NBD_CMD_DISC:
+    case NBD_CMD_DISC:/*断开连接*/
         /* Special case: we're going to disconnect without a reply,
          * whether or not flags, from, or len are bogus */
         req->complete = true;
         return -EIO;
 
-    case NBD_CMD_READ:
+    case NBD_CMD_READ:/*读取*/
         if (client->mode >= NBD_MODE_STRUCTURED) {
             valid_flags |= NBD_CMD_FLAG_DF;
         }
         check_length = true;
-        allocate_buffer = true;
+        allocate_buffer = true;/*需要申请buffer*/
         break;
 
-    case NBD_CMD_WRITE:
+    case NBD_CMD_WRITE:/*写入*/
         if (client->mode >= NBD_MODE_EXTENDED) {
             if (!extended_with_payload) {
                 /* The client is noncompliant. Trace it, but proceed. */
@@ -2572,10 +2581,10 @@ static int coroutine_fn nbd_co_receive_request(NBDRequestData *req,
             }
             valid_flags |= NBD_CMD_FLAG_PAYLOAD_LEN;
         }
-        payload_okay = true;
-        payload_len = request->len;
+        payload_okay = true;/*指明有payload*/
+        payload_len = request->len;/*要写入的内容长度*/
         check_length = true;
-        allocate_buffer = true;
+        allocate_buffer = true;/*需要申请buffer*/
         check_rofs = true;
         break;
 
@@ -2639,7 +2648,7 @@ static int coroutine_fn nbd_co_receive_request(NBDRequestData *req,
     if (allocate_buffer) {
         /* READ, WRITE */
         req->data = blk_try_blockalign(client->exp->common.blk,
-                                       request->len);
+                                       request->len);/*申请buffer*/
         if (req->data == NULL) {
             error_setg(errp, "No memory");
             return -ENOMEM;
@@ -2650,8 +2659,9 @@ static int coroutine_fn nbd_co_receive_request(NBDRequestData *req,
             /* WRITE */
             assert(req->data);
             ret = nbd_read(client->ioc, req->data, payload_len,
-                           "CMD_WRITE data", errp);
+                           "CMD_WRITE data", errp);/*读取内容到req->data*/
         } else {
+        	/*读取payload_len长度，并不返回内容*/
             ret = nbd_drop(client->ioc, payload_len, errp);
         }
         if (ret < 0) {
@@ -2744,7 +2754,7 @@ static coroutine_fn int nbd_do_cmd_read(NBDClient *client, NBDRequest *request,
                                        data, request->len, errp);
     }
 
-    ret = blk_co_pread(exp->common.blk, request->from, request->len, data, 0);
+    ret = blk_co_pread(exp->common.blk, request->from/*偏移量*/, request->len/*要读取的长度*/, data/*读要写入的buffer*/, 0);
     if (ret < 0) {
         return nbd_send_generic_reply(client, request, ret,
                                       "reading from file failed", errp);
@@ -2799,11 +2809,12 @@ static coroutine_fn int nbd_handle_request(NBDClient *client,
     char *msg;
     size_t i;
 
+    /*按请求的类型执行动作*/
     switch (request->type) {
     case NBD_CMD_CACHE:
         return nbd_do_cmd_cache(client, request, errp);
 
-    case NBD_CMD_READ:
+    case NBD_CMD_READ:/*请求读*/
         return nbd_do_cmd_read(client, request, data, errp);
 
     case NBD_CMD_WRITE:
@@ -2937,6 +2948,7 @@ static coroutine_fn void nbd_trip(void *opaque)
 
     trace_nbd_trip();
     if (client->closing) {
+    	/*client被标记正在关闭*/
         nbd_client_put(client);
         return;
     }
@@ -2952,7 +2964,9 @@ static coroutine_fn void nbd_trip(void *opaque)
         return;
     }
 
+    /*申请一个request变量*/
     req = nbd_request_get(client);
+    /*接收并填充request*/
     ret = nbd_co_receive_request(req, &request, &local_err);
     client->recv_coroutine = NULL;
 
@@ -2969,6 +2983,7 @@ static coroutine_fn void nbd_trip(void *opaque)
         goto done;
     }
 
+    /*调度下一个request*/
     nbd_client_receive_next_request(client);
     if (ret == -EIO) {
         goto disconnect;
@@ -2986,6 +3001,7 @@ static coroutine_fn void nbd_trip(void *opaque)
                                      error_get_pretty(export_err), &local_err);
         error_free(export_err);
     } else {
+    	/*处理收到的request*/
         ret = nbd_handle_request(client, &request, req->data, &local_err);
     }
     if (request.contexts && request.contexts != &client->contexts) {
@@ -3027,6 +3043,7 @@ static void nbd_client_receive_next_request(NBDClient *client)
     if (!client->recv_coroutine && client->nb_requests < MAX_NBD_REQUESTS &&
         !client->quiescing) {
         nbd_client_get(client);
+        /*初始化收协程*/
         client->recv_coroutine = qemu_coroutine_create(nbd_trip, client);
         aio_co_schedule(client->exp->common.ctx, client->recv_coroutine);
     }

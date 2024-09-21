@@ -72,6 +72,7 @@ ssize_t qio_channel_readv_full(QIOChannel *ioc,
         return -1;
     }
 
+    /*调用io_readv读取并填充iov*/
     return klass->io_readv(ioc, iov, niov, fds, nfds, flags, errp);
 }
 
@@ -87,6 +88,7 @@ ssize_t qio_channel_writev_full(QIOChannel *ioc,
     QIOChannelClass *klass = QIO_CHANNEL_GET_CLASS(ioc);
 
     if (fds || nfds) {
+    	/*有fds情况处理*/
         if (!qio_channel_has_feature(ioc, QIO_CHANNEL_FEATURE_FD_PASS)) {
             error_setg_errno(errp, EINVAL,
                              "Channel does not support file descriptor passing");
@@ -237,7 +239,7 @@ int coroutine_mixed_fn qio_channel_readv_full_all(QIOChannel *ioc,
 
 int coroutine_mixed_fn qio_channel_writev_all(QIOChannel *ioc,
                                               const struct iovec *iov,
-                                              size_t niov,
+                                              size_t niov/*iov数组长度*/,
                                               Error **errp)
 {
     return qio_channel_writev_full_all(ioc, iov, niov, NULL, 0, 0, errp);
@@ -245,8 +247,8 @@ int coroutine_mixed_fn qio_channel_writev_all(QIOChannel *ioc,
 
 int coroutine_mixed_fn qio_channel_writev_full_all(QIOChannel *ioc,
                                                    const struct iovec *iov,
-                                                   size_t niov,
-                                                   int *fds, size_t nfds,
+                                                   size_t niov/*iov数量*/,
+                                                   int *fds, size_t nfds/*fds数量*/,
                                                    int flags, Error **errp)
 {
     int ret = -1;
@@ -254,6 +256,7 @@ int coroutine_mixed_fn qio_channel_writev_full_all(QIOChannel *ioc,
     struct iovec *local_iov_head = local_iov;
     unsigned int nlocal_iov = niov;
 
+    /*将iov的内容复制到local_iov内*/
     nlocal_iov = iov_copy(local_iov, nlocal_iov,
                           iov, niov,
                           0, iov_size(iov, niov));
@@ -290,7 +293,7 @@ int coroutine_mixed_fn qio_channel_writev_full_all(QIOChannel *ioc,
 
 ssize_t qio_channel_readv(QIOChannel *ioc,
                           const struct iovec *iov,
-                          size_t niov,
+                          size_t niov/*iov数组大小*/,
                           Error **errp)
 {
     return qio_channel_readv_full(ioc, iov, niov, NULL, NULL, 0, errp);
@@ -342,17 +345,17 @@ int coroutine_mixed_fn qio_channel_read_all(QIOChannel *ioc,
                                             Error **errp)
 {
     struct iovec iov = { .iov_base = buf, .iov_len = buflen };
-    return qio_channel_readv_all(ioc, &iov, 1, errp);
+    return qio_channel_readv_all(ioc, &iov, 1, errp);/*读取内容到buffer*/
 }
 
 
 int coroutine_mixed_fn qio_channel_write_all(QIOChannel *ioc,
-                                             const char *buf,
-                                             size_t buflen,
+                                             const char *buf/*buffer起始地址*/,
+                                             size_t buflen/*buffer长度*/,
                                              Error **errp)
 {
     struct iovec iov = { .iov_base = (char *)buf, .iov_len = buflen };
-    return qio_channel_writev_all(ioc, &iov, 1, errp);
+    return qio_channel_writev_all(ioc, &iov, 1/*iovec长度为1*/, errp);
 }
 
 
@@ -720,7 +723,7 @@ static void qio_channel_finalize(Object *obj)
 
 static const TypeInfo qio_channel_info = {
     .parent = TYPE_OBJECT,
-    .name = TYPE_QIO_CHANNEL,
+    .name = TYPE_QIO_CHANNEL,/*qio-channel类型*/
     .instance_size = sizeof(QIOChannel),
     .instance_finalize = qio_channel_finalize,
     .abstract = true,

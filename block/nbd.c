@@ -1248,9 +1248,9 @@ nbd_client_co_preadv(BlockDriverState *bs, int64_t offset, int64_t bytes,
     Error *local_err = NULL;
     BDRVNBDState *s = (BDRVNBDState *)bs->opaque;
     NBDRequest request = {
-        .type = NBD_CMD_READ,
-        .from = offset,
-        .len = bytes,
+        .type = NBD_CMD_READ,/*发送读请求*/
+        .from = offset,/*读对应的offset*/
+        .len = bytes,/*读对应的长度*/
     };
 
     assert(bytes <= NBD_MAX_BUFFER_SIZE);
@@ -1278,11 +1278,13 @@ nbd_client_co_preadv(BlockDriverState *bs, int64_t offset, int64_t bytes,
     }
 
     do {
+    	/*发送读请求*/
         ret = nbd_co_send_request(bs, &request, NULL);
         if (ret < 0) {
             continue;
         }
 
+        /*收取对端响应*/
         ret = nbd_co_receive_cmdread_reply(s, request.cookie, offset, qiov,
                                            &request_ret, &local_err);
         if (local_err) {
@@ -1511,7 +1513,7 @@ static void nbd_client_close(BlockDriverState *bs)
  * Parse nbd_open options
  */
 
-static int nbd_parse_uri(const char *filename, QDict *options)
+static int nbd_parse_uri(const char *filename/*待解析的uri*/, QDict *options)
 {
     URI *uri;
     const char *p;
@@ -1519,6 +1521,7 @@ static int nbd_parse_uri(const char *filename, QDict *options)
     int ret = 0;
     bool is_unix;
 
+    /*解析filename获得uri*/
     uri = uri_parse(filename);
     if (!uri) {
         return -EINVAL;
@@ -1530,6 +1533,7 @@ static int nbd_parse_uri(const char *filename, QDict *options)
     } else if (!g_strcmp0(uri->scheme, "nbd+tcp")) {
         is_unix = false;
     } else if (!g_strcmp0(uri->scheme, "nbd+unix")) {
+    	/*采用unix*/
         is_unix = true;
     } else {
         ret = -EINVAL;
@@ -1538,9 +1542,10 @@ static int nbd_parse_uri(const char *filename, QDict *options)
 
     p = uri->path ? uri->path : "";
     if (p[0] == '/') {
-        p++;
+        p++;/*跳过首个'/'*/
     }
     if (p[0]) {
+    	/*添加export选项*/
         qdict_put_str(options, "export", p);
     }
 
@@ -1556,6 +1561,7 @@ static int nbd_parse_uri(const char *filename, QDict *options)
             ret = -EINVAL;
             goto out;
         }
+        /*指定server.type,server.path*/
         qdict_put_str(options, "server.type", "unix");
         qdict_put_str(options, "server.path", qp->p[0].value);
     } else {
@@ -1596,6 +1602,7 @@ static bool nbd_has_filename_options_conflict(QDict *options, Error **errp)
 {
     const QDictEntry *e;
 
+    /*遍历options,指定filename时，以上参数不得存在*/
     for (e = qdict_first(options); e; e = qdict_next(options, e)) {
         if (!strcmp(e->key, "host") ||
             !strcmp(e->key, "port") ||
@@ -1621,10 +1628,12 @@ static void nbd_parse_filename(const char *filename, QDict *options,
     const char *unixpath;
 
     if (nbd_has_filename_options_conflict(options, errp)) {
+    	/*选项冲突，返回*/
         return;
     }
 
     if (strstr(filename, "://")) {
+    	/*filename包含'://'，解析其对应的url,产生options*/
         int ret = nbd_parse_uri(filename, options);
         if (ret < 0) {
             error_setg(errp, "No valid URL specified");
@@ -1632,8 +1641,10 @@ static void nbd_parse_filename(const char *filename, QDict *options,
         return;
     }
 
+    /*非uri情况*/
     file = g_strdup(filename);
 
+    /*尝试解析exportname*/
     export_name = strstr(file, EN_OPTSTR);
     if (export_name) {
         if (export_name[strlen(EN_OPTSTR)] == 0) {
@@ -1647,6 +1658,7 @@ static void nbd_parse_filename(const char *filename, QDict *options,
 
     /* extract the host_spec - fail if it's not nbd:... */
     if (!strstart(file, "nbd:", &host_spec)) {
+    	/*没有以nbd:开头*/
         error_setg(errp, "File name string for NBD must start with 'nbd:'");
         return;
     }
@@ -1657,9 +1669,11 @@ static void nbd_parse_filename(const char *filename, QDict *options,
 
     /* are we a UNIX or TCP socket? */
     if (strstart(host_spec, "unix:", &unixpath)) {
+    	/*指明了unix socket情况*/
         qdict_put_str(options, "server.type", "unix");
         qdict_put_str(options, "server.path", unixpath);
     } else {
+    	/*指明socket情况*/
         InetSocketAddress *addr = g_new(InetSocketAddress, 1);
 
         if (inet_parse(addr, host_spec, errp)) {
@@ -1724,6 +1738,7 @@ static SocketAddress *nbd_config(BDRVNBDState *s, QDict *options,
     QDict *addr = NULL;
     Visitor *iv = NULL;
 
+    /*收集options中以'server.'开头的key,将其内容存入到addr中*/
     qdict_extract_subqdict(options, &addr, "server.");
     if (!qdict_size(addr)) {
         error_setg(errp, "NBD server address missing");
@@ -2229,7 +2244,7 @@ static void bdrv_nbd_init(void)
 {
     bdrv_register(&bdrv_nbd);
     bdrv_register(&bdrv_nbd_tcp);
-    bdrv_register(&bdrv_nbd_unix);
+    bdrv_register(&bdrv_nbd_unix);/*注册基于unix socket的bdriver*/
 }
 
 block_init(bdrv_nbd_init);

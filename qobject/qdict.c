@@ -307,12 +307,13 @@ const char *qdict_get_try_str(const QDict *qdict, const char *key)
     return qstr ? qstring_get_str(qstr) : NULL;
 }
 
-static QDictEntry *qdict_next_entry(const QDict *qdict, int first_bucket)
+static QDictEntry *qdict_next_entry(const QDict *qdict, int first_bucket/*起始的首个桶号*/)
 {
     int i;
 
     for (i = first_bucket; i < QDICT_BUCKET_MAX; i++) {
         if (!QLIST_EMPTY(&qdict->table[i])) {
+        	/*返回首个非空桶，桶头*/
             return QLIST_FIRST(&qdict->table[i]);
         }
     }
@@ -325,6 +326,7 @@ static QDictEntry *qdict_next_entry(const QDict *qdict, int first_bucket)
  */
 const QDictEntry *qdict_first(const QDict *qdict)
 {
+	/*返回qdict中首个元素*/
     return qdict_next_entry(qdict, 0);
 }
 
@@ -335,10 +337,11 @@ const QDictEntry *qdict_next(const QDict *qdict, const QDictEntry *entry)
 {
     QDictEntry *ret;
 
-    ret = QLIST_NEXT(entry, next);
+    ret = QLIST_NEXT(entry, next);/*获取一下个*/
     if (!ret) {
-        unsigned int bucket = tdb_hash(entry->key) % QDICT_BUCKET_MAX;
-        ret = qdict_next_entry(qdict, bucket + 1);
+    	/*下一个为空*/
+        unsigned int bucket = tdb_hash(entry->key) % QDICT_BUCKET_MAX;/*取此桶所在桶号*/
+        ret = qdict_next_entry(qdict, bucket + 1);/*获取下一个非空桶头*/
     }
 
     return ret;
@@ -354,8 +357,9 @@ QDict *qdict_clone_shallow(const QDict *src)
     QDictEntry *entry;
     int i;
 
-    dest = qdict_new();
+    dest = qdict_new();/*初始化qdict*/
 
+    /*将src中的内容写入到dest中*/
     for (i = 0; i < QDICT_BUCKET_MAX; i++) {
         QLIST_FOREACH(entry, &src->table[i], next) {
             qdict_put_obj(dest, entry->key, qobject_ref(entry->value));

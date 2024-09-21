@@ -366,7 +366,7 @@ typedef struct NBDExportInfo {
 
     /* Set by server results during nbd_receive_negotiate() and
      * nbd_receive_export_list() */
-    uint64_t size;
+    uint64_t size;/*文件大小*/
     uint16_t flags;
     uint32_t min_block;
     uint32_t opt_block;

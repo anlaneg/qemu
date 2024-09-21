@@ -64,8 +64,8 @@ static QTAILQ_HEAD(, NBDExport) exports = QTAILQ_HEAD_INITIALIZER(exports);
  * a C string; and @data may be NULL if @len is 0).
  * Return 0 if successful, -1 with errp set if it is impossible to
  * continue. */
-static int nbd_send_option_request(QIOChannel *ioc, uint32_t opt,
-                                   uint32_t len, const char *data,
+static int nbd_send_option_request(QIOChannel *ioc, uint32_t opt/*选项类型*/,
+                                   uint32_t len/*data长度*/, const char *data/*数据*/,
                                    Error **errp)
 {
     ERRP_GUARD();
@@ -73,19 +73,23 @@ static int nbd_send_option_request(QIOChannel *ioc, uint32_t opt,
     QEMU_BUILD_BUG_ON(sizeof(req) != 16);
 
     if (len == -1) {
+    	/*设置req对应的length*/
         req.length = len = strlen(data);
     }
     trace_nbd_send_option_request(opt, nbd_opt_lookup(opt), len);
 
+    /*设置request对应的magic,option,length*/
     stq_be_p(&req.magic, NBD_OPTS_MAGIC);
     stl_be_p(&req.option, opt);
     stl_be_p(&req.length, len);
 
+    /*向ioc写req头部*/
     if (nbd_write(ioc, &req, sizeof(req), errp) < 0) {
         error_prepend(errp, "Failed to send option request header: ");
         return -1;
     }
 
+    /*向ioc写data*/
     if (len && nbd_write(ioc, (char *) data, len, errp) < 0) {
         error_prepend(errp, "Failed to send option request data: ");
         return -1;
@@ -103,7 +107,7 @@ static void nbd_send_opt_abort(QIOChannel *ioc)
      * to disconnect without waiting for the server reply, so we don't
      * even care if the request makes it to the server, let alone
      * waiting around for whether the server replies. */
-    nbd_send_option_request(ioc, NBD_OPT_ABORT, 0, NULL, NULL);
+    nbd_send_option_request(ioc, NBD_OPT_ABORT, 0, NULL, NULL);/*写abort*/
 }
 
 
@@ -111,14 +115,17 @@ static void nbd_send_opt_abort(QIOChannel *ioc)
  * opt.  Read through the length field, but NOT the length bytes of
  * payload. Return 0 if successful, -1 with errp set if it is
  * impossible to continue. */
-static int nbd_receive_option_reply(QIOChannel *ioc, uint32_t opt,
-                                    NBDOptionReply *reply, Error **errp)
+static int nbd_receive_option_reply(QIOChannel *ioc, uint32_t opt/*读取并返回指定opt对应的reply*/,
+                                    NBDOptionReply *reply/*出参，reply头，已做字节序转换*/, Error **errp)
 {
-    QEMU_BUILD_BUG_ON(sizeof(*reply) != 20);
+    QEMU_BUILD_BUG_ON(sizeof(*reply) != 20);/*编译断言必为20字节*/
     if (nbd_read(ioc, reply, sizeof(*reply), "option reply", errp) < 0) {
+    	/*读取reply*/
         nbd_send_opt_abort(ioc);
         return -1;
     }
+
+    /*字节序转换*/
     reply->magic = be64_to_cpu(reply->magic);
     reply->option = be32_to_cpu(reply->option);
     reply->type = be32_to_cpu(reply->type);
@@ -129,11 +136,14 @@ static int nbd_receive_option_reply(QIOChannel *ioc, uint32_t opt,
                                    reply->length);
 
     if (reply->magic != NBD_REP_MAGIC) {
+    	/*magic不匹配*/
         error_setg(errp, "Unexpected option reply magic");
         nbd_send_opt_abort(ioc);
         return -1;
     }
+
     if (reply->option != opt) {
+    	/*与预期的option不匹配*/
         error_setg(errp, "Unexpected option type %u (%s), expected %u (%s)",
                    reply->option, nbd_opt_lookup(reply->option),
                    opt, nbd_opt_lookup(opt));
@@ -158,16 +168,21 @@ static int nbd_handle_reply_err(QIOChannel *ioc, NBDOptionReply *reply,
     g_autofree char *msg = NULL;
 
     if (!(reply->type & (1 << 31))) {
+    	/*没有标记失败，返回1*/
         return 1;
     }
 
+    /*返回了失败，按照length消费掉此响应*/
     if (reply->length) {
         if (reply->length > NBD_MAX_BUFFER_SIZE) {
+        	/*length长度超限*/
             error_setg(errp, "server error %" PRIu32
                        " (%s) message is too long",
                        reply->type, nbd_rep_lookup(reply->type));
             goto err;
         }
+
+        /*读取响应内容，并输出*/
         msg = g_malloc(reply->length + 1);
         if (nbd_read(ioc, msg, reply->length, NULL, errp) < 0) {
             error_prepend(errp, "Failed to read option error %" PRIu32
@@ -187,6 +202,7 @@ static int nbd_handle_reply_err(QIOChannel *ioc, NBDOptionReply *reply,
         return 0;
     }
 
+    /*按照error type进行输出*/
     switch (reply->type) {
     case NBD_REP_ERR_POLICY:
         error_setg(errp, "Denied by server for option %" PRIu32 " (%s)",
@@ -247,7 +263,7 @@ static int nbd_handle_reply_err(QIOChannel *ioc, NBDOptionReply *reply,
  *         0 if iteration is complete (including if OPT_LIST unsupported),
  *         -1 with @errp set if an unrecoverable error occurred.
  */
-static int nbd_receive_list(QIOChannel *ioc, char **name, char **description,
+static int nbd_receive_list(QIOChannel *ioc, char **name/*出参，NBD_OPT_LIST返回的local name*/, char **description/*出参，NBD_OPT_LIST返回的描述符*/,
                             Error **errp)
 {
     NBDOptionReply reply;
@@ -257,16 +273,20 @@ static int nbd_receive_list(QIOChannel *ioc, char **name, char **description,
     g_autofree char *local_desc = NULL;
     int error;
 
+    /*读取NBD_OPT_LIST响应*/
     if (nbd_receive_option_reply(ioc, NBD_OPT_LIST, &reply, errp) < 0) {
         return -1;
     }
+
     error = nbd_handle_reply_err(ioc, &reply, true, errp);
     if (error <= 0) {
+    	/*reply指明error,返回*/
         return error;
     }
-    len = reply.length;
+    len = reply.length;/*取reply长度*/
 
     if (reply.type == NBD_REP_ACK) {
+    	/*response ack的长度必须为0*/
         if (len != 0) {
             error_setg(errp, "length too long for option end");
             nbd_send_opt_abort(ioc);
@@ -274,6 +294,7 @@ static int nbd_receive_list(QIOChannel *ioc, char **name, char **description,
         }
         return 0;
     } else if (reply.type != NBD_REP_SERVER) {
+    	/*reply类型不为server,报错*/
         error_setg(errp, "Unexpected reply type %u (%s), expected %u (%s)",
                    reply.type, nbd_rep_lookup(reply.type),
                    NBD_REP_SERVER, nbd_rep_lookup(NBD_REP_SERVER));
@@ -282,28 +303,32 @@ static int nbd_receive_list(QIOChannel *ioc, char **name, char **description,
     }
 
     if (len < sizeof(namelen) || len > NBD_MAX_BUFFER_SIZE) {
+    	/*NBD_REP_SERVER类响应长度不合乎规范*/
         error_setg(errp, "incorrect option length %" PRIu32, len);
         nbd_send_opt_abort(ioc);
         return -1;
     }
     if (nbd_read32(ioc, &namelen, "option name length", errp) < 0) {
+    	/*再读取namelen时失败*/
         nbd_send_opt_abort(ioc);
         return -1;
     }
-    len -= sizeof(namelen);
+    len -= sizeof(namelen);/*减去length*/
     if (len < namelen || namelen > NBD_MAX_STRING_SIZE) {
+    	/*剩余长度不合乎规范*/
         error_setg(errp, "incorrect name length in server's list response");
         nbd_send_opt_abort(ioc);
         return -1;
     }
 
+    /*读取local_name*/
     local_name = g_malloc(namelen + 1);
     if (nbd_read(ioc, local_name, namelen, "export name", errp) < 0) {
         nbd_send_opt_abort(ioc);
         return -1;
     }
     local_name[namelen] = '\0';
-    len -= namelen;
+    len -= namelen;/*减去local_name*/
     if (len) {
         if (len > NBD_MAX_STRING_SIZE) {
             error_setg(errp, "incorrect description length in server's "
@@ -311,6 +336,7 @@ static int nbd_receive_list(QIOChannel *ioc, char **name, char **description,
             nbd_send_opt_abort(ioc);
             return -1;
         }
+        /*减去local_name后*/
         local_desc = g_malloc(len + 1);
         if (nbd_read(ioc, local_desc, len, "export description", errp) < 0) {
             nbd_send_opt_abort(ioc);
@@ -319,6 +345,7 @@ static int nbd_receive_list(QIOChannel *ioc, char **name, char **description,
         local_desc[len] = '\0';
     }
 
+    /*设置出参name,description*/
     trace_nbd_receive_list(local_name, local_desc ?: "");
     *name = g_steal_pointer(&local_name);
     if (description) {
@@ -336,7 +363,7 @@ static int nbd_receive_list(QIOChannel *ioc, char **name, char **description,
  * NBD_OPT_EXPORT_NAME in that case), and > 0 if the export is good to
  * go (with the rest of @info populated).
  */
-static int nbd_opt_info_or_go(QIOChannel *ioc, uint32_t opt,
+static int nbd_opt_info_or_go(QIOChannel *ioc, uint32_t opt/*只接收NBD_OPT_GO，NBD_OPT_INFO两个选项*/,
                               NBDExportInfo *info, Error **errp)
 {
     ERRP_GUARD();
@@ -351,7 +378,7 @@ static int nbd_opt_info_or_go(QIOChannel *ioc, uint32_t opt,
      * flags still 0 is a witness of a broken server. */
     info->flags = 0;
 
-    assert(opt == NBD_OPT_GO || opt == NBD_OPT_INFO);
+    assert(opt == NBD_OPT_GO || opt == NBD_OPT_INFO);/*支持发这两个opt*/
     trace_nbd_opt_info_go_start(nbd_opt_lookup(opt), info->name);
     buf = g_malloc(4 + len + 2 + 2 * info->request_sizes + 1);
     stl_be_p(buf, len);
@@ -361,6 +388,7 @@ static int nbd_opt_info_or_go(QIOChannel *ioc, uint32_t opt,
     if (info->request_sizes) {
         stw_be_p(buf + 4 + len + 2, NBD_INFO_BLOCK_SIZE);
     }
+    /*发送指定opt*/
     error = nbd_send_option_request(ioc, opt,
                                     4 + len + 2 + 2 * info->request_sizes,
                                     buf, errp);
@@ -370,15 +398,19 @@ static int nbd_opt_info_or_go(QIOChannel *ioc, uint32_t opt,
     }
 
     while (1) {
+    	/*接收响应*/
         if (nbd_receive_option_reply(ioc, opt, &reply, errp) < 0) {
             return -1;
         }
+
+        /*处理响应*/
         error = nbd_handle_reply_err(ioc, &reply, true, errp);
         if (error <= 0) {
             return error;
         }
         len = reply.length;
 
+        /*收到响应*/
         if (reply.type == NBD_REP_ACK) {
             /*
              * Server is done sending info, and moved into transmission
@@ -395,6 +427,8 @@ static int nbd_opt_info_or_go(QIOChannel *ioc, uint32_t opt,
             trace_nbd_opt_info_go_success(nbd_opt_lookup(opt));
             return 1;
         }
+
+        /*响应type不正确*/
         if (reply.type != NBD_REP_INFO) {
             error_setg(errp, "unexpected reply type %u (%s), expected %u (%s)",
                        reply.type, nbd_rep_lookup(reply.type),
@@ -408,11 +442,15 @@ static int nbd_opt_info_or_go(QIOChannel *ioc, uint32_t opt,
             nbd_send_opt_abort(ioc);
             return -1;
         }
+
+        /*读取type*/
         if (nbd_read16(ioc, &type, "info type", errp) < 0) {
             nbd_send_opt_abort(ioc);
             return -1;
         }
         len -= sizeof(type);
+
+        /*按照type获取内容*/
         switch (type) {
         case NBD_INFO_EXPORT:
             if (len != sizeof(info->size) + sizeof(info->flags)) {
@@ -512,12 +550,14 @@ static int nbd_receive_query_exports(QIOChannel *ioc,
     bool found_export = false;
 
     trace_nbd_receive_query_exports_start(wantname);
+    /*发送NBD_OPT_LIST opt*/
     if (nbd_send_option_request(ioc, NBD_OPT_LIST, 0, NULL, errp) < 0) {
         return -1;
     }
 
     while (1) {
         char *name;
+        /*收取响应，获得local name*/
         int ret = nbd_receive_list(ioc, &name, NULL, errp);
 
         if (ret < 0) {
@@ -544,8 +584,11 @@ static int nbd_receive_query_exports(QIOChannel *ioc,
             trace_nbd_receive_query_exports_success(wantname);
             return 0;
         }
+
+        /*返回值1*/
         list_empty = false;
         if (!strcmp(name, wantname)) {
+        	/*确认和wantname一致，检查通过*/
             found_export = true;
         }
         g_free(name);
@@ -559,24 +602,29 @@ static int nbd_receive_query_exports(QIOChannel *ioc,
  *        0 if operation is unsupported,
  *        -1 with errp set for any other error
  */
-static int nbd_request_simple_option(QIOChannel *ioc, int opt, bool strict,
+static int nbd_request_simple_option(QIOChannel *ioc, int opt/*命令选项*/, bool strict,
                                      Error **errp)
 {
     NBDOptionReply reply;
     int error;
 
+    /*发送opt对应的请求*/
     if (nbd_send_option_request(ioc, opt, 0, NULL, errp) < 0) {
         return -1;
     }
 
+    /*收取opt对应的响应*/
     if (nbd_receive_option_reply(ioc, opt, &reply, errp) < 0) {
         return -1;
     }
+
+    /*处理响应*/
     error = nbd_handle_reply_err(ioc, &reply, strict, errp);
     if (error <= 0) {
         return error;
     }
 
+    /*响应消息未失败，但type不为ack,报错*/
     if (reply.type != NBD_REP_ACK) {
         error_setg(errp, "Server answered option %d (%s) with unexpected "
                    "reply %" PRIu32 " (%s)", opt, nbd_opt_lookup(opt),
@@ -585,6 +633,7 @@ static int nbd_request_simple_option(QIOChannel *ioc, int opt, bool strict,
         return -1;
     }
 
+    /*响应消息长度必须为0*/
     if (reply.length != 0) {
         error_setg(errp, "Option %d ('%s') response length is %" PRIu32
                    " (it should be zero)", opt, nbd_opt_lookup(opt),
@@ -604,6 +653,7 @@ static QIOChannel *nbd_receive_starttls(QIOChannel *ioc,
     QIOChannelTLS *tioc;
     struct NBDTLSHandshakeData data = { 0 };
 
+    /*发送startttls*/
     ret = nbd_request_simple_option(ioc, NBD_OPT_STARTTLS, true, errp);
     if (ret <= 0) {
         if (ret == 0) {
@@ -657,8 +707,10 @@ static int nbd_send_meta_query(QIOChannel *ioc, uint32_t opt,
     char *data;
     char *p;
 
+    /*export长度不得过长*/
     assert(strnlen(export, NBD_MAX_STRING_SIZE + 1) <= NBD_MAX_STRING_SIZE);
     export_len = strlen(export);
+    /*获得data_len*/
     data_len = sizeof(export_len) + export_len + sizeof(queries);
     if (query) {
         assert(strnlen(query, NBD_MAX_STRING_SIZE + 1) <= NBD_MAX_STRING_SIZE);
@@ -670,14 +722,16 @@ static int nbd_send_meta_query(QIOChannel *ioc, uint32_t opt,
     p = data = g_malloc(data_len);
 
     trace_nbd_opt_meta_request(nbd_opt_lookup(opt), query ?: "(all)", export);
-    stl_be_p(p, export_len);
+    stl_be_p(p, export_len);/*填写长度*/
     memcpy(p += sizeof(export_len), export, export_len);
-    stl_be_p(p += export_len, queries);
+    stl_be_p(p += export_len, queries);/*填写queries*/
     if (query) {
+    	/*如果query不为0，再填充query*/
         stl_be_p(p += sizeof(queries), query_len);
         memcpy(p += sizeof(query_len), query, query_len);
     }
 
+    /*执行opt请求*/
     ret = nbd_send_option_request(ioc, opt, data_len, data, errp);
     g_free(data);
     return ret;
@@ -703,16 +757,19 @@ static int nbd_receive_one_meta_context(QIOChannel *ioc,
     char *local_name = NULL;
     uint32_t local_id;
 
+    /*读取响应头*/
     if (nbd_receive_option_reply(ioc, opt, &reply, errp) < 0) {
         return -1;
     }
 
+    /*响应检查*/
     ret = nbd_handle_reply_err(ioc, &reply, false, errp);
     if (ret <= 0) {
         return ret;
     }
 
     if (reply.type == NBD_REP_ACK) {
+    	/*响应ack*/
         if (reply.length != 0) {
             error_setg(errp, "Unexpected length to ACK response");
             nbd_send_opt_abort(ioc);
@@ -720,6 +777,7 @@ static int nbd_receive_one_meta_context(QIOChannel *ioc,
         }
         return 0;
     } else if (reply.type != NBD_REP_META_CONTEXT) {
+    	/*响应type不为NBD_REP_META_CONTEXT*/
         error_setg(errp, "Unexpected reply type %u (%s), expected %u (%s)",
                    reply.type, nbd_rep_lookup(reply.type),
                    NBD_REP_META_CONTEXT, nbd_rep_lookup(NBD_REP_META_CONTEXT));
@@ -729,6 +787,7 @@ static int nbd_receive_one_meta_context(QIOChannel *ioc,
 
     if (reply.length <= sizeof(local_id) ||
         reply.length > NBD_MAX_BUFFER_SIZE) {
+    	/*响应长度有误*/
         error_setg(errp, "Failed to negotiate meta context, server "
                    "answered with unexpected length %" PRIu32,
                    reply.length);
@@ -736,6 +795,7 @@ static int nbd_receive_one_meta_context(QIOChannel *ioc,
         return -1;
     }
 
+    /*获得local_id*/
     if (nbd_read32(ioc, &local_id, "context id", errp) < 0) {
         return -1;
     }
@@ -743,6 +803,7 @@ static int nbd_receive_one_meta_context(QIOChannel *ioc,
     reply.length -= sizeof(local_id);
     local_name = g_malloc(reply.length + 1);
     if (nbd_read(ioc, local_name, reply.length, "context name", errp) < 0) {
+    	/*读取local_name失败*/
         g_free(local_name);
         return -1;
     }
@@ -750,12 +811,12 @@ static int nbd_receive_one_meta_context(QIOChannel *ioc,
     trace_nbd_opt_meta_reply(nbd_opt_lookup(opt), local_name, local_id);
 
     if (name) {
-        *name = local_name;
+        *name = local_name;/*出参，设置local_name*/
     } else {
         g_free(local_name);
     }
     if (id) {
-        *id = local_id;
+        *id = local_id;/*出参，设置local_id*/
     }
     return 1;
 }
@@ -786,11 +847,13 @@ static int nbd_negotiate_simple_meta_context(QIOChannel *ioc,
     bool received = false;
     char *name = NULL;
 
+    /*构造并发送NBD_OPT_SET_META_CONTEXT*/
     if (nbd_send_meta_query(ioc, NBD_OPT_SET_META_CONTEXT,
                             info->name, context, errp) < 0) {
         return -1;
     }
 
+    /*收取响应，设置name,info->context_id*/
     ret = nbd_receive_one_meta_context(ioc, NBD_OPT_SET_META_CONTEXT,
                                        &name, &info->context_id, errp);
     if (ret < 0) {
@@ -798,6 +861,7 @@ static int nbd_negotiate_simple_meta_context(QIOChannel *ioc,
     }
     if (ret == 1) {
         if (strcmp(context, name)) {
+        	/*响应的name与context不一致，报错*/
             error_setg(errp, "Failed to negotiate meta context '%s', server "
                        "answered with different context '%s'", context,
                        name);
@@ -805,6 +869,8 @@ static int nbd_negotiate_simple_meta_context(QIOChannel *ioc,
             nbd_send_opt_abort(ioc);
             return -1;
         }
+
+        /*匹配*/
         g_free(name);
         received = true;
 
@@ -836,6 +902,7 @@ static int nbd_list_meta_contexts(QIOChannel *ioc,
     int seen_any = false;
     int seen_qemu = false;
 
+    /*发送NBD_OPT_LIST_META_CONTEXT*/
     if (nbd_send_meta_query(ioc, NBD_OPT_LIST_META_CONTEXT,
                             info->name, NULL, errp) < 0) {
         return -1;
@@ -844,6 +911,7 @@ static int nbd_list_meta_contexts(QIOChannel *ioc,
     while (1) {
         char *context;
 
+        /*收取响应，收集local_name*/
         ret = nbd_receive_one_meta_context(ioc, NBD_OPT_LIST_META_CONTEXT,
                                            &context, NULL, errp);
         if (ret == 0 && seen_any && !seen_qemu) {
@@ -898,6 +966,7 @@ static int nbd_start_negotiate(QIOChannel *ioc, QCryptoTLSCreds *tlscreds,
         return -EINVAL;
     }
 
+    /*自ioc中读取initial magic*/
     if (nbd_read64(ioc, &magic, "initial magic", errp) < 0) {
         return -EINVAL;
     }
@@ -908,6 +977,7 @@ static int nbd_start_negotiate(QIOChannel *ioc, QCryptoTLSCreds *tlscreds,
         return -EINVAL;
     }
 
+    /*自ioc中读取server magic*/
     if (nbd_read64(ioc, &magic, "server magic", errp) < 0) {
         return -EINVAL;
     }
@@ -918,6 +988,7 @@ static int nbd_start_negotiate(QIOChannel *ioc, QCryptoTLSCreds *tlscreds,
         uint16_t globalflags;
         bool fixedNewStyle = false;
 
+        /*读取server flags*/
         if (nbd_read16(ioc, &globalflags, "server flags", errp) < 0) {
             return -EINVAL;
         }
@@ -1253,8 +1324,8 @@ int nbd_receive_export_list(QIOChannel *ioc, QCryptoTLSCreds *tlscreds,
 int nbd_init(int fd, QIOChannelSocket *sioc, NBDExportInfo *info,
              Error **errp)
 {
-    unsigned long sector_size = MAX(BDRV_SECTOR_SIZE, info->min_block);
-    unsigned long sectors = info->size / sector_size;
+    unsigned long sector_size = MAX(BDRV_SECTOR_SIZE, info->min_block);/*扇区大小*/
+    unsigned long sectors = info->size / sector_size;/*扇区数目*/
 
     /* FIXME: Once the kernel module is patched to honor block sizes,
      * and to advertise that fact to user space, we should update the
@@ -1268,6 +1339,7 @@ int nbd_init(int fd, QIOChannelSocket *sioc, NBDExportInfo *info,
 
     trace_nbd_init_set_socket();
 
+    /*为nbd设备关联fd*/
     if (ioctl(fd, NBD_SET_SOCK, (unsigned long) sioc->fd) < 0) {
         int serrno = errno;
         error_setg(errp, "Failed to set NBD socket");
@@ -1276,6 +1348,7 @@ int nbd_init(int fd, QIOChannelSocket *sioc, NBDExportInfo *info,
 
     trace_nbd_init_set_block_size(sector_size);
 
+    /*设置nbd设备block size*/
     if (ioctl(fd, NBD_SET_BLKSIZE, sector_size) < 0) {
         int serrno = errno;
         error_setg(errp, "Failed setting NBD block size");
@@ -1287,12 +1360,14 @@ int nbd_init(int fd, QIOChannelSocket *sioc, NBDExportInfo *info,
         trace_nbd_init_trailing_bytes(info->size % sector_size);
     }
 
+    /*设置nbd设备的扇区数目*/
     if (ioctl(fd, NBD_SET_SIZE_BLOCKS, sectors) < 0) {
         int serrno = errno;
         error_setg(errp, "Failed setting size (in blocks)");
         return -serrno;
     }
 
+    /*设置flags*/
     if (ioctl(fd, NBD_SET_FLAGS, (unsigned long) info->flags) < 0) {
         if (errno == ENOTTY) {
             int read_only = (info->flags & NBD_FLAG_READ_ONLY) != 0;
@@ -1322,6 +1397,7 @@ int nbd_client(int fd)
 
     trace_nbd_client_loop();
 
+    /*启动client device*/
     ret = ioctl(fd, NBD_DO_IT);
     if (ret < 0 && errno == EPIPE) {
         /* NBD_DO_IT normally returns EPIPE when someone has disconnected
@@ -1338,7 +1414,7 @@ int nbd_client(int fd)
     ioctl(fd, NBD_CLEAR_QUE);
 
     trace_nbd_client_clear_socket();
-    ioctl(fd, NBD_CLEAR_SOCK);
+    ioctl(fd, NBD_CLEAR_SOCK);/*清除socket*/
 
     errno = serrno;
     return ret;
@@ -1346,9 +1422,9 @@ int nbd_client(int fd)
 
 int nbd_disconnect(int fd)
 {
-    ioctl(fd, NBD_CLEAR_QUE);
-    ioctl(fd, NBD_DISCONNECT);
-    ioctl(fd, NBD_CLEAR_SOCK);
+    ioctl(fd, NBD_CLEAR_QUE);/*kernel当前为空实现*/
+    ioctl(fd, NBD_DISCONNECT);/*所有socket fd指示断开*/
+    ioctl(fd, NBD_CLEAR_SOCK);/*清除socket fd*/
     return 0;
 }
 
@@ -1363,6 +1439,7 @@ int nbd_send_request(QIOChannel *ioc, NBDRequest *request)
                            request->flags, request->type,
                            nbd_cmd_lookup(request->type));
 
+    /*将request填充到buffer中*/
     stw_be_p(buf + 4, request->flags);
     stw_be_p(buf + 6, request->type);
     stq_be_p(buf + 8, request->cookie);
@@ -1378,6 +1455,7 @@ int nbd_send_request(QIOChannel *ioc, NBDRequest *request)
         len = NBD_REQUEST_SIZE;
     }
 
+    /*写request*/
     return nbd_write(ioc, buf, len, NULL);
 }
 
@@ -1424,6 +1502,7 @@ static int nbd_receive_reply_chunk_header(QIOChannel *ioc, NBDReply *chunk,
         len = sizeof(chunk->extended);
     }
 
+    /*自ioc中读取数据*/
     ret = nbd_read(ioc, (uint8_t *)chunk + sizeof(chunk->magic),
                    len - sizeof(chunk->magic), "structured chunk",
                    errp);
@@ -1477,6 +1556,7 @@ nbd_read_eof(BlockDriverState *bs, QIOChannel *ioc, void *buffer, size_t size,
         struct iovec iov = { .iov_base = buffer, .iov_len = size };
         ssize_t len;
 
+        /*自ioc中读取数据*/
         len = qio_channel_readv(ioc, &iov, 1, errp);
         if (len == QIO_CHANNEL_ERR_BLOCK) {
             qio_channel_yield(ioc, G_IO_IN);
@@ -1494,7 +1574,7 @@ nbd_read_eof(BlockDriverState *bs, QIOChannel *ioc, void *buffer, size_t size,
         }
 
         partial = true;
-        size -= len;
+        size -= len;/*待读取长度减少*/
         buffer = (uint8_t*) buffer + len;
     }
     return 1;

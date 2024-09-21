@@ -34,6 +34,7 @@ qio_channel_file_new_fd(int fd)
 
     ioc = QIO_CHANNEL_FILE(object_new(TYPE_QIO_CHANNEL_FILE));
 
+    /*指定文件*/
     ioc->fd = fd;
 
     trace_qio_channel_file_new_fd(ioc, fd);
@@ -52,6 +53,7 @@ qio_channel_file_new_path(const char *path,
 
     ioc = QIO_CHANNEL_FILE(object_new(TYPE_QIO_CHANNEL_FILE));
 
+    /*给定文件路径，打开文件*/
     ioc->fd = qemu_open_old(path, flags, mode);
     if (ioc->fd < 0) {
         object_unref(OBJECT(ioc));
@@ -66,12 +68,14 @@ qio_channel_file_new_path(const char *path,
 }
 
 
+/*初始化QIOChannelFile*/
 static void qio_channel_file_init(Object *obj)
 {
     QIOChannelFile *ioc = QIO_CHANNEL_FILE(obj);
     ioc->fd = -1;
 }
 
+/*销毁QIOChandlleFile*/
 static void qio_channel_file_finalize(Object *obj)
 {
     QIOChannelFile *ioc = QIO_CHANNEL_FILE(obj);
@@ -82,6 +86,7 @@ static void qio_channel_file_finalize(Object *obj)
 }
 
 
+/*QIOChannelFile方式，通过readv函数自fd中读取并填充iov*/
 static ssize_t qio_channel_file_readv(QIOChannel *ioc,
                                       const struct iovec *iov,
                                       size_t niov,
@@ -94,6 +99,7 @@ static ssize_t qio_channel_file_readv(QIOChannel *ioc,
     ssize_t ret;
 
  retry:
+ 	 /*通过readv自fd中读取iov*/
     ret = readv(fioc->fd, iov, niov);
     if (ret < 0) {
         if (errno == EAGAIN) {
@@ -111,6 +117,7 @@ static ssize_t qio_channel_file_readv(QIOChannel *ioc,
     return ret;
 }
 
+/*QIOChannelFile方式，通过writev函数向fd中写入填充好的iov*/
 static ssize_t qio_channel_file_writev(QIOChannel *ioc,
                                        const struct iovec *iov,
                                        size_t niov,
@@ -149,6 +156,7 @@ static int qio_channel_file_set_blocking(QIOChannel *ioc,
 #else
     QIOChannelFile *fioc = QIO_CHANNEL_FILE(ioc);
 
+    /*开启阻塞或非阻塞*/
     if (!g_unix_set_fd_nonblocking(fioc->fd, !enabled, NULL)) {
         error_setg_errno(errp, errno, "Failed to set FD nonblocking");
         return -1;
@@ -166,6 +174,7 @@ static off_t qio_channel_file_seek(QIOChannel *ioc,
     QIOChannelFile *fioc = QIO_CHANNEL_FILE(ioc);
     off_t ret;
 
+    /*seek到指定位置*/
     ret = lseek(fioc->fd, offset, whence);
     if (ret == (off_t)-1) {
         error_setg_errno(errp, errno,
@@ -182,6 +191,7 @@ static int qio_channel_file_close(QIOChannel *ioc,
 {
     QIOChannelFile *fioc = QIO_CHANNEL_FILE(ioc);
 
+    /*文件关闭*/
     if (qemu_close(fioc->fd) < 0) {
         error_setg_errno(errp, errno,
                          "Unable to close file");
@@ -233,13 +243,14 @@ static const TypeInfo qio_channel_file_info = {
     .parent = TYPE_QIO_CHANNEL,
     .name = TYPE_QIO_CHANNEL_FILE,
     .instance_size = sizeof(QIOChannelFile),
-    .instance_init = qio_channel_file_init,
+    .instance_init = qio_channel_file_init,/*此类型实例初始化*/
     .instance_finalize = qio_channel_file_finalize,
-    .class_init = qio_channel_file_class_init,
+    .class_init = qio_channel_file_class_init,/*此类型class初始化*/
 };
 
 static void qio_channel_file_register_types(void)
 {
+	/*注册file*/
     type_register_static(&qio_channel_file_info);
 }
 

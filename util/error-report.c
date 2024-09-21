@@ -390,10 +390,10 @@ static void qemu_log_func(const gchar *log_domain,
 
 void error_init(const char *argv0)
 {
-    const char *p = strrchr(argv0, '/');
+    const char *p = strrchr(argv0, '/');/*取程序名称*/
 
     /* Set the program name for error_print_loc(). */
-    g_set_prgname(p ? p + 1 : argv0);
+    g_set_prgname(p ? p + 1 : argv0);/*设置程序名称*/
 
     /*
      * This sets up glib logging so libraries using it also print their logs

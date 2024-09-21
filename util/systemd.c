@@ -28,6 +28,7 @@ unsigned int check_socket_activation(void)
 
     s = getenv("LISTEN_PID");
     if (s == NULL) {
+    	/*没有提供LISTEN_PID环境变量，直接返回0*/
         return 0;
     }
     err = qemu_strtoul(s, NULL, 10, &pid);

@@ -406,7 +406,7 @@ static uint64_t qemu_opt_get_number_helper(QemuOpts *opts, const char *name,
     return ret;
 }
 
-uint64_t qemu_opt_get_number(QemuOpts *opts, const char *name, uint64_t defval)
+uint64_t qemu_opt_get_number(QemuOpts *opts, const char *name/*选项名称*/, uint64_t defval)
 {
     return qemu_opt_get_number_helper(opts, name, defval, false);
 }

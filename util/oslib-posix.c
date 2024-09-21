@@ -593,16 +593,16 @@ void *qemu_alloc_stack(size_t *sz)
 #ifdef CONFIG_DEBUG_STACK_USAGE
     void *ptr2;
 #endif
-    size_t pagesz = qemu_real_host_page_size();
+    size_t pagesz = qemu_real_host_page_size();/*页大小*/
 #ifdef _SC_THREAD_STACK_MIN
     /* avoid stacks smaller than _SC_THREAD_STACK_MIN */
     long min_stack_sz = sysconf(_SC_THREAD_STACK_MIN);
     *sz = MAX(MAX(min_stack_sz, 0), *sz);
 #endif
     /* adjust stack size to a multiple of the page size */
-    *sz = ROUND_UP(*sz, pagesz);
+    *sz = ROUND_UP(*sz, pagesz);/*将栈size对齐到页*/
     /* allocate one extra page for the guard page */
-    *sz += pagesz;
+    *sz += pagesz;/*多申请一个页*/
 
     flags = MAP_PRIVATE | MAP_ANONYMOUS;
 #if defined(MAP_STACK) && defined(__OpenBSD__)
@@ -615,6 +615,7 @@ void *qemu_alloc_stack(size_t *sz)
     flags |= MAP_STACK;
 #endif
 
+    /*map这一组内存*/
     ptr = mmap(NULL, *sz, PROT_READ | PROT_WRITE, flags, -1, 0);
     if (ptr == MAP_FAILED) {
         perror("failed to allocate memory for stack");
@@ -623,6 +624,7 @@ void *qemu_alloc_stack(size_t *sz)
 
     /* Stack grows down -- guard page at the bottom. */
     if (mprotect(ptr, pagesz, PROT_NONE) != 0) {
+    	/*将尾部的页保护起来，操作失败了*/
         perror("failed to set up stack guard page");
         abort();
     }
@@ -633,7 +635,7 @@ void *qemu_alloc_stack(size_t *sz)
     }
 #endif
 
-    return ptr;
+    return ptr;/*返回申请的栈指针*/
 }
 
 #ifdef CONFIG_DEBUG_STACK_USAGE

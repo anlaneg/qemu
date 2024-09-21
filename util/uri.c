@@ -147,6 +147,7 @@ static void uri_clean(URI *uri);
  ************************************************************************/
 
 #define ISA_DIGIT(p) ((*(p) >= '0') && (*(p) <= '9'))
+/**p是否为大小写字符*/
 #define ISA_ALPHA(p) (((*(p) >= 'a') && (*(p) <= 'z')) ||                      \
                       ((*(p) >= 'A') && (*(p) <= 'Z')))
 #define ISA_HEXDIG(p)                                                          \
@@ -217,6 +218,7 @@ static int rfc3986_parse_scheme(URI *uri, const char **str)
 
     cur = *str;
     if (!ISA_ALPHA(cur)) {
+    	/*不能字符开头*/
         return 2;
     }
     cur++;
@@ -226,9 +228,10 @@ static int rfc3986_parse_scheme(URI *uri, const char **str)
     }
     if (uri != NULL) {
         g_free(uri->scheme);
+        /*遇到非预期内容，认为是scheme*/
         uri->scheme = g_strndup(*str, cur - *str);
     }
-    *str = cur;
+    *str = cur;/*指向非预期内容*/
     return 0;
 }
 
@@ -905,11 +908,13 @@ static int rfc3986_parse(URI *uri, const char *str)
 {
     int ret;
 
+    /*解析str,获取scheme及其后内容str*/
     ret = rfc3986_parse_scheme(uri, &str);
     if (ret != 0) {
         return ret;
     }
     if (*str != ':') {
+    	/*scheme后不以':'开头，报错*/
         return 1;
     }
     str++;
@@ -955,9 +960,10 @@ static int rfc3986_parse_uri_reference(URI *uri, const char *str)
     int ret;
 
     if (str == NULL) {
+    	/*url字符串为空，失败*/
         return -1;
     }
-    uri_clean(uri);
+    uri_clean(uri);/*初始化uri*/
 
     /*
      * Try first to parse absolute refs, then fallback to relative if
@@ -1065,6 +1071,7 @@ URI *uri_parse_raw(const char *str, int raw)
  */
 URI *uri_new(void)
 {
+	/*构造URI对象*/
     return g_new0(URI, 1);
 }
 
@@ -1315,6 +1322,7 @@ char *uri_to_string(URI *uri)
  */
 static void uri_clean(URI *uri)
 {
+	/*初始化uri*/
     if (uri == NULL) {
         return;
     }

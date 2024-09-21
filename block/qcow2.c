@@ -2281,6 +2281,7 @@ static coroutine_fn int qcow2_add_task(BlockDriverState *bs,
     Qcow2AioTask local_task;
     Qcow2AioTask *task = pool ? g_new(Qcow2AioTask, 1) : &local_task;
 
+    /*构造aio task*/
     *task = (Qcow2AioTask) {
         .task.func = func,
         .bs = bs,
@@ -2299,6 +2300,7 @@ static coroutine_fn int qcow2_add_task(BlockDriverState *bs,
                          qiov, qiov_offset);
 
     if (!pool) {
+    	/*pool不存在，直接调用func*/
         return func(&task->task);
     }
 
@@ -2365,7 +2367,7 @@ static int coroutine_fn GRAPH_RDLOCK qcow2_co_preadv_task_entry(AioTask *task)
 }
 
 static int coroutine_fn GRAPH_RDLOCK
-qcow2_co_preadv_part(BlockDriverState *bs, int64_t offset, int64_t bytes,
+qcow2_co_preadv_part(BlockDriverState *bs, int64_t offset/*偏移量*/, int64_t bytes/*字节数*/,
                      QEMUIOVector *qiov, size_t qiov_offset,
                      BdrvRequestFlags flags)
 {
@@ -2385,6 +2387,7 @@ qcow2_co_preadv_part(BlockDriverState *bs, int64_t offset, int64_t bytes,
         }
 
         qemu_co_mutex_lock(&s->lock);
+        /*加锁后获取*/
         ret = qcow2_get_host_offset(bs, offset, &cur_bytes,
                                     &host_offset, &type);
         qemu_co_mutex_unlock(&s->lock);
@@ -6130,7 +6133,7 @@ BlockDriver bdrv_qcow2 = {
     .bdrv_has_zero_init   = qcow2_has_zero_init,
     .bdrv_co_block_status = qcow2_co_block_status,
 
-    .bdrv_co_preadv_part    = qcow2_co_preadv_part,
+    .bdrv_co_preadv_part    = qcow2_co_preadv_part,/*部分读*/
     .bdrv_co_pwritev_part   = qcow2_co_pwritev_part,
     .bdrv_co_flush_to_os    = qcow2_co_flush_to_os,
 

@@ -95,6 +95,7 @@ qio_channel_socket_set_fd(QIOChannelSocket *sioc,
     sioc->localAddrLen = sizeof(sioc->localAddr);
 
 
+    /*获取对端地址*/
     if (getpeername(fd, (struct sockaddr *)&sioc->remoteAddr,
                     &sioc->remoteAddrLen) < 0) {
         if (errno == ENOTCONN) {
@@ -107,6 +108,7 @@ qio_channel_socket_set_fd(QIOChannelSocket *sioc,
         }
     }
 
+    /*获取本端地址*/
     if (getsockname(fd, (struct sockaddr *)&sioc->localAddr,
                     &sioc->localAddrLen) < 0) {
         error_setg_errno(errp, errno,
@@ -232,6 +234,7 @@ int qio_channel_socket_listen_sync(QIOChannelSocket *ioc,
     trace_qio_channel_socket_listen_sync(ioc, addr, num);
     fd = socket_listen(addr, num, errp);
     if (fd < 0) {
+    	/*创建listen fd失败*/
         trace_qio_channel_socket_listen_fail(ioc);
         return -1;
     }
@@ -534,6 +537,7 @@ static ssize_t qio_channel_socket_readv(QIOChannel *ioc,
     }
 
  retry:
+ 	 /*自socket收取消息，并填充msg*/
     ret = recvmsg(sioc->fd, &msg, sflags);
     if (ret < 0) {
         if (errno == EAGAIN) {

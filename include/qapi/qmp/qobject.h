@@ -136,6 +136,7 @@ static inline QType qobject_type(const QObject *obj)
 static inline QObject *qobject_check_type(const QObject *obj, QType type)
 {
     if (obj && qobject_type(obj) == type) {
+    	/*类型匹配，返回obj*/
         return (QObject *)obj;
     } else {
         return NULL;

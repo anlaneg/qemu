@@ -1081,12 +1081,14 @@ void qemu_init_exec_dir(const char *argv0)
     char buf[PATH_MAX];
 
     if (exec_dir) {
+    	/*已设置，直接返回*/
         return;
     }
 
 #if defined(__linux__)
     {
         int len;
+        /*读取当前进程对应的链接*/
         len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
         if (len > 0) {
             buf[len] = 0;
@@ -1140,8 +1142,11 @@ void qemu_init_exec_dir(const char *argv0)
     /* If we don't have any way of figuring out the actual executable
        location then try argv[0].  */
     if (!p && argv0) {
+    	/*以上流程没有设置成功，从argv0获取路径*/
         p = realpath(argv0, buf);
     }
+
+    /*利用p初始化exec_dir*/
     if (p) {
         exec_dir = g_path_get_dirname(p);
     } else {

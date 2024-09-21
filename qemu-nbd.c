@@ -256,7 +256,7 @@ static int qemu_nbd_client_list(SocketAddress *saddr, QCryptoTLSCreds *tls,
 
 
 struct NbdClientOpts {
-    char *device;
+    char *device;/*要连接的nbd设备*/
     char *srcpath;
     SocketAddress *saddr;
     int old_stderr;
@@ -312,6 +312,7 @@ static void *nbd_client_thread(void *arg)
     if (qio_channel_socket_connect_sync(sioc,
                                         opts->saddr,
                                         &local_error) < 0) {
+    	/*与对端建立连接失败*/
         error_report_err(local_error);
         goto out;
     }
@@ -324,6 +325,7 @@ static void *nbd_client_thread(void *arg)
         goto out;
     }
 
+    /*打开nbd设备*/
     fd = open(opts->device, O_RDWR);
     if (fd < 0) {
         /* Linux-only, we can use %m in printf.  */
@@ -331,13 +333,14 @@ static void *nbd_client_thread(void *arg)
         goto out;
     }
 
+    /*配置nbd设备*/
     if (nbd_init(fd, sioc, &info, &local_error) < 0) {
         error_report_err(local_error);
         goto out;
     }
 
     /* update partition table */
-    pthread_create(&show_parts_thread, NULL, show_parts, opts->device);
+    pthread_create(&show_parts_thread, NULL, show_parts/*打开此设备*/, opts->device);
 
     if (opts->verbose && !opts->fork_process) {
         fprintf(stderr, "NBD device %s is now connected to %s\n",
@@ -346,6 +349,7 @@ static void *nbd_client_thread(void *arg)
         nbd_client_release_pipe(opts->old_stderr);
     }
 
+    /*启动nbd client*/
     if (nbd_client(fd) < 0) {
         goto out;
     }
@@ -410,6 +414,7 @@ static SocketAddress *nbd_build_socket_address(const char *sockpath,
 
     saddr = g_new0(SocketAddress, 1);
     if (sockpath) {
+    	/*设置unix.path*/
         saddr->type = SOCKET_ADDRESS_TYPE_UNIX;
         saddr->u.q_unix.path = g_strdup(sockpath);
     } else {
@@ -470,6 +475,7 @@ static QCryptoTLSCreds *nbd_get_tls_creds(const char *id, bool list,
     return creds;
 }
 
+/*返回默认的ip地址及port*/
 static void setup_address_and_port(const char **address, const char **port)
 {
     if (*address == NULL) {
@@ -525,6 +531,7 @@ static void qemu_nbd_shutdown(void)
     bdrv_close_all();
 }
 
+//用法，例如：qemu-nbd -c /dev/nbd0 -f qcow2 file.qcow2
 int main(int argc, char **argv)
 {
     BlockBackend *blk;
@@ -537,8 +544,8 @@ int main(int argc, char **argv)
     char *sockpath = NULL;
     QemuOpts *sn_opts = NULL;
     const char *sn_id_or_name = NULL;
-    const char *sopt = "hVb:o:p:rsnc:dvk:e:f:tl:x:T:D:AB:L";
-    struct option lopt[] = {
+    const char *sopt = "hVb:o:p:rsnc:dvk:e:f:tl:x:T:D:AB:L";/*短选项*/
+    struct option lopt[]/*长选项*/ = {
         { "help", no_argument, NULL, 'h' },
         { "version", no_argument, NULL, 'V' },
         { "bind", required_argument, NULL, 'b' },
@@ -548,7 +555,7 @@ int main(int argc, char **argv)
         { "read-only", no_argument, NULL, 'r' },
         { "allocation-depth", no_argument, NULL, 'A' },
         { "bitmap", required_argument, NULL, 'B' },
-        { "connect", required_argument, NULL, 'c' },
+        { "connect", required_argument, NULL, 'c' },/*指定要链接的nbd设备*/
         { "disconnect", no_argument, NULL, 'd' },
         { "list", no_argument, NULL, 'L' },
         { "snapshot", no_argument, NULL, 's' },
@@ -560,7 +567,7 @@ int main(int argc, char **argv)
         { "detect-zeroes", required_argument, NULL,
           QEMU_NBD_OPT_DETECT_ZEROES },
         { "shared", required_argument, NULL, 'e' },
-        { "format", required_argument, NULL, 'f' },
+        { "format", required_argument, NULL, 'f' },/*指明文件格式*/
         { "persistent", no_argument, NULL, 't' },
         { "verbose", no_argument, NULL, 'v' },
         { "object", required_argument, NULL, QEMU_NBD_OPT_OBJECT },
@@ -616,14 +623,14 @@ int main(int argc, char **argv)
     os_setup_signal_handling();
 #endif
 
-    socket_init();
+    socket_init();/*windows初始化socket*/
     error_init(argv[0]);
-    module_call_init(MODULE_INIT_TRACE);
+    module_call_init(MODULE_INIT_TRACE);/*trace初始化*/
     qcrypto_init(&error_fatal);
 
-    module_call_init(MODULE_INIT_QOM);
+    module_call_init(MODULE_INIT_QOM);/*qom初始化*/
     qemu_add_opts(&qemu_trace_opts);
-    qemu_init_exec_dir(argv[0]);
+    qemu_init_exec_dir(argv[0]);/*初始化exec_dir*/
 
     while ((ch = getopt_long(argc, argv, sopt, lopt, &opt_ind)) != -1) {
         switch (ch) {
@@ -734,9 +741,10 @@ int main(int argc, char **argv)
             }
             break;
         case 'd':
-            disconnect = true;
+            disconnect = true;/*指定与nbd设备断开*/
             break;
         case 'c':
+        	/*指定要链接的nbd设备*/
             opts.device = optarg;
             break;
         case 'e':
@@ -747,7 +755,7 @@ int main(int argc, char **argv)
             }
             break;
         case 'f':
-            fmt = optarg;
+            fmt = optarg;/*指定文件格式*/
             break;
         case 't':
             persistent = 1;
@@ -815,6 +823,7 @@ int main(int argc, char **argv)
     }
 
     if (list) {
+    	/*通过-L指明需要执行list操作*/
         if (argc != optind) {
             error_report("List mode is incompatible with a file name");
             exit(EXIT_FAILURE);
@@ -830,14 +839,17 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
         }
     } else if ((argc - optind) != 1) {
+    	/*其它参数数量必须为1，否则报错*/
         error_report("Invalid number of arguments");
         error_printf("Try `%s --help' for more information.\n", argv[0]);
         exit(EXIT_FAILURE);
     } else if (!export_name) {
+    	/*没有指明-x参数，初始化export_name*/
         export_name = "";
     }
 
     if (!trace_init_backends()) {
+    	/*trace后端初始化失败*/
         exit(1);
     }
     trace_init_file();
@@ -846,6 +858,7 @@ int main(int argc, char **argv)
     socket_activation = check_socket_activation();
     if (socket_activation == 0) {
         if (!sockpath) {
+        	/*未通过-k提供sockpath,返回默认的ip地址及port*/
             setup_address_and_port(&bindto, &port);
         }
     } else {
@@ -910,6 +923,7 @@ int main(int argc, char **argv)
     }
 
     if (list) {
+    	/*-L 参数处理*/
         opts.saddr = nbd_build_socket_address(sockpath, bindto, port);
         return qemu_nbd_client_list(opts.saddr, tlscreds,
                                     tlshostname ? tlshostname : bindto);
@@ -922,8 +936,10 @@ int main(int argc, char **argv)
     }
 #else /* HAVE_NBD_DEVICE */
     if (disconnect) {
+    	/*指明断开，打开此设备，并进行断开*/
         int nbdfd = open(argv[optind], O_RDWR);
         if (nbdfd < 0) {
+        	/*设备不存在*/
             error_report("Cannot open %s: %s", argv[optind],
                          strerror(errno));
             exit(EXIT_FAILURE);
@@ -955,6 +971,7 @@ int main(int argc, char **argv)
          */
         pid = fork();
         if (pid < 0) {
+        	/*fork失败*/
             error_report("Failed to fork: %s", strerror(errno));
             exit(EXIT_FAILURE);
         } else if (pid == 0) {
@@ -1030,6 +1047,7 @@ int main(int argc, char **argv)
 #endif /* WIN32 */
     }
 
+    /*初始化sockpath*/
     if (opts.device != NULL && sockpath == NULL) {
         sockpath = g_malloc(128);
         snprintf(sockpath, 128, SOCKET_PATH, basename(opts.device));
@@ -1051,6 +1069,7 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
         }
 #endif
+        /*设置bind地址*/
         opts.saddr = nbd_build_socket_address(sockpath, bindto, port);
         if (qio_net_listener_open_sync(server, opts.saddr, backlog,
                                        &local_err) < 0) {
@@ -1084,9 +1103,10 @@ int main(int argc, char **argv)
     }
 
     qemu_init_main_loop(&error_fatal);
-    bdrv_init();
+    bdrv_init();/*初始化block*/
     atexit(qemu_nbd_shutdown);
 
+    /*image路径*/
     opts.srcpath = argv[optind];
     if (imageOpts) {
         QemuOpts *o;
@@ -1104,9 +1124,11 @@ int main(int argc, char **argv)
         blk = blk_new_open(NULL, NULL, options, flags, &local_err);
     } else {
         if (fmt) {
+        	/*指定了imgage的format,添加选项driver*/
             options = qdict_new();
             qdict_put_str(options, "driver", fmt);
         }
+        /*打开block设备*/
         blk = blk_new_open(opts.srcpath, NULL, options, flags, &local_err);
     }
 

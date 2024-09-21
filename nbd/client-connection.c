@@ -86,6 +86,7 @@ NBDClientConnection *nbd_client_connection_new(const SocketAddress *saddr,
     NBDClientConnection *conn = g_new(NBDClientConnection, 1);
 
     object_ref(OBJECT(tlscreds));
+    /*初始化connection*/
     *conn = (NBDClientConnection) {
         .saddr = QAPI_CLONE(SocketAddress, saddr),
         .tlscreds = tlscreds,

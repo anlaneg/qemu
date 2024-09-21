@@ -31,6 +31,7 @@
 #define QEMU_ALIGNED(X) __attribute__((aligned(X)))
 
 #ifndef glue
+/*将两个标识符粘起来形式一个标识符*/
 #define xglue(x, y) x ## y
 #define glue(x, y) xglue(x, y)
 #define stringify(s) tostring(s)
@@ -225,6 +226,7 @@
 
 /* Expands to either SECOND_ARG(junk, 1, 0) or SECOND_ARG(IS_EMPTY_JUNK_CONFIG_FOO 1, 0)  */
 #define SECOND_ARG(first, second, ...) second
+/*junk_maybecomma展开可以为一个逗号表达式，这样SECOND_ARGS就可以返回1，否则默认返回0*/
 #define IS_EMPTY_(junk_maybecomma)     SECOND_ARG(junk_maybecomma 1, 0)
 
 #endif /* COMPILER_H */

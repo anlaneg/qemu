@@ -3329,7 +3329,7 @@ void *qemu_try_blockalign(BlockDriverState *bs, size_t size)
         size = align;
     }
 
-    return qemu_try_memalign(align, size);
+    return qemu_try_memalign(align, size);/*申请内存并进行对齐*/
 }
 
 void *qemu_try_blockalign0(BlockDriverState *bs, size_t size)

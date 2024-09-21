@@ -167,17 +167,18 @@ void qdict_extract_subqdict(QDict *src, QDict **dst, const char *start)
     const char *p;
 
     if (dst) {
-        *dst = qdict_new();
+        *dst = qdict_new();/*申请QDictEntry*/
     }
-    entry = qdict_first(src);
+    entry = qdict_first(src);/*取首个entry*/
 
     while (entry != NULL) {
-        next = qdict_next(src, entry);
-        if (strstart(entry->key, start, &p)) {
+        next = qdict_next(src, entry);/*取下一个entry*/
+        if (strstart(entry->key, start, &p/*出参，start之后的内容*/)) {
             if (dst) {
+            	/*将此key，value存入到dst中*/
                 qdict_put_obj(*dst, p, qobject_ref(entry->value));
             }
-            qdict_del(src, entry->key);
+            qdict_del(src, entry->key);/*原集合中移除此entry*/
         }
         entry = next;
     }
@@ -558,8 +559,10 @@ static QObject *qdict_crumple_for_keyval_qiv(QDict *src, Error **errp)
         switch (qobject_type(ent->value)) {
         case QTYPE_QNULL:
         case QTYPE_QSTRING:
+        	/*跳过字符串类型及null*/
             continue;
         case QTYPE_QNUM:
+        	/*由整型转string类型*/
             s = buf = qnum_to_string(qobject_to(QNum, ent->value));
             break;
         case QTYPE_QDICT:
@@ -567,6 +570,7 @@ static QObject *qdict_crumple_for_keyval_qiv(QDict *src, Error **errp)
             /* @src isn't flat; qdict_crumple() will fail */
             continue;
         case QTYPE_QBOOL:
+        	/*bool类型转字符串*/
             s = qbool_get_bool(qobject_to(QBool, ent->value))
                 ? "on" : "off";
             break;
@@ -575,8 +579,10 @@ static QObject *qdict_crumple_for_keyval_qiv(QDict *src, Error **errp)
         }
 
         if (!tmp) {
+        	/*首次，初始化tmp,clone src变量*/
             tmp = qdict_clone_shallow(src);
         }
+        /*将QTYPE_QNUM,QTYPE_QBOOL类型的dict内容更新到tmp中，变为string类型*/
         qdict_put_str(tmp, ent->key, s);
         g_free(buf);
     }
