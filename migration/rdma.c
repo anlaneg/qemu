@@ -238,6 +238,7 @@ static const char *control_desc(unsigned int rdma_control)
     return strs[rdma_control];
 }
 
+#if !defined(htonll)
 static uint64_t htonll(uint64_t v)
 {
     union { uint32_t lv[2]; uint64_t llv; } u;
@@ -245,13 +246,16 @@ static uint64_t htonll(uint64_t v)
     u.lv[1] = htonl(v & 0xFFFFFFFFULL);
     return u.llv;
 }
+#endif
 
+#if !defined(ntohll)
 static uint64_t ntohll(uint64_t v)
 {
     union { uint32_t lv[2]; uint64_t llv; } u;
     u.llv = v;
     return ((uint64_t)ntohl(u.lv[0]) << 32) | (uint64_t) ntohl(u.lv[1]);
 }
+#endif
 
 static void dest_block_to_network(RDMADestBlock *db)
 {
@@ -289,7 +293,6 @@ typedef struct RDMALocalBlocks {
 typedef struct RDMAContext {
     char *host;
     int port;
-    char *host_port;
 
     RDMAWorkRequestData wr_data[RDMA_WRID_MAX];
 
@@ -2205,7 +2208,7 @@ retry:
     stat64_add(&mig_stats.normal_pages, sge.length / qemu_target_page_size());
     /*
      * We are adding to transferred the amount of data written, but no
-     * overhead at all.  I will asume that RDMA is magicaly and don't
+     * overhead at all.  I will assume that RDMA is magicaly and don't
      * need to transfer (at least) the addresses where it wants to
      * write the pages.  Here it looks like it should be something
      * like:
@@ -2431,9 +2434,7 @@ static void qemu_rdma_cleanup(RDMAContext *rdma)
         rdma->channel = NULL;
     }
     g_free(rdma->host);
-    g_free(rdma->host_port);
     rdma->host = NULL;
-    rdma->host_port = NULL;
 }
 
 
@@ -2723,28 +2724,16 @@ static void qemu_rdma_return_path_dest_init(RDMAContext *rdma_return_path,
     rdma_return_path->is_return_path = true;
 }
 
-static RDMAContext *qemu_rdma_data_init(const char *host_port, Error **errp)
+static RDMAContext *qemu_rdma_data_init(InetSocketAddress *saddr, Error **errp)
 {
     RDMAContext *rdma = NULL;
-    InetSocketAddress *addr;
 
     rdma = g_new0(RDMAContext, 1);
     rdma->current_index = -1;
     rdma->current_chunk = -1;
 
-    addr = g_new(InetSocketAddress, 1);
-    if (!inet_parse(addr, host_port, NULL)) {
-        rdma->port = atoi(addr->port);
-        rdma->host = g_strdup(addr->host);
-        rdma->host_port = g_strdup(host_port);
-    } else {
-        error_setg(errp, "RDMA ERROR: bad RDMA migration address '%s'",
-                   host_port);
-        g_free(rdma);
-        rdma = NULL;
-    }
-
-    qapi_free_InetSocketAddress(addr);
+    rdma->host = g_strdup(saddr->host);
+    rdma->port = atoi(saddr->port);
     return rdma;
 }
 
@@ -3353,6 +3342,7 @@ static int qemu_rdma_accept(RDMAContext *rdma)
                                             .private_data_len = sizeof(cap),
                                          };
     RDMAContext *rdma_return_path = NULL;
+    g_autoptr(InetSocketAddress) isock = g_new0(InetSocketAddress, 1);
     struct rdma_cm_event *cm_event;
     struct ibv_context *verbs;
     int ret;
@@ -3367,13 +3357,16 @@ static int qemu_rdma_accept(RDMAContext *rdma)
         goto err_rdma_dest_wait;
     }
 
+    isock->host = g_strdup(rdma->host);
+    isock->port = g_strdup_printf("%d", rdma->port);
+
     /*
      * initialize the RDMAContext for return path for postcopy after first
      * connection request reached.
      */
     if ((migrate_postcopy() || migrate_return_path())
         && !rdma->is_return_path) {
-        rdma_return_path = qemu_rdma_data_init(rdma->host_port, NULL);
+        rdma_return_path = qemu_rdma_data_init(isock, NULL);
         if (rdma_return_path == NULL) {
             rdma_ack_cm_event(cm_event);
             goto err_rdma_dest_wait;
@@ -4046,7 +4039,6 @@ static void rdma_accept_incoming_migration(void *opaque)
 {
     RDMAContext *rdma = opaque;
     QEMUFile *f;
-    Error *local_err = NULL;
 
     trace_qemu_rdma_accept_incoming_migration();
     if (qemu_rdma_accept(rdma) < 0) {
@@ -4068,13 +4060,11 @@ static void rdma_accept_incoming_migration(void *opaque)
     }
 
     rdma->migration_started_on_destination = 1;
-    migration_fd_process_incoming(f, &local_err);
-    if (local_err) {
-        error_reportf_err(local_err, "RDMA ERROR:");
-    }
+    migration_fd_process_incoming(f);
 }
 
-void rdma_start_incoming_migration(const char *host_port, Error **errp)
+void rdma_start_incoming_migration(InetSocketAddress *host_port,
+                                   Error **errp)
 {
     MigrationState *s = migrate_get_current();
     int ret;
@@ -4118,13 +4108,12 @@ cleanup_rdma:
 err:
     if (rdma) {
         g_free(rdma->host);
-        g_free(rdma->host_port);
     }
     g_free(rdma);
 }
 
 void rdma_start_outgoing_migration(void *opaque,
-                            const char *host_port, Error **errp)
+                            InetSocketAddress *host_port, Error **errp)
 {
     MigrationState *s = opaque;
     RDMAContext *rdma_return_path = NULL;

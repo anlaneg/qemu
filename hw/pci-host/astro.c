@@ -19,6 +19,8 @@
 
 #define TYPE_ASTRO_IOMMU_MEMORY_REGION "astro-iommu-memory-region"
 
+#define F_EXTEND(addr) ((addr) | MAKE_64BIT_MASK(32, 32))
+
 #include "qemu/osdep.h"
 #include "qemu/module.h"
 #include "qemu/units.h"
@@ -30,6 +32,7 @@
 #include "hw/pci-host/astro.h"
 #include "hw/hppa/hppa_hardware.h"
 #include "migration/vmstate.h"
+#include "target/hppa/cpu.h"
 #include "trace.h"
 #include "qom/object.h"
 
@@ -119,10 +122,6 @@ static MemTxResult elroy_chip_read_with_attrs(void *opaque, hwaddr addr,
     case 0x0800:                /* IOSAPIC_REG_SELECT */
         val = s->iosapic_reg_select;
         break;
-    case 0x0808:
-        val = UINT64_MAX;            /* XXX: tbc. */
-        g_assert_not_reached();
-        break;
     case 0x0810:                /* IOSAPIC_REG_WINDOW */
         switch (s->iosapic_reg_select) {
         case 0x01:              /* IOSAPIC_REG_VERSION */
@@ -132,15 +131,21 @@ static MemTxResult elroy_chip_read_with_attrs(void *opaque, hwaddr addr,
             if (s->iosapic_reg_select < ARRAY_SIZE(s->iosapic_reg)) {
                 val = s->iosapic_reg[s->iosapic_reg_select];
             } else {
-                trace_iosapic_reg_read(s->iosapic_reg_select, size, val);
-                g_assert_not_reached();
+                goto check_hf;
             }
         }
         trace_iosapic_reg_read(s->iosapic_reg_select, size, val);
         break;
     default:
-        trace_elroy_read(addr, size, val);
-        g_assert_not_reached();
+    check_hf:
+        if (s->status_control & HF_ENABLE) {
+            val = 0;
+            ret = MEMTX_DECODE_ERROR;
+        } else {
+            /* return -1ULL if HardFail is disabled */
+            val = ~0;
+            ret = MEMTX_OK;
+        }
     }
     trace_elroy_read(addr, size, val);
 
@@ -163,6 +168,8 @@ static MemTxResult elroy_chip_write_with_attrs(void *opaque, hwaddr addr,
     trace_elroy_write(addr, size, val);
 
     switch ((addr >> 3) << 3) {
+    case 0x000: /* PCI_ID & PCI_COMMAND_STATUS_REG */
+        break;
     case 0x080:
         put_val_in_int64(&s->arb_mask, addr, size, val);
         break;
@@ -171,6 +178,9 @@ static MemTxResult elroy_chip_write_with_attrs(void *opaque, hwaddr addr,
         break;
     case 0x200 ... 0x250 - 1:   /* LMMIO, GMMIO, WLMMIO, WGMMIO, ... */
         put_val_in_arrary(s->mmio_base, 0x200, addr, size, val);
+        break;
+    case 0x300: /* ibase */
+    case 0x308: /* imask */
         break;
     case 0x0680:
         put_val_in_int64(&s->error_config, addr, size, val);
@@ -183,7 +193,7 @@ static MemTxResult elroy_chip_write_with_attrs(void *opaque, hwaddr addr,
         if (s->iosapic_reg_select < ARRAY_SIZE(s->iosapic_reg)) {
             s->iosapic_reg[s->iosapic_reg_select] = val;
         } else {
-            g_assert_not_reached();
+            goto check_hf;
         }
         break;
     case 0x0840:                /* IOSAPIC_REG_EOI */
@@ -196,7 +206,10 @@ static MemTxResult elroy_chip_write_with_attrs(void *opaque, hwaddr addr,
         }
         break;
     default:
-        g_assert_not_reached();
+    check_hf:
+        if (s->status_control & HF_ENABLE) {
+            return MEMTX_DECODE_ERROR;
+        }
     }
     return MEMTX_OK;
 }
@@ -266,22 +279,6 @@ static const MemoryRegionOps elroy_config_addr_ops = {
 };
 
 
-/*
- * A subroutine of astro_translate_iommu that builds an IOMMUTLBEntry using the
- * given translated address and mask.
- */
-static bool make_iommu_tlbe(hwaddr addr, hwaddr taddr, hwaddr mask,
-                            IOMMUTLBEntry *ret)
-{
-    hwaddr tce_mask = ~((1ull << 12) - 1);
-    ret->target_as = &address_space_memory;
-    ret->iova = addr & tce_mask;
-    ret->translated_addr = taddr & tce_mask;
-    ret->addr_mask = ~tce_mask;
-    ret->perm = IOMMU_RW;
-    return true;
-}
-
 /* Handle PCI-to-system address translation.  */
 static IOMMUTLBEntry astro_translate_iommu(IOMMUMemoryRegion *iommu,
                                              hwaddr addr,
@@ -289,53 +286,59 @@ static IOMMUTLBEntry astro_translate_iommu(IOMMUMemoryRegion *iommu,
                                              int iommu_idx)
 {
     AstroState *s = container_of(iommu, AstroState, iommu);
-    IOMMUTLBEntry ret = {
-        .target_as = &address_space_memory,
-        .iova = addr,
-        .translated_addr = 0,
-        .addr_mask = ~(hwaddr)0,
-        .perm = IOMMU_NONE,
-    };
-    hwaddr pdir_ptr, index, a, ibase;
+    hwaddr pdir_ptr, index, ibase;
     hwaddr addr_mask = 0xfff; /* 4k translation */
     uint64_t entry;
 
 #define IOVP_SHIFT              12   /* equals PAGE_SHIFT */
 #define PDIR_INDEX(iovp)        ((iovp) >> IOVP_SHIFT)
-#define IOVP_MASK               PAGE_MASK
 #define SBA_PDIR_VALID_BIT      0x8000000000000000ULL
+
+    addr &= ~addr_mask;
+
+    /*
+     * Default translation: "32-bit PCI Addressing on 40-bit Runway".
+     * For addresses in the 32-bit memory address range ... and then
+     * language which not-coincidentally matches the PSW.W=0 mapping.
+     */
+    if (addr <= UINT32_MAX) {
+        entry = hppa_abs_to_phys_pa2_w0(addr);
+    } else {
+        entry = addr;
+    }
 
     /* "range enable" flag cleared? */
     if ((s->tlb_ibase & 1) == 0) {
-        make_iommu_tlbe(addr, addr, addr_mask, &ret);
-        return ret;
+        goto skip;
     }
 
-    a = addr;
     ibase = s->tlb_ibase & ~1ULL;
-    if ((a & s->tlb_imask) != ibase) {
+    if ((addr & s->tlb_imask) != ibase) {
         /* do not translate this one! */
-        make_iommu_tlbe(addr, addr, addr_mask, &ret);
-        return ret;
+        goto skip;
     }
-    index = PDIR_INDEX(a);
+
+    index = PDIR_INDEX(addr);
     pdir_ptr = s->tlb_pdir_base + index * sizeof(entry);
     entry = ldq_le_phys(&address_space_memory, pdir_ptr);
+
     if (!(entry & SBA_PDIR_VALID_BIT)) { /* I/O PDIR entry valid ? */
-        g_assert_not_reached();
-        goto failure;
+        /* failure */
+        return (IOMMUTLBEntry) { .perm = IOMMU_NONE };
     }
+
     entry &= ~SBA_PDIR_VALID_BIT;
     entry >>= IOVP_SHIFT;
     entry <<= 12;
-    entry |= addr & 0xfff;
-    make_iommu_tlbe(addr, entry, addr_mask, &ret);
-    goto success;
 
- failure:
-    ret = (IOMMUTLBEntry) { .perm = IOMMU_NONE };
- success:
-    return ret;
+ skip:
+    return (IOMMUTLBEntry) {
+        .target_as = &address_space_memory,
+        .iova = addr,
+        .translated_addr = entry,
+        .addr_mask = addr_mask,
+        .perm = IOMMU_RW,
+    };
 }
 
 static AddressSpace *elroy_pcihost_set_iommu(PCIBus *bus, void *opaque,
@@ -344,6 +347,10 @@ static AddressSpace *elroy_pcihost_set_iommu(PCIBus *bus, void *opaque,
     ElroyState *s = opaque;
     return &s->astro->iommu_as;
 }
+
+static const PCIIOMMUOps elroy_pcihost_iommu_ops = {
+    .get_address_space = elroy_pcihost_set_iommu,
+};
 
 /*
  * Encoding in IOSAPIC:
@@ -382,7 +389,7 @@ static void elroy_set_irq(void *opaque, int irq, int level)
         uint32_t ena = bit & ~old_ilr;
         s->ilr = old_ilr | bit;
         if (ena != 0) {
-            stl_be_phys(&address_space_memory, cpu_hpa, val & 63);
+            stl_be_phys(&address_space_memory, F_EXTEND(cpu_hpa), val & 63);
         }
     } else {
         s->ilr = old_ilr & ~bit;
@@ -462,7 +469,7 @@ static const VMStateDescription vmstate_elroy = {
     .name = "Elroy",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(hpa, ElroyState),
         VMSTATE_UINT32(pci_bus_num, ElroyState),
         VMSTATE_UINT64(config_address, ElroyState),
@@ -482,7 +489,7 @@ static void elroy_pcihost_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->reset = elroy_reset;
+    device_class_set_legacy_reset(dc, elroy_reset);
     device_class_set_props(dc, elroy_pcihost_properties);
     dc->vmsd = &vmstate_elroy;
     dc->user_creatable = false;
@@ -541,6 +548,9 @@ static MemTxResult astro_chip_read_with_attrs(void *opaque, hwaddr addr,
     case 0x0030:        /* HP-UX 10.20 and 11.11 reads it. No idea. */
         val = -1;
         break;
+    case 0x0078:        /* NetBSD reads 0x78 ? */
+        val = -1;
+        break;
     case 0x0300 ... 0x03d8:     /* LMMIO_DIRECT0_BASE... */
         index = (addr - 0x300) / 8;
         val = s->ioc_ranges[index];
@@ -589,8 +599,8 @@ static MemTxResult astro_chip_read_with_attrs(void *opaque, hwaddr addr,
 #undef EMPTY_PORT
 
     default:
-        trace_astro_chip_read(addr, size, val);
-        g_assert_not_reached();
+        val = 0;
+        ret = MEMTX_DECODE_ERROR;
     }
 
     /* for 32-bit accesses mask return value */
@@ -605,6 +615,7 @@ static MemTxResult astro_chip_write_with_attrs(void *opaque, hwaddr addr,
                                               uint64_t val, unsigned size,
                                               MemTxAttrs attrs)
 {
+    MemTxResult ret = MEMTX_OK;
     AstroState *s = opaque;
 
     trace_astro_chip_write(addr, size, val);
@@ -627,30 +638,42 @@ static MemTxResult astro_chip_write_with_attrs(void *opaque, hwaddr addr,
     case 0x10220:
     case 0x10230:        /* HP-UX 11.11 reads it. No idea. */
         break;
-    case 0x22108:        /* IOC STATUS_CONTROL */
-        put_val_in_int64(&s->ioc_status_ctrl, addr, size, val);
-        break;
     case 0x20200 ... 0x20240 - 1: /* IOC Rope0_Control ... */
         put_val_in_arrary(s->ioc_rope_control, 0x20200, addr, size, val);
         break;
     case 0x20040:        /* IOC Rope config */
+    case 0x22040:
         put_val_in_int64(&s->ioc_rope_config, addr, size, val);
         break;
     case 0x20300:
+    case 0x22300:
         put_val_in_int64(&s->tlb_ibase, addr, size, val);
         break;
     case 0x20308:
+    case 0x22308:
         put_val_in_int64(&s->tlb_imask, addr, size, val);
         break;
     case 0x20310:
+    case 0x22310:
         put_val_in_int64(&s->tlb_pcom, addr, size, val);
         /* TODO: flush iommu */
         break;
     case 0x20318:
+    case 0x22318:
         put_val_in_int64(&s->tlb_tcnfg, addr, size, val);
         break;
     case 0x20320:
+    case 0x22320:
         put_val_in_int64(&s->tlb_pdir_base, addr, size, val);
+        break;
+    case 0x22000:       /* func_id */
+        break;
+    case 0x22008:       /* func_class */
+        break;
+    case 0x22050:       /* rope_debug */
+        break;
+    case 0x22108:        /* IOC STATUS_CONTROL */
+        put_val_in_int64(&s->ioc_status_ctrl, addr, size, val);
         break;
     /*
      * empty placeholders for non-existent elroys, e.g.
@@ -669,11 +692,9 @@ static MemTxResult astro_chip_write_with_attrs(void *opaque, hwaddr addr,
 #undef EMPTY_PORT
 
     default:
-        /* Controlled by astro_chip_mem_valid above.  */
-        trace_astro_chip_write(addr, size, val);
-        g_assert_not_reached();
+        ret = MEMTX_DECODE_ERROR;
     }
-    return MEMTX_OK;
+    return ret;
 }
 
 static const MemoryRegionOps astro_chip_ops = {
@@ -694,7 +715,7 @@ static const VMStateDescription vmstate_astro = {
     .name = "Astro",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(ioc_ctrl, AstroState),
         VMSTATE_UINT64(ioc_status_ctrl, AstroState),
         VMSTATE_UINT64_ARRAY(ioc_ranges, AstroState, (0x03d8 - 0x300) / 8),
@@ -821,20 +842,21 @@ static void astro_realize(DeviceState *obj, Error **errp)
 
         /* map elroys mmio */
         map_size = LMMIO_DIST_BASE_SIZE / ROPES_PER_IOC;
-        map_addr = (uint32_t) (LMMIO_DIST_BASE_ADDR + rope * map_size);
+        map_addr = F_EXTEND(LMMIO_DIST_BASE_ADDR + rope * map_size);
         memory_region_init_alias(&elroy->pci_mmio_alias, OBJECT(elroy),
                                  "pci-mmio-alias",
-                                 &elroy->pci_mmio, map_addr, map_size);
+                                 &elroy->pci_mmio, (uint32_t) map_addr, map_size);
         memory_region_add_subregion(get_system_memory(), map_addr,
                                  &elroy->pci_mmio_alias);
 
+        /* map elroys io */
         map_size = IOS_DIST_BASE_SIZE / ROPES_PER_IOC;
-        map_addr = (uint32_t) (IOS_DIST_BASE_ADDR + rope * map_size);
+        map_addr = F_EXTEND(IOS_DIST_BASE_ADDR + rope * map_size);
         memory_region_add_subregion(get_system_memory(), map_addr,
                                  &elroy->pci_io);
 
         /* Host memory as seen from the PCI side, via the IOMMU.  */
-        pci_setup_iommu(PCI_HOST_BRIDGE(elroy)->bus, elroy_pcihost_set_iommu,
+        pci_setup_iommu(PCI_HOST_BRIDGE(elroy)->bus, &elroy_pcihost_iommu_ops,
                                  elroy);
     }
 }
@@ -843,7 +865,7 @@ static void astro_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->reset = astro_reset;
+    device_class_set_legacy_reset(dc, astro_reset);
     dc->vmsd = &vmstate_astro;
     dc->realize = astro_realize;
     /*

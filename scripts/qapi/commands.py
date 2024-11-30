@@ -65,7 +65,7 @@ def gen_call(name: str,
         assert arg_type
         argstr = '&arg, '
     elif arg_type:
-        assert not arg_type.variants
+        assert not arg_type.branches
         for memb in arg_type.members:
             assert not memb.ifcond.is_present()
             if memb.need_has():

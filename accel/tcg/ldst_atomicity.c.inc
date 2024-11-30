@@ -9,8 +9,8 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "host/load-extract-al16-al8.h"
-#include "host/store-insert-al16.h"
+#include "host/load-extract-al16-al8.h.inc"
+#include "host/store-insert-al16.h.inc"
 
 #ifdef CONFIG_ATOMIC64
 # define HAVE_al8          true
@@ -76,7 +76,7 @@ static int required_atomicity(CPUState *cpu, uintptr_t p, MemOp memop)
         /*
          * Examine the alignment of p to determine if there are subobjects
          * that must be aligned.  Note that we only really need ctz4() --
-         * any more sigificant bits are discarded by the immediately
+         * any more significant bits are discarded by the immediately
          * following comparison.
          */
         tmp = ctz32(p);
@@ -168,6 +168,7 @@ static uint64_t load_atomic8_or_exit(CPUState *cpu, uintptr_t ra, void *pv)
 #endif
 
     /* Ultimate fallback: re-execute in serial context. */
+    trace_load_atom8_or_exit_fallback(ra);
     cpu_loop_exit_atomic(cpu, ra);
 }
 
@@ -212,6 +213,7 @@ static Int128 load_atomic16_or_exit(CPUState *cpu, uintptr_t ra, void *pv)
     }
 
     /* Ultimate fallback: re-execute in serial context. */
+    trace_load_atom16_or_exit_fallback(ra);
     cpu_loop_exit_atomic(cpu, ra);
 }
 
@@ -519,6 +521,7 @@ static uint64_t load_atom_8(CPUState *cpu, uintptr_t ra,
         if (HAVE_al8) {
             return load_atom_extract_al8x2(pv);
         }
+        trace_load_atom8_fallback(memop, ra);
         cpu_loop_exit_atomic(cpu, ra);
     default:
         g_assert_not_reached();
@@ -563,6 +566,7 @@ static Int128 load_atom_16(CPUState *cpu, uintptr_t ra,
         break;
     case MO_64:
         if (!HAVE_al8) {
+            trace_load_atom16_fallback(memop, ra);
             cpu_loop_exit_atomic(cpu, ra);
         }
         a = load_atomic8(pv);
@@ -570,6 +574,7 @@ static Int128 load_atom_16(CPUState *cpu, uintptr_t ra,
         break;
     case -MO_64:
         if (!HAVE_al8) {
+            trace_load_atom16_fallback(memop, ra);
             cpu_loop_exit_atomic(cpu, ra);
         }
         a = load_atom_extract_al8x2(pv);
@@ -825,7 +830,7 @@ static uint64_t store_whole_le16(void *pv, int size, Int128 val_le)
     int sh = o * 8;
     Int128 m, v;
 
-    qemu_build_assert(HAVE_ATOMIC128_RW);
+    qemu_build_assert(HAVE_CMPXCHG128);
 
     /* Like MAKE_64BIT_MASK(0, sz), but larger. */
     if (sz <= 64) {
@@ -887,7 +892,7 @@ static void store_atom_2(CPUState *cpu, uintptr_t ra,
             return;
         }
     } else if ((pi & 15) == 7) {
-        if (HAVE_ATOMIC128_RW) {
+        if (HAVE_CMPXCHG128) {
             Int128 v = int128_lshift(int128_make64(val), 56);
             Int128 m = int128_lshift(int128_make64(0xffff), 56);
             store_atom_insert_al16(pv - 7, v, m);
@@ -897,6 +902,7 @@ static void store_atom_2(CPUState *cpu, uintptr_t ra,
         g_assert_not_reached();
     }
 
+    trace_store_atom2_fallback(memop, ra);
     cpu_loop_exit_atomic(cpu, ra);
 }
 
@@ -956,11 +962,12 @@ static void store_atom_4(CPUState *cpu, uintptr_t ra,
                 return;
             }
         } else {
-            if (HAVE_ATOMIC128_RW) {
+            if (HAVE_CMPXCHG128) {
                 store_whole_le16(pv, 4, int128_make64(cpu_to_le32(val)));
                 return;
             }
         }
+        trace_store_atom4_fallback(memop, ra);
         cpu_loop_exit_atomic(cpu, ra);
     default:
         g_assert_not_reached();
@@ -1021,7 +1028,7 @@ static void store_atom_8(CPUState *cpu, uintptr_t ra,
         }
         break;
     case MO_64:
-        if (HAVE_ATOMIC128_RW) {
+        if (HAVE_CMPXCHG128) {
             store_whole_le16(pv, 8, int128_make64(cpu_to_le64(val)));
             return;
         }
@@ -1029,6 +1036,7 @@ static void store_atom_8(CPUState *cpu, uintptr_t ra,
     default:
         g_assert_not_reached();
     }
+    trace_store_atom8_fallback(memop, ra);
     cpu_loop_exit_atomic(cpu, ra);
 }
 
@@ -1076,7 +1084,7 @@ static void store_atom_16(CPUState *cpu, uintptr_t ra,
         }
         break;
     case -MO_64:
-        if (HAVE_ATOMIC128_RW) {
+        if (HAVE_CMPXCHG128) {
             uint64_t val_le;
             int s2 = pi & 15;
             int s1 = 16 - s2;
@@ -1103,13 +1111,10 @@ static void store_atom_16(CPUState *cpu, uintptr_t ra,
         }
         break;
     case MO_128:
-        if (HAVE_ATOMIC128_RW) {
-            atomic16_set(pv, val);
-            return;
-        }
         break;
     default:
         g_assert_not_reached();
     }
+    trace_store_atom16_fallback(memop, ra);
     cpu_loop_exit_atomic(cpu, ra);
 }

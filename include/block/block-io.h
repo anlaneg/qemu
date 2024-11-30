@@ -31,8 +31,7 @@
 
 /*
  * I/O API functions. These functions are thread-safe, and therefore
- * can run in any thread as long as the thread has called
- * aio_context_acquire/release().
+ * can run in any thread.
  *
  * These functions can only call functions from I/O and Common categories,
  * but can be invoked by GS, "I/O or GS" and I/O APIs.
@@ -183,7 +182,7 @@ bdrv_co_eject(BlockDriverState *bs, bool eject_flag);
 
 const char *bdrv_get_format_name(BlockDriverState *bs);
 
-bool bdrv_supports_compressed_writes(BlockDriverState *bs);
+bool GRAPH_RDLOCK bdrv_supports_compressed_writes(BlockDriverState *bs);
 const char *bdrv_get_node_name(const BlockDriverState *bs);
 
 const char * GRAPH_RDLOCK
@@ -209,6 +208,14 @@ void bdrv_round_to_subclusters(BlockDriverState *bs,
 
 void bdrv_get_backing_filename(BlockDriverState *bs,
                                char *filename, int filename_size);
+
+int coroutine_fn GRAPH_RDLOCK
+bdrv_co_change_backing_file(BlockDriverState *bs, const char *backing_file,
+                            const char *backing_fmt, bool warn);
+
+int co_wrapper_bdrv_rdlock
+bdrv_change_backing_file(BlockDriverState *bs, const char *backing_file,
+                         const char *backing_fmt, bool warn);
 
 int bdrv_save_vmstate(BlockDriverState *bs, const uint8_t *buf,
                       int64_t pos, int size);
@@ -325,11 +332,10 @@ bdrv_co_copy_range(BdrvChild *src, int64_t src_offset,
  * "I/O or GS" API functions. These functions can run without
  * the BQL, but only in one specific iothread/main loop.
  *
- * More specifically, these functions use BDRV_POLL_WHILE(bs), which
- * requires the caller to be either in the main thread and hold
- * the BlockdriverState (bs) AioContext lock, or directly in the
- * home thread that runs the bs AioContext. Calling them from
- * another thread in another AioContext would cause deadlocks.
+ * More specifically, these functions use BDRV_POLL_WHILE(bs), which requires
+ * the caller to be either in the main thread or directly in the home thread
+ * that runs the bs AioContext. Calling them from another thread in another
+ * AioContext would cause deadlocks.
  *
  * Therefore, these functions are not proper I/O, because they
  * can't run in *any* iothreads, but only in a specific one.

@@ -30,8 +30,7 @@ class NetBSDVM(basevm.BaseVM):
         "git-base",
         "pkgconf",
         "xz",
-        "python310",
-        "py310-expat",
+        "python311",
         "ninja-build",
 
         # gnu tools

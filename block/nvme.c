@@ -168,6 +168,7 @@ static QemuOptsList runtime_opts = {
 static bool nvme_init_queue(BDRVNVMeState *s, NVMeQueue *q,
                             unsigned nentries, size_t entry_bytes, Error **errp)
 {
+    ERRP_GUARD();
     size_t bytes;
     int r;
 
@@ -221,6 +222,7 @@ static NVMeQueuePair *nvme_create_queue_pair(BDRVNVMeState *s,
                                              unsigned idx, size_t size,
                                              Error **errp)
 {
+    ERRP_GUARD();
     int i, r;
     NVMeQueuePair *q;
     uint64_t prp_list_iova;
@@ -417,9 +419,10 @@ static bool nvme_process_completion(NVMeQueuePair *q)
             q->cq_phase = !q->cq_phase;
         }
         cid = le16_to_cpu(c->cid);
-        if (cid == 0 || cid > NVME_QUEUE_SIZE) {
-            warn_report("NVMe: Unexpected CID in completion queue: %"PRIu32", "
-                        "queue size: %u", cid, NVME_QUEUE_SIZE);
+        if (cid == 0 || cid > NVME_NUM_REQS) {
+            warn_report("NVMe: Unexpected CID in completion queue: %" PRIu32
+                        ", should be within: 1..%u inclusively", cid,
+                        NVME_NUM_REQS);
             continue;
         }
         trace_nvme_complete_command(s, q->index, cid);
@@ -534,6 +537,7 @@ static int nvme_admin_cmd_sync(BlockDriverState *bs, NvmeCmd *cmd)
 /* Returns true on success, false on failure. */
 static bool nvme_identify(BlockDriverState *bs, int namespace, Error **errp)
 {
+    ERRP_GUARD();
     BDRVNVMeState *s = bs->opaque;
     bool ret = false;
     QEMU_AUTO_VFREE union {
@@ -885,7 +889,7 @@ out:
         qemu_vfio_pci_unmap_bar(s->vfio, 0, (void *)regs, 0, sizeof(NvmeBar));
     }
 
-    /* Cleaning up is done in nvme_file_open() upon error. */
+    /* Cleaning up is done in nvme_open() upon error. */
     return ret;
 }
 
@@ -963,8 +967,8 @@ static void nvme_close(BlockDriverState *bs)
     g_free(s->device);
 }
 
-static int nvme_file_open(BlockDriverState *bs, QDict *options, int flags,
-                          Error **errp)
+static int nvme_open(BlockDriverState *bs, QDict *options, int flags,
+                     Error **errp)
 {
     const char *device;
     QemuOpts *opts;
@@ -1626,7 +1630,7 @@ static BlockDriver bdrv_nvme = {
     .create_opts              = &bdrv_create_opts_simple,
 
     .bdrv_parse_filename      = nvme_parse_filename,
-    .bdrv_file_open           = nvme_file_open,
+    .bdrv_open                = nvme_open,
     .bdrv_close               = nvme_close,
     .bdrv_co_getlength        = nvme_co_getlength,
     .bdrv_probe_blocksizes    = nvme_probe_blocksizes,

@@ -14,7 +14,6 @@
 #define MEMORY_DEVICE_H
 
 #include "hw/qdev-core.h"
-#include "qemu/typedefs.h"
 #include "qapi/qapi-types-machine.h"
 #include "qom/object.h"
 
@@ -37,6 +36,10 @@ typedef struct MemoryDeviceState MemoryDeviceState;
  * mapped into guest physical address space at a certain address. The
  * address in guest physical memory can either be specified explicitly
  * or get assigned automatically.
+ *
+ * Some memory device might not own a memory region in certain device
+ * configurations. Such devices can logically get (un)plugged, however,
+ * empty memory devices are mostly ignored by the memory device code.
  *
  * Conceptually, memory devices only span one memory region. If multiple
  * successive memory regions are used, a covering memory region has to
@@ -91,7 +94,8 @@ struct MemoryDeviceClass {
     uint64_t (*get_plugged_size)(const MemoryDeviceState *md, Error **errp);
 
     /*
-     * Return the memory region of the memory device.
+     * Return the memory region of the memory device. If the device is
+     * completely empty, returns NULL without an error.
      *
      * Called when (un)plugging the memory device, to (un)map the
      * memory region in guest physical memory, but also to detect the
@@ -165,7 +169,7 @@ uint64_t get_plugged_memory_size(void);
 unsigned int memory_devices_get_reserved_memslots(void);
 bool memory_devices_memslot_auto_decision_active(void);
 void memory_device_pre_plug(MemoryDeviceState *md, MachineState *ms,
-                            const uint64_t *legacy_align, Error **errp);
+                            Error **errp);
 void memory_device_plug(MemoryDeviceState *md, MachineState *ms);
 void memory_device_unplug(MemoryDeviceState *md, MachineState *ms);
 uint64_t memory_device_get_region_size(const MemoryDeviceState *md,

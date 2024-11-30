@@ -86,7 +86,7 @@ static void setup_sigcontext(struct target_sigcontext *sc, CPUArchState *env)
 
 static void restore_sigcontext(CPUArchState *env, struct target_sigcontext *sc)
 {
-    target_ulong psw;
+    abi_ulong psw;
     int i;
 
     __get_user(psw, &sc->sc_gr[0]);
@@ -101,7 +101,9 @@ static void restore_sigcontext(CPUArchState *env, struct target_sigcontext *sc)
     cpu_hppa_loaded_fr0(env);
 
     __get_user(env->iaoq_f, &sc->sc_iaoq[0]);
+    env->iaoq_f |= PRIV_USER;
     __get_user(env->iaoq_b, &sc->sc_iaoq[1]);
+    env->iaoq_b |= PRIV_USER;
     __get_user(env->cr[CR_SAR], &sc->sc_sar);
 }
 
@@ -112,7 +114,7 @@ void setup_rt_frame(int sig, struct target_sigaction *ka,
     abi_ulong frame_addr, sp, haddr;
     struct target_rt_sigframe *frame;
     int i;
-    TaskState *ts = (TaskState *)thread_cpu->opaque;
+    TaskState *ts = get_task_state(thread_cpu);
 
     sp = get_sp_from_cpustate(env);
     if ((ka->sa_flags & TARGET_SA_ONSTACK) && !sas_ss_flags(sp)) {
@@ -127,7 +129,7 @@ void setup_rt_frame(int sig, struct target_sigaction *ka,
         goto give_sigsegv;
     }
 
-    tswap_siginfo(&frame->info, info);
+    frame->info = *info;
     frame->uc.tuc_flags = 0;
     frame->uc.tuc_link = 0;
 
@@ -150,10 +152,10 @@ void setup_rt_frame(int sig, struct target_sigaction *ka,
     haddr = ka->_sa_handler;
     if (haddr & 2) {
         /* Function descriptor.  */
-        target_ulong *fdesc, dest;
+        abi_ptr *fdesc, dest;
 
         haddr &= -4;
-        fdesc = lock_user(VERIFY_READ, haddr, 2 * sizeof(target_ulong), 1);
+        fdesc = lock_user(VERIFY_READ, haddr, 2 * sizeof(abi_ptr), 1);
         if (!fdesc) {
             goto give_sigsegv;
         }
@@ -162,8 +164,8 @@ void setup_rt_frame(int sig, struct target_sigaction *ka,
         unlock_user(fdesc, haddr, 0);
         haddr = dest;
     }
-    env->iaoq_f = haddr;
-    env->iaoq_b = haddr + 4;
+    env->iaoq_f = haddr | PRIV_USER;
+    env->iaoq_b = env->iaoq_f + 4;
     env->psw_n = 0;
     return;
 

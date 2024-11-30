@@ -670,8 +670,13 @@ static void es1370_transfer_audio (ES1370State *s, struct chan *d, int loop_sel,
     cnt += (transferred + d->leftover) >> 2;
 
     if (s->sctl & loop_sel) {
-        /* Bah, how stupid is that having a 0 represent true value?
-           i just spent few hours on this shit */
+        /*
+         * loop_sel tells us which bit in the SCTL register to look at
+         * (either P1_LOOP_SEL, P2_LOOP_SEL or R1_LOOP_SEL). The sense
+         * of these bits is 0 for loop mode (set interrupt and keep recording
+         * when the sample count reaches zero) or 1 for stop mode (set
+         * interrupt and stop recording).
+         */
         AUD_log ("es1370: warning", "non looping mode\n");
     } else {
         d->frame_cnt = size;
@@ -760,7 +765,7 @@ static const VMStateDescription vmstate_es1370_channel = {
     .name = "es1370_channel",
     .version_id = 2,
     .minimum_version_id = 2,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32 (shift, struct chan),
         VMSTATE_UINT32 (leftover, struct chan),
         VMSTATE_UINT32 (scount, struct chan),
@@ -803,7 +808,7 @@ static const VMStateDescription vmstate_es1370 = {
     .version_id = 2,
     .minimum_version_id = 2,
     .post_load = es1370_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_PCI_DEVICE (dev, ES1370State),
         VMSTATE_STRUCT_ARRAY (chan, ES1370State, NB_CHANNELS, 2,
                               vmstate_es1370_channel, struct chan),
@@ -883,7 +888,7 @@ static void es1370_class_init (ObjectClass *klass, void *data)
     set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
     dc->desc = "ENSONIQ AudioPCI ES1370";
     dc->vmsd = &vmstate_es1370;
-    dc->reset = es1370_on_reset;
+    device_class_set_legacy_reset(dc, es1370_on_reset);
     device_class_set_props(dc, es1370_properties);
 }
 

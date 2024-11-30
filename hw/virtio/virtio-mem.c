@@ -88,6 +88,7 @@ static uint32_t virtio_mem_default_thp_size(void)
 static uint32_t thp_size;
 
 #define HPAGE_PMD_SIZE_PATH "/sys/kernel/mm/transparent_hugepage/hpage_pmd_size"
+#define HPAGE_PATH "/sys/kernel/mm/transparent_hugepage/"
 static uint32_t virtio_mem_thp_size(void)
 {
     gchar *content = NULL;
@@ -95,6 +96,12 @@ static uint32_t virtio_mem_thp_size(void)
     uint64_t tmp;
 
     if (thp_size) {
+        return thp_size;
+    }
+
+    /* No THP -> no restrictions. */
+    if (!g_file_test(HPAGE_PATH, G_FILE_TEST_EXISTS)) {
+        thp_size = VIRTIO_MEM_MIN_BLOCK_SIZE;
         return thp_size;
     }
 
@@ -181,7 +188,7 @@ static bool virtio_mem_is_busy(void)
      * after plugging them) until we're running on the destination (as we didn't
      * migrate these blocks when they were unplugged).
      */
-    return migration_in_incoming_postcopy() || !migration_is_idle();
+    return migration_in_incoming_postcopy() || migration_is_running();
 }
 
 typedef int (*virtio_mem_range_cb)(VirtIOMEM *vmem, void *arg,
@@ -525,9 +532,7 @@ static void virtio_mem_activate_memslots_to_plug(VirtIOMEM *vmem,
                                  vmem->memslot_size;
     unsigned int idx;
 
-    if (!vmem->dynamic_memslots) {
-        return;
-    }
+    assert(vmem->dynamic_memslots);
 
     /* Activate all involved memslots in a single transaction. */
     memory_region_transaction_begin();
@@ -547,9 +552,7 @@ static void virtio_mem_deactivate_unplugged_memslots(VirtIOMEM *vmem,
                                  vmem->memslot_size;
     unsigned int idx;
 
-    if (!vmem->dynamic_memslots) {
-        return;
-    }
+    assert(vmem->dynamic_memslots);
 
     /* Deactivate all memslots with unplugged blocks in a single transaction. */
     memory_region_transaction_begin();
@@ -598,7 +601,9 @@ static int virtio_mem_set_block_state(VirtIOMEM *vmem, uint64_t start_gpa,
         virtio_mem_notify_unplug(vmem, offset, size);
         virtio_mem_set_range_unplugged(vmem, start_gpa, size);
         /* Deactivate completely unplugged memslots after updating the state. */
-        virtio_mem_deactivate_unplugged_memslots(vmem, offset, size);
+        if (vmem->dynamic_memslots) {
+            virtio_mem_deactivate_unplugged_memslots(vmem, offset, size);
+        }
         return 0;
     }
 
@@ -607,8 +612,7 @@ static int virtio_mem_set_block_state(VirtIOMEM *vmem, uint64_t start_gpa,
         int fd = memory_region_get_fd(&vmem->memdev->mr);
         Error *local_err = NULL;
 
-        qemu_prealloc_mem(fd, area, size, 1, NULL, &local_err);
-        if (local_err) {
+        if (!qemu_prealloc_mem(fd, area, size, 1, NULL, false, &local_err)) {
             static bool warned;
 
             /*
@@ -635,9 +639,11 @@ static int virtio_mem_set_block_state(VirtIOMEM *vmem, uint64_t start_gpa,
          * blocks we are plugging here. The following notification will inform
          * registered listeners about the blocks we're plugging.
          */
-        virtio_mem_activate_memslots_to_plug(vmem, offset, size);
+        if (vmem->dynamic_memslots) {
+            virtio_mem_activate_memslots_to_plug(vmem, offset, size);
+        }
         ret = virtio_mem_notify_plug(vmem, offset, size);
-        if (ret) {
+        if (ret && vmem->dynamic_memslots) {
             virtio_mem_deactivate_unplugged_memslots(vmem, offset, size);
         }
     }
@@ -749,7 +755,9 @@ static int virtio_mem_unplug_all(VirtIOMEM *vmem)
         notifier_list_notify(&vmem->size_change_notifiers, &vmem->size);
 
         /* Deactivate all memslots after updating the state. */
-        virtio_mem_deactivate_unplugged_memslots(vmem, 0, region_size);
+        if (vmem->dynamic_memslots) {
+            virtio_mem_deactivate_unplugged_memslots(vmem, 0, region_size);
+        }
     }
 
     trace_virtio_mem_unplugged_all();
@@ -882,6 +890,9 @@ static uint64_t virtio_mem_get_features(VirtIODevice *vdev, uint64_t features,
     if (vmem->unplugged_inaccessible == ON_OFF_AUTO_ON) {
         virtio_add_feature(&features, VIRTIO_MEM_F_UNPLUGGED_INACCESSIBLE);
     }
+    if (qemu_wakeup_suspend_enabled()) {
+        virtio_add_feature(&features, VIRTIO_MEM_F_PERSISTENT_SUSPEND);
+    }
     return features;
 }
 
@@ -892,18 +903,6 @@ static int virtio_mem_validate_features(VirtIODevice *vdev)
         return -EFAULT;
     }
     return 0;
-}
-
-static void virtio_mem_system_reset(void *opaque)
-{
-    VirtIOMEM *vmem = VIRTIO_MEM(opaque);
-
-    /*
-     * During usual resets, we will unplug all memory and shrink the usable
-     * region size. This is, however, not possible in all scenarios. Then,
-     * the guest has to deal with this manually (VIRTIO_MEM_REQ_UNPLUG_ALL).
-     */
-    virtio_mem_unplug_all(vmem);
 }
 
 static void virtio_mem_prepare_mr(VirtIOMEM *vmem)
@@ -1119,10 +1118,10 @@ static void virtio_mem_device_realize(DeviceState *dev, Error **errp)
     host_memory_backend_set_mapped(vmem->memdev, true);
     vmstate_register_ram(&vmem->memdev->mr, DEVICE(vmem));
     if (vmem->early_migration) {
-        vmstate_register(VMSTATE_IF(vmem), VMSTATE_INSTANCE_ID_ANY,
-                         &vmstate_virtio_mem_device_early, vmem);
+        vmstate_register_any(VMSTATE_IF(vmem),
+                             &vmstate_virtio_mem_device_early, vmem);
     }
-    qemu_register_reset(virtio_mem_system_reset, vmem);
+    qemu_register_resettable(OBJECT(vmem));
 
     /*
      * Set ourselves as RamDiscardManager before the plug handler maps the
@@ -1142,7 +1141,7 @@ static void virtio_mem_device_unrealize(DeviceState *dev)
      * found via an address space anymore. Unset ourselves.
      */
     memory_region_set_ram_discard_manager(&vmem->memdev->mr, NULL);
-    qemu_unregister_reset(virtio_mem_system_reset, vmem);
+    qemu_unregister_resettable(OBJECT(vmem));
     if (vmem->early_migration) {
         vmstate_unregister(VMSTATE_IF(vmem), &vmstate_virtio_mem_device_early,
                            vmem);
@@ -1247,8 +1246,7 @@ static int virtio_mem_prealloc_range_cb(VirtIOMEM *vmem, void *arg,
     int fd = memory_region_get_fd(&vmem->memdev->mr);
     Error *local_err = NULL;
 
-    qemu_prealloc_mem(fd, area, size, 1, NULL, &local_err);
-    if (local_err) {
+    if (!qemu_prealloc_mem(fd, area, size, 1, NULL, false, &local_err)) {
         error_report_err(local_err);
         return -ENOMEM;
     }
@@ -1368,7 +1366,7 @@ static const VMStateDescription vmstate_virtio_mem_sanity_checks = {
     .name = "virtio-mem-device/sanity-checks",
     .pre_save = virtio_mem_mig_sanity_checks_pre_save,
     .post_load = virtio_mem_mig_sanity_checks_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(addr, VirtIOMEMMigSanityChecks),
         VMSTATE_UINT64(region_size, VirtIOMEMMigSanityChecks),
         VMSTATE_UINT64(block_size, VirtIOMEMMigSanityChecks),
@@ -1391,7 +1389,7 @@ static const VMStateDescription vmstate_virtio_mem_device = {
     .version_id = 1,
     .priority = MIG_PRI_VIRTIO_MEM,
     .post_load = virtio_mem_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_WITH_TMP_TEST(VirtIOMEM, virtio_mem_vmstate_field_exists,
                               VirtIOMEMMigSanityChecks,
                               vmstate_virtio_mem_sanity_checks),
@@ -1421,7 +1419,7 @@ static const VMStateDescription vmstate_virtio_mem_device_early = {
     .version_id = 1,
     .early_setup = true,
     .post_load = virtio_mem_post_load_early,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_WITH_TMP(VirtIOMEM, VirtIOMEMMigSanityChecks,
                          vmstate_virtio_mem_sanity_checks),
         VMSTATE_UINT64(size, VirtIOMEM),
@@ -1434,7 +1432,7 @@ static const VMStateDescription vmstate_virtio_mem = {
     .name = "virtio-mem",
     .minimum_version_id = 1,
     .version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_VIRTIO_DEVICE,
         VMSTATE_END_OF_LIST()
     },
@@ -1832,8 +1830,8 @@ static void virtio_mem_unplug_request_check(VirtIOMEM *vmem, Error **errp)
     }
 
     if (vmem->size) {
-        error_setg(errp, "virtio-mem device cannot get unplugged while"
-                   " '" VIRTIO_MEM_SIZE_PROP "' != '0'");
+        error_setg(errp, "virtio-mem device cannot get unplugged while some"
+                   " of its memory is still plugged");
         return;
     }
     if (vmem->requested_size) {
@@ -1843,12 +1841,38 @@ static void virtio_mem_unplug_request_check(VirtIOMEM *vmem, Error **errp)
     }
 }
 
+static ResettableState *virtio_mem_get_reset_state(Object *obj)
+{
+    VirtIOMEM *vmem = VIRTIO_MEM(obj);
+    return &vmem->reset_state;
+}
+
+static void virtio_mem_system_reset_hold(Object *obj, ResetType type)
+{
+    VirtIOMEM *vmem = VIRTIO_MEM(obj);
+
+    /*
+     * When waking up from standby/suspend-to-ram, do not unplug any memory.
+     */
+    if (type == RESET_TYPE_WAKEUP) {
+        return;
+    }
+
+    /*
+     * During usual resets, we will unplug all memory and shrink the usable
+     * region size. This is, however, not possible in all scenarios. Then,
+     * the guest has to deal with this manually (VIRTIO_MEM_REQ_UNPLUG_ALL).
+     */
+    virtio_mem_unplug_all(vmem);
+}
+
 static void virtio_mem_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     VirtioDeviceClass *vdc = VIRTIO_DEVICE_CLASS(klass);
     VirtIOMEMClass *vmc = VIRTIO_MEM_CLASS(klass);
     RamDiscardManagerClass *rdmc = RAM_DISCARD_MANAGER_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     device_class_set_props(dc, virtio_mem_properties);
     dc->vmsd = &vmstate_virtio_mem;
@@ -1875,6 +1899,9 @@ static void virtio_mem_class_init(ObjectClass *klass, void *data)
     rdmc->replay_discarded = virtio_mem_rdm_replay_discarded;
     rdmc->register_listener = virtio_mem_rdm_register_listener;
     rdmc->unregister_listener = virtio_mem_rdm_unregister_listener;
+
+    rc->get_state = virtio_mem_get_reset_state;
+    rc->phases.hold = virtio_mem_system_reset_hold;
 }
 
 static const TypeInfo virtio_mem_info = {

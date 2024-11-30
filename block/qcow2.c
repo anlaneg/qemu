@@ -95,9 +95,10 @@ static int qcow2_probe(const uint8_t *buf, int buf_size, const char *filename)
 }
 
 
-static int qcow2_crypto_hdr_read_func(QCryptoBlock *block, size_t offset,
-                                      uint8_t *buf, size_t buflen,
-                                      void *opaque, Error **errp)
+static int GRAPH_RDLOCK
+qcow2_crypto_hdr_read_func(QCryptoBlock *block, size_t offset,
+                           uint8_t *buf, size_t buflen,
+                           void *opaque, Error **errp)
 {
     BlockDriverState *bs = opaque;
     BDRVQcow2State *s = bs->opaque;
@@ -156,7 +157,7 @@ qcow2_crypto_hdr_init_func(QCryptoBlock *block, size_t headerlen, void *opaque,
 
 
 /* The graph lock must be held when called in coroutine context */
-static int coroutine_mixed_fn
+static int coroutine_mixed_fn GRAPH_RDLOCK
 qcow2_crypto_hdr_write_func(QCryptoBlock *block, size_t offset,
                             const uint8_t *buf, size_t buflen,
                             void *opaque, Error **errp)
@@ -320,7 +321,7 @@ qcow2_read_extensions(BlockDriverState *bs, uint64_t start_offset,
             }
             s->crypto = qcrypto_block_open(s->crypto_opts, "encrypt.",
                                            qcow2_crypto_hdr_read_func,
-                                           bs, cflags, QCOW2_MAX_THREADS, errp);
+                                           bs, cflags, errp);
             if (!s->crypto) {
                 return -EINVAL;
             }
@@ -1635,7 +1636,22 @@ qcow2_do_open(BlockDriverState *bs, QDict *options, int flags,
         goto fail;
     }
 
-    if (open_data_file) {
+    if (open_data_file && (flags & BDRV_O_NO_IO)) {
+        /*
+         * Don't open the data file for 'qemu-img info' so that it can be used
+         * to verify that an untrusted qcow2 image doesn't refer to external
+         * files.
+         *
+         * Note: This still makes has_data_file() return true.
+         */
+        if (s->incompatible_features & QCOW2_INCOMPAT_DATA_FILE) {
+            s->data_file = NULL;
+        } else {
+            s->data_file = bs->file;
+        }
+        qdict_extract_subqdict(options, NULL, "data-file.");
+        qdict_del(options, "data-file");
+    } else if (open_data_file) {
         /* Open external data file */
         bdrv_graph_co_rdunlock();
         s->data_file = bdrv_co_open_child(NULL, options, "data-file", bs,
@@ -1700,8 +1716,7 @@ qcow2_do_open(BlockDriverState *bs, QDict *options, int flags,
                 cflags |= QCRYPTO_BLOCK_OPEN_NO_IO;
             }
             s->crypto = qcrypto_block_open(s->crypto_opts, "encrypt.",
-                                           NULL, NULL, cflags,
-                                           QCOW2_MAX_THREADS, errp);
+                                           NULL, NULL, cflags, errp);
             if (!s->crypto) {
                 ret = -EINVAL;
                 goto fail;
@@ -2029,6 +2044,8 @@ static void qcow2_reopen_commit(BDRVReopenState *state)
 {
     BDRVQcow2State *s = state->bs->opaque;
 
+    GRAPH_RDLOCK_GUARD_MAINLOOP();
+
     qcow2_update_options_commit(state->bs, state->opaque);
     if (!s->data_file) {
         /*
@@ -2063,6 +2080,8 @@ static void qcow2_reopen_commit_post(BDRVReopenState *state)
 static void qcow2_reopen_abort(BDRVReopenState *state)
 {
     BDRVQcow2State *s = state->bs->opaque;
+
+    GRAPH_RDLOCK_GUARD_MAINLOOP();
 
     if (!s->data_file) {
         /*
@@ -2805,7 +2824,7 @@ qcow2_do_close(BlockDriverState *bs, bool close_data_file)
     if (close_data_file && has_data_file(bs)) {
         GLOBAL_STATE_CODE();
         bdrv_graph_rdunlock_main_loop();
-        bdrv_graph_wrlock(NULL);
+        bdrv_graph_wrlock();
         bdrv_unref_child(bs, s->data_file);
         bdrv_graph_wrunlock();
         s->data_file = NULL;
@@ -3158,8 +3177,9 @@ fail:
     return ret;
 }
 
-static int qcow2_change_backing_file(BlockDriverState *bs,
-    const char *backing_file, const char *backing_fmt)
+static int coroutine_fn GRAPH_RDLOCK
+qcow2_co_change_backing_file(BlockDriverState *bs, const char *backing_file,
+                             const char *backing_fmt)
 {
     BDRVQcow2State *s = bs->opaque;
 
@@ -3197,10 +3217,10 @@ qcow2_set_up_encryption(BlockDriverState *bs,
     int fmt, ret;
 
     switch (cryptoopts->format) {
-    case Q_CRYPTO_BLOCK_FORMAT_LUKS:
+    case QCRYPTO_BLOCK_FORMAT_LUKS:
         fmt = QCOW_CRYPT_LUKS;
         break;
-    case Q_CRYPTO_BLOCK_FORMAT_QCOW:
+    case QCRYPTO_BLOCK_FORMAT_QCOW:
         fmt = QCOW_CRYPT_AES;
         break;
     default:
@@ -3213,7 +3233,7 @@ qcow2_set_up_encryption(BlockDriverState *bs,
     crypto = qcrypto_block_create(cryptoopts, "encrypt.",
                                   qcow2_crypto_hdr_init_func,
                                   qcow2_crypto_hdr_write_func,
-                                  bs, errp);
+                                  bs, 0, errp);
     if (!crypto) {
         return -EINVAL;
     }
@@ -3480,6 +3500,7 @@ static uint64_t qcow2_opt_get_refcount_bits_del(QemuOpts *opts, int version,
 static int coroutine_fn GRAPH_UNLOCKED
 qcow2_co_create(BlockdevCreateOptions *create_options, Error **errp)
 {
+    ERRP_GUARD();
     BlockdevCreateOptionsQcow2 *qcow2_opts;
     QDict *options;
 
@@ -3819,8 +3840,11 @@ qcow2_co_create(BlockdevCreateOptions *create_options, Error **errp)
             backing_format = BlockdevDriver_str(qcow2_opts->backing_fmt);
         }
 
-        ret = bdrv_change_backing_file(blk_bs(blk), qcow2_opts->backing_file,
-                                       backing_format, false);
+        bdrv_graph_co_rdlock();
+        ret = bdrv_co_change_backing_file(blk_bs(blk), qcow2_opts->backing_file,
+                                          backing_format, false);
+        bdrv_graph_co_rdunlock();
+
         if (ret < 0) {
             error_setg_errno(errp, -ret, "Could not assign backing file '%s' "
                              "with format '%s'", qcow2_opts->backing_file,
@@ -4277,6 +4301,7 @@ static int coroutine_fn GRAPH_RDLOCK
 qcow2_co_truncate(BlockDriverState *bs, int64_t offset, bool exact,
                   PreallocMode prealloc, BdrvRequestFlags flags, Error **errp)
 {
+    ERRP_GUARD();
     BDRVQcow2State *s = bs->opaque;
     uint64_t old_length;
     int64_t new_l1_size;
@@ -5225,8 +5250,8 @@ qcow2_co_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
     return 0;
 }
 
-static ImageInfoSpecific *qcow2_get_specific_info(BlockDriverState *bs,
-                                                  Error **errp)
+static ImageInfoSpecific * GRAPH_RDLOCK
+qcow2_get_specific_info(BlockDriverState *bs, Error **errp)
 {
     BDRVQcow2State *s = bs->opaque;
     ImageInfoSpecific *spec_info;
@@ -5277,17 +5302,17 @@ static ImageInfoSpecific *qcow2_get_specific_info(BlockDriverState *bs,
     } else {
         /* if this assertion fails, this probably means a new version was
          * added without having it covered here */
-        assert(false);
+        g_assert_not_reached();
     }
 
     if (encrypt_info) {
         ImageInfoSpecificQCow2Encryption *qencrypt =
             g_new(ImageInfoSpecificQCow2Encryption, 1);
         switch (encrypt_info->format) {
-        case Q_CRYPTO_BLOCK_FORMAT_QCOW:
+        case QCRYPTO_BLOCK_FORMAT_QCOW:
             qencrypt->format = BLOCKDEV_QCOW2_ENCRYPTION_FORMAT_AES;
             break;
-        case Q_CRYPTO_BLOCK_FORMAT_LUKS:
+        case QCRYPTO_BLOCK_FORMAT_LUKS:
             qencrypt->format = BLOCKDEV_QCOW2_ENCRYPTION_FORMAT_LUKS;
             qencrypt->u.luks = encrypt_info->u.luks;
             break;
@@ -5305,7 +5330,8 @@ static ImageInfoSpecific *qcow2_get_specific_info(BlockDriverState *bs,
     return spec_info;
 }
 
-static int coroutine_mixed_fn qcow2_has_zero_init(BlockDriverState *bs)
+static int coroutine_mixed_fn GRAPH_RDLOCK
+qcow2_has_zero_init(BlockDriverState *bs)
 {
     BDRVQcow2State *s = bs->opaque;
     bool preallocated;
@@ -5925,7 +5951,7 @@ static int coroutine_fn qcow2_co_amend(BlockDriverState *bs,
             return -EOPNOTSUPP;
         }
 
-        if (qopts->encrypt->format != Q_CRYPTO_BLOCK_FORMAT_LUKS) {
+        if (qopts->encrypt->format != QCRYPTO_BLOCK_FORMAT_LUKS) {
             error_setg(errp,
                        "Amend can't be used to change the qcow2 encryption format");
             return -EOPNOTSUPP;
@@ -6117,64 +6143,64 @@ static const char *const qcow2_strong_runtime_opts[] = {
 };
 
 BlockDriver bdrv_qcow2 = {
-    .format_name        = "qcow2",
-    .instance_size      = sizeof(BDRVQcow2State),
-    .bdrv_probe         = qcow2_probe,
-    .bdrv_open          = qcow2_open,
-    .bdrv_close         = qcow2_close,
-    .bdrv_reopen_prepare  = qcow2_reopen_prepare,
-    .bdrv_reopen_commit   = qcow2_reopen_commit,
-    .bdrv_reopen_commit_post = qcow2_reopen_commit_post,
-    .bdrv_reopen_abort    = qcow2_reopen_abort,
-    .bdrv_join_options    = qcow2_join_options,
-    .bdrv_child_perm      = bdrv_default_perms,
-    .bdrv_co_create_opts  = qcow2_co_create_opts,
-    .bdrv_co_create       = qcow2_co_create,
-    .bdrv_has_zero_init   = qcow2_has_zero_init,
-    .bdrv_co_block_status = qcow2_co_block_status,
+    .format_name                        = "qcow2",
+    .instance_size                      = sizeof(BDRVQcow2State),
+    .bdrv_probe                         = qcow2_probe,
+    .bdrv_open                          = qcow2_open,
+    .bdrv_close                         = qcow2_close,
+    .bdrv_reopen_prepare                = qcow2_reopen_prepare,
+    .bdrv_reopen_commit                 = qcow2_reopen_commit,
+    .bdrv_reopen_commit_post            = qcow2_reopen_commit_post,
+    .bdrv_reopen_abort                  = qcow2_reopen_abort,
+    .bdrv_join_options                  = qcow2_join_options,
+    .bdrv_child_perm                    = bdrv_default_perms,
+    .bdrv_co_create_opts                = qcow2_co_create_opts,
+    .bdrv_co_create                     = qcow2_co_create,
+    .bdrv_has_zero_init                 = qcow2_has_zero_init,
+    .bdrv_co_block_status               = qcow2_co_block_status,
 
-    .bdrv_co_preadv_part    = qcow2_co_preadv_part,/*部分读*/
-    .bdrv_co_pwritev_part   = qcow2_co_pwritev_part,
-    .bdrv_co_flush_to_os    = qcow2_co_flush_to_os,
+    .bdrv_co_preadv_part                = qcow2_co_preadv_part,/*部分读*/
+    .bdrv_co_pwritev_part               = qcow2_co_pwritev_part,
+    .bdrv_co_flush_to_os                = qcow2_co_flush_to_os,
 
-    .bdrv_co_pwrite_zeroes  = qcow2_co_pwrite_zeroes,
-    .bdrv_co_pdiscard       = qcow2_co_pdiscard,
-    .bdrv_co_copy_range_from = qcow2_co_copy_range_from,
-    .bdrv_co_copy_range_to  = qcow2_co_copy_range_to,
-    .bdrv_co_truncate       = qcow2_co_truncate,
-    .bdrv_co_pwritev_compressed_part = qcow2_co_pwritev_compressed_part,
-    .bdrv_make_empty        = qcow2_make_empty,
+    .bdrv_co_pwrite_zeroes              = qcow2_co_pwrite_zeroes,
+    .bdrv_co_pdiscard                   = qcow2_co_pdiscard,
+    .bdrv_co_copy_range_from            = qcow2_co_copy_range_from,
+    .bdrv_co_copy_range_to              = qcow2_co_copy_range_to,
+    .bdrv_co_truncate                   = qcow2_co_truncate,
+    .bdrv_co_pwritev_compressed_part    = qcow2_co_pwritev_compressed_part,
+    .bdrv_make_empty                    = qcow2_make_empty,
 
-    .bdrv_snapshot_create   = qcow2_snapshot_create,
-    .bdrv_snapshot_goto     = qcow2_snapshot_goto,
-    .bdrv_snapshot_delete   = qcow2_snapshot_delete,
-    .bdrv_snapshot_list     = qcow2_snapshot_list,
-    .bdrv_snapshot_load_tmp = qcow2_snapshot_load_tmp,
-    .bdrv_measure           = qcow2_measure,
-    .bdrv_co_get_info       = qcow2_co_get_info,
-    .bdrv_get_specific_info = qcow2_get_specific_info,
+    .bdrv_snapshot_create               = qcow2_snapshot_create,
+    .bdrv_snapshot_goto                 = qcow2_snapshot_goto,
+    .bdrv_snapshot_delete               = qcow2_snapshot_delete,
+    .bdrv_snapshot_list                 = qcow2_snapshot_list,
+    .bdrv_snapshot_load_tmp             = qcow2_snapshot_load_tmp,
+    .bdrv_measure                       = qcow2_measure,
+    .bdrv_co_get_info                   = qcow2_co_get_info,
+    .bdrv_get_specific_info             = qcow2_get_specific_info,
 
-    .bdrv_co_save_vmstate   = qcow2_co_save_vmstate,
-    .bdrv_co_load_vmstate   = qcow2_co_load_vmstate,
+    .bdrv_co_save_vmstate               = qcow2_co_save_vmstate,
+    .bdrv_co_load_vmstate               = qcow2_co_load_vmstate,
 
-    .is_format                  = true,
-    .supports_backing           = true,
-    .bdrv_change_backing_file   = qcow2_change_backing_file,
+    .is_format                          = true,
+    .supports_backing                   = true,
+    .bdrv_co_change_backing_file        = qcow2_co_change_backing_file,
 
-    .bdrv_refresh_limits        = qcow2_refresh_limits,
-    .bdrv_co_invalidate_cache   = qcow2_co_invalidate_cache,
-    .bdrv_inactivate            = qcow2_inactivate,
+    .bdrv_refresh_limits                = qcow2_refresh_limits,
+    .bdrv_co_invalidate_cache           = qcow2_co_invalidate_cache,
+    .bdrv_inactivate                    = qcow2_inactivate,
 
-    .create_opts         = &qcow2_create_opts,
-    .amend_opts          = &qcow2_amend_opts,
-    .strong_runtime_opts = qcow2_strong_runtime_opts,
-    .mutable_opts        = mutable_opts,
-    .bdrv_co_check       = qcow2_co_check,
-    .bdrv_amend_options  = qcow2_amend_options,
-    .bdrv_co_amend       = qcow2_co_amend,
+    .create_opts                        = &qcow2_create_opts,
+    .amend_opts                         = &qcow2_amend_opts,
+    .strong_runtime_opts                = qcow2_strong_runtime_opts,
+    .mutable_opts                       = mutable_opts,
+    .bdrv_co_check                      = qcow2_co_check,
+    .bdrv_amend_options                 = qcow2_amend_options,
+    .bdrv_co_amend                      = qcow2_co_amend,
 
-    .bdrv_detach_aio_context  = qcow2_detach_aio_context,
-    .bdrv_attach_aio_context  = qcow2_attach_aio_context,
+    .bdrv_detach_aio_context            = qcow2_detach_aio_context,
+    .bdrv_attach_aio_context            = qcow2_attach_aio_context,
 
     .bdrv_supports_persistent_dirty_bitmap =
             qcow2_supports_persistent_dirty_bitmap,

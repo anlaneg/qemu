@@ -205,29 +205,6 @@ int tap_probe_has_uso(int fd)
     return 1;
 }
 
-/* Verify that we can assign given length */
-//校验是否可更改vnet_hdr长度
-int tap_probe_vnet_hdr_len(int fd, int len)
-{
-    int orig;
-    //先取vnethdr长度
-    if (ioctl(fd, TUNGETVNETHDRSZ, &orig) == -1) {
-        return 0;
-    }
-    //尝试更改vnethdr长度（这里有问题，==0时应返回，-1时应恢复）
-    if (ioctl(fd, TUNSETVNETHDRSZ, &len) == -1) {
-        return 0;
-    }
-    /* Restore original length: we can't handle failure. */
-    if (ioctl(fd, TUNSETVNETHDRSZ, &orig) == -1) {
-        fprintf(stderr, "TUNGETVNETHDRSZ ioctl() failed: %s. Exiting.\n",
-                strerror(errno));
-        abort();
-        return -errno;
-    }
-    return 1;
-}
-
 //设置vnet hdr长度
 void tap_fd_set_vnet_hdr_len(int fd, int len)
 {

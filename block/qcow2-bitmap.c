@@ -105,7 +105,7 @@ static inline bool can_write(BlockDriverState *bs)
     return !bdrv_is_read_only(bs) && !(bdrv_get_flags(bs) & BDRV_O_INACTIVE);
 }
 
-static int update_header_sync(BlockDriverState *bs)
+static int GRAPH_RDLOCK update_header_sync(BlockDriverState *bs)
 {
     int ret;
 
@@ -221,8 +221,9 @@ clear_bitmap_table(BlockDriverState *bs, uint64_t *bitmap_table,
     }
 }
 
-static int bitmap_table_load(BlockDriverState *bs, Qcow2BitmapTable *tb,
-                             uint64_t **bitmap_table)
+static int GRAPH_RDLOCK
+bitmap_table_load(BlockDriverState *bs, Qcow2BitmapTable *tb,
+                  uint64_t **bitmap_table)
 {
     int ret;
     BDRVQcow2State *s = bs->opaque;
@@ -551,8 +552,9 @@ static uint32_t bitmap_list_count(Qcow2BitmapList *bm_list)
  * Get bitmap list from qcow2 image. Actually reads bitmap directory,
  * checks it and convert to bitmap list.
  */
-static Qcow2BitmapList *bitmap_list_load(BlockDriverState *bs, uint64_t offset,
-                                         uint64_t size, Error **errp)
+static Qcow2BitmapList * GRAPH_RDLOCK
+bitmap_list_load(BlockDriverState *bs, uint64_t offset, uint64_t size,
+                 Error **errp)
 {
     int ret;
     BDRVQcow2State *s = bs->opaque;
@@ -961,7 +963,7 @@ static void set_readonly_helper(gpointer bitmap, gpointer value)
  * If header_updated is not NULL then it is set appropriately regardless of
  * the return value.
  */
-bool coroutine_fn GRAPH_RDLOCK
+bool coroutine_fn
 qcow2_load_dirty_bitmaps(BlockDriverState *bs,
                          bool *header_updated, Error **errp)
 {
@@ -1607,7 +1609,7 @@ bool qcow2_store_persistent_dirty_bitmaps(BlockDriverState *bs,
                            name);
                 goto fail;
             }
-            tb = g_memdup(&bm->table, sizeof(bm->table));
+            tb = g_memdup2(&bm->table, sizeof(bm->table));
             bm->table.offset = 0;
             bm->table.size = 0;
             QSIMPLEQ_INSERT_TAIL(&drop_tables, tb, entry);
@@ -1708,6 +1710,7 @@ bool coroutine_fn qcow2_co_can_store_new_dirty_bitmap(BlockDriverState *bs,
                                                       uint32_t granularity,
                                                       Error **errp)
 {
+    ERRP_GUARD();
     BDRVQcow2State *s = bs->opaque;
     BdrvDirtyBitmap *bitmap;
     uint64_t bitmap_directory_size = 0;

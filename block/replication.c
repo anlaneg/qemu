@@ -311,7 +311,7 @@ static void GRAPH_UNLOCKED
 secondary_do_checkpoint(BlockDriverState *bs, Error **errp)
 {
     BDRVReplicationState *s = bs->opaque;
-    BdrvChild *active_disk = bs->file;
+    BdrvChild *active_disk;
     Error *local_err = NULL;
     int ret;
 
@@ -328,6 +328,7 @@ secondary_do_checkpoint(BlockDriverState *bs, Error **errp)
         return;
     }
 
+    active_disk = bs->file;
     if (!active_disk->bs->drv) {
         error_setg(errp, "Active disk %s is ejected",
                    active_disk->bs->node_name);
@@ -363,6 +364,9 @@ static void reopen_backing_file(BlockDriverState *bs, bool writable,
     BdrvChild *hidden_disk, *secondary_disk;
     BlockReopenQueue *reopen_queue = NULL;
 
+    GLOBAL_STATE_CODE();
+    GRAPH_RDLOCK_GUARD_MAINLOOP();
+
     /*
      * s->hidden_disk and s->secondary_disk may not be set yet, as they will
      * only be set after the children are writable.
@@ -390,14 +394,7 @@ static void reopen_backing_file(BlockDriverState *bs, bool writable,
     }
 
     if (reopen_queue) {
-        AioContext *ctx = bdrv_get_aio_context(bs);
-        if (ctx != qemu_get_aio_context()) {
-            aio_context_release(ctx);
-        }
         bdrv_reopen_multiple(reopen_queue, errp);
-        if (ctx != qemu_get_aio_context()) {
-            aio_context_acquire(ctx);
-        }
     }
 }
 
@@ -458,14 +455,11 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
     BlockDriverState *top_bs;
     BdrvChild *active_disk, *hidden_disk, *secondary_disk;
     int64_t active_length, hidden_length, disk_length;
-    AioContext *aio_context;
     Error *local_err = NULL;
     BackupPerf perf = { .use_copy_range = true, .max_workers = 1 };
 
     GLOBAL_STATE_CODE();
 
-    aio_context = bdrv_get_aio_context(bs);
-    aio_context_acquire(aio_context);
     s = bs->opaque;
 
     if (s->stage == BLOCK_REPLICATION_DONE ||
@@ -475,20 +469,17 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
          * Ignore the request because the secondary side of replication
          * doesn't have to do anything anymore.
          */
-        aio_context_release(aio_context);
         return;
     }
 
     if (s->stage != BLOCK_REPLICATION_NONE) {
         error_setg(errp, "Block replication is running or done");
-        aio_context_release(aio_context);
         return;
     }
 
     if (s->mode != mode) {
         error_setg(errp, "The parameter mode's value is invalid, needs %d,"
                    " but got %d", s->mode, mode);
-        aio_context_release(aio_context);
         return;
     }
 
@@ -496,26 +487,25 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
     case REPLICATION_MODE_PRIMARY:
         break;
     case REPLICATION_MODE_SECONDARY:
+        bdrv_graph_rdlock_main_loop();
         active_disk = bs->file;
         if (!active_disk || !active_disk->bs || !active_disk->bs->backing) {
             error_setg(errp, "Active disk doesn't have backing file");
-            aio_context_release(aio_context);
+            bdrv_graph_rdunlock_main_loop();
             return;
         }
 
         hidden_disk = active_disk->bs->backing;
         if (!hidden_disk->bs || !hidden_disk->bs->backing) {
             error_setg(errp, "Hidden disk doesn't have backing file");
-            aio_context_release(aio_context);
+            bdrv_graph_rdunlock_main_loop();
             return;
         }
 
-        bdrv_graph_rdlock_main_loop();
         secondary_disk = hidden_disk->bs->backing;
         if (!secondary_disk->bs || !bdrv_has_blk(secondary_disk->bs)) {
             error_setg(errp, "The secondary disk doesn't have block backend");
             bdrv_graph_rdunlock_main_loop();
-            aio_context_release(aio_context);
             return;
         }
         bdrv_graph_rdunlock_main_loop();
@@ -528,7 +518,6 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
             active_length != hidden_length || hidden_length != disk_length) {
             error_setg(errp, "Active disk, hidden disk, secondary disk's length"
                        " are not the same");
-            aio_context_release(aio_context);
             return;
         }
 
@@ -540,7 +529,6 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
             !hidden_disk->bs->drv->bdrv_make_empty) {
             error_setg(errp,
                        "Active disk or hidden disk doesn't support make_empty");
-            aio_context_release(aio_context);
             bdrv_graph_rdunlock_main_loop();
             return;
         }
@@ -550,11 +538,10 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
         reopen_backing_file(bs, true, &local_err);
         if (local_err) {
             error_propagate(errp, local_err);
-            aio_context_release(aio_context);
             return;
         }
 
-        bdrv_graph_wrlock(bs);
+        bdrv_graph_wrlock();
 
         bdrv_ref(hidden_disk->bs);
         s->hidden_disk = bdrv_attach_child(bs, hidden_disk->bs, "hidden disk",
@@ -563,7 +550,6 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
         if (local_err) {
             error_propagate(errp, local_err);
             bdrv_graph_wrunlock();
-            aio_context_release(aio_context);
             return;
         }
 
@@ -574,7 +560,6 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
         if (local_err) {
             error_propagate(errp, local_err);
             bdrv_graph_wrunlock();
-            aio_context_release(aio_context);
             return;
         }
 
@@ -588,7 +573,6 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
             error_setg(errp, "No top_bs or it is invalid");
             bdrv_graph_wrunlock();
             reopen_backing_file(bs, false, NULL);
-            aio_context_release(aio_context);
             return;
         }
         bdrv_op_block_all(top_bs, s->blocker);
@@ -598,21 +582,19 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
 
         s->backup_job = backup_job_create(
                                 NULL, s->secondary_disk->bs, s->hidden_disk->bs,
-                                0, MIRROR_SYNC_MODE_NONE, NULL, 0, false, NULL,
-                                &perf,
+                                0, MIRROR_SYNC_MODE_NONE, NULL, 0, false, false,
+                                NULL, &perf,
                                 BLOCKDEV_ON_ERROR_REPORT,
                                 BLOCKDEV_ON_ERROR_REPORT, JOB_INTERNAL,
                                 backup_job_completed, bs, NULL, &local_err);
         if (local_err) {
             error_propagate(errp, local_err);
             backup_job_cleanup(bs);
-            aio_context_release(aio_context);
             return;
         }
         job_start(&s->backup_job->job);
         break;
     default:
-        aio_context_release(aio_context);
         abort();
     }
 
@@ -623,18 +605,12 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
     }
 
     s->error = 0;
-    aio_context_release(aio_context);
 }
 
 static void replication_do_checkpoint(ReplicationState *rs, Error **errp)
 {
     BlockDriverState *bs = rs->opaque;
-    BDRVReplicationState *s;
-    AioContext *aio_context;
-
-    aio_context = bdrv_get_aio_context(bs);
-    aio_context_acquire(aio_context);
-    s = bs->opaque;
+    BDRVReplicationState *s = bs->opaque;
 
     if (s->stage == BLOCK_REPLICATION_DONE ||
         s->stage == BLOCK_REPLICATION_FAILOVER) {
@@ -643,38 +619,28 @@ static void replication_do_checkpoint(ReplicationState *rs, Error **errp)
          * Ignore the request because the secondary side of replication
          * doesn't have to do anything anymore.
          */
-        aio_context_release(aio_context);
         return;
     }
 
     if (s->mode == REPLICATION_MODE_SECONDARY) {
         secondary_do_checkpoint(bs, errp);
     }
-    aio_context_release(aio_context);
 }
 
 static void replication_get_error(ReplicationState *rs, Error **errp)
 {
     BlockDriverState *bs = rs->opaque;
-    BDRVReplicationState *s;
-    AioContext *aio_context;
-
-    aio_context = bdrv_get_aio_context(bs);
-    aio_context_acquire(aio_context);
-    s = bs->opaque;
+    BDRVReplicationState *s = bs->opaque;
 
     if (s->stage == BLOCK_REPLICATION_NONE) {
         error_setg(errp, "Block replication is not running");
-        aio_context_release(aio_context);
         return;
     }
 
     if (s->error) {
         error_setg(errp, "I/O error occurred");
-        aio_context_release(aio_context);
         return;
     }
-    aio_context_release(aio_context);
 }
 
 static void replication_done(void *opaque, int ret)
@@ -685,7 +651,7 @@ static void replication_done(void *opaque, int ret)
     if (ret == 0) {
         s->stage = BLOCK_REPLICATION_DONE;
 
-        bdrv_graph_wrlock(NULL);
+        bdrv_graph_wrlock();
         bdrv_unref_child(bs, s->secondary_disk);
         s->secondary_disk = NULL;
         bdrv_unref_child(bs, s->hidden_disk);
@@ -702,12 +668,7 @@ static void replication_done(void *opaque, int ret)
 static void replication_stop(ReplicationState *rs, bool failover, Error **errp)
 {
     BlockDriverState *bs = rs->opaque;
-    BDRVReplicationState *s;
-    AioContext *aio_context;
-
-    aio_context = bdrv_get_aio_context(bs);
-    aio_context_acquire(aio_context);
-    s = bs->opaque;
+    BDRVReplicationState *s = bs->opaque;
 
     if (s->stage == BLOCK_REPLICATION_DONE ||
         s->stage == BLOCK_REPLICATION_FAILOVER) {
@@ -716,13 +677,11 @@ static void replication_stop(ReplicationState *rs, bool failover, Error **errp)
          * Ignore the request because the secondary side of replication
          * doesn't have to do anything anymore.
          */
-        aio_context_release(aio_context);
         return;
     }
 
     if (s->stage != BLOCK_REPLICATION_RUNNING) {
         error_setg(errp, "Block replication is not running");
-        aio_context_release(aio_context);
         return;
     }
 
@@ -738,29 +697,26 @@ static void replication_stop(ReplicationState *rs, bool failover, Error **errp)
          * disk, secondary disk in backup_job_completed().
          */
         if (s->backup_job) {
-            aio_context_release(aio_context);
             job_cancel_sync(&s->backup_job->job, true);
-            aio_context_acquire(aio_context);
         }
 
         if (!failover) {
             secondary_do_checkpoint(bs, errp);
             s->stage = BLOCK_REPLICATION_DONE;
-            aio_context_release(aio_context);
             return;
         }
 
+        bdrv_graph_rdlock_main_loop();
         s->stage = BLOCK_REPLICATION_FAILOVER;
         s->commit_job = commit_active_start(
                             NULL, bs->file->bs, s->secondary_disk->bs,
                             JOB_INTERNAL, 0, BLOCKDEV_ON_ERROR_REPORT,
                             NULL, replication_done, bs, true, errp);
+        bdrv_graph_rdunlock_main_loop();
         break;
     default:
-        aio_context_release(aio_context);
         abort();
     }
-    aio_context_release(aio_context);
 }
 
 static const char *const replication_strong_runtime_opts[] = {

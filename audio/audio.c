@@ -1683,7 +1683,7 @@ static const VMStateDescription vmstate_audio = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = vmstate_audio_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_END_OF_LIST()
     }
 };
@@ -1744,7 +1744,7 @@ static AudioState *audio_init(Audiodev *dev, Error **errp)
         if (driver) {
             done = !audio_driver_init(s, driver, dev, errp);
         } else {
-            error_setg(errp, "Unknown audio driver `%s'\n", drvname);
+            error_setg(errp, "Unknown audio driver `%s'", drvname);
         }
         if (!done) {
             goto out;
@@ -1758,12 +1758,15 @@ static AudioState *audio_init(Audiodev *dev, Error **errp)
                 goto out;
             }
             s->dev = dev = e->dev;
+            QSIMPLEQ_REMOVE_HEAD(&default_audiodevs, next);
+            g_free(e);
             drvname = AudiodevDriver_str(dev->driver);
             driver = audio_driver_lookup(drvname);
             if (!audio_driver_init(s, driver, dev, NULL)) {
                 break;
             }
-            QSIMPLEQ_REMOVE_HEAD(&default_audiodevs, next);
+            qapi_free_Audiodev(dev);
+            s->dev = NULL;
         }
     }
 
@@ -1781,7 +1784,7 @@ static AudioState *audio_init(Audiodev *dev, Error **errp)
 
     QTAILQ_INSERT_TAIL(&audio_states, s, list);
     QLIST_INIT (&s->card_head);
-    vmstate_register (NULL, 0, &vmstate_audio, s);
+    vmstate_register_any(NULL, &vmstate_audio, s);
     return s;
 
 out:

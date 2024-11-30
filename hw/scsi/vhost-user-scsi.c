@@ -36,6 +36,8 @@ static const int user_feature_bits[] = {
     VIRTIO_RING_F_EVENT_IDX,
     VIRTIO_SCSI_F_HOTPLUG,
     VIRTIO_F_RING_RESET,
+    VIRTIO_F_IN_ORDER,
+    VIRTIO_F_NOTIFICATION_DATA,
     VHOST_INVALID_FEATURE_BIT
 };
 
@@ -83,7 +85,8 @@ static void vhost_user_scsi_set_status(VirtIODevice *vdev, uint8_t status)
     if (should_start) {
         ret = vhost_user_scsi_start(s, &local_err);
         if (ret < 0) {
-            error_reportf_err(local_err, "unable to start vhost-user-scsi: %s",
+            error_reportf_err(local_err,
+                              "unable to start vhost-user-scsi: %s: ",
                               strerror(-ret));
             qemu_chr_fe_disconnect(&vs->conf.chardev);
         }
@@ -147,7 +150,6 @@ static int vhost_user_scsi_connect(DeviceState *dev, Error **errp)
     if (s->connected) {
         return 0;
     }
-    s->connected = true;
 
     vsc->dev.num_queues = vs->conf.num_queues;
     vsc->dev.nvqs = VIRTIO_SCSI_VQ_NUM_FIXED + vs->conf.num_queues;
@@ -160,6 +162,8 @@ static int vhost_user_scsi_connect(DeviceState *dev, Error **errp)
     if (ret < 0) {
         return ret;
     }
+
+    s->connected = true;
 
     /* restore vhost state */
     if (virtio_device_started(vdev, vdev->status)) {
@@ -179,7 +183,7 @@ static void vhost_user_scsi_disconnect(DeviceState *dev)
     VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(dev);
 
     if (!s->connected) {
-        return;
+        goto done;
     }
     s->connected = false;
 
@@ -187,6 +191,7 @@ static void vhost_user_scsi_disconnect(DeviceState *dev)
 
     vhost_dev_cleanup(&vsc->dev);
 
+done:
     /* Re-instate the event handler for new connections */
     qemu_chr_fe_set_handlers(&vs->conf.chardev, NULL, NULL,
                              vhost_user_scsi_event, NULL, dev, NULL, true);
@@ -212,8 +217,7 @@ static void vhost_user_scsi_event(void *opaque, QEMUChrEvent event)
     case CHR_EVENT_CLOSED:
         /* defer close until later to avoid circular close */
         vhost_user_async_close(dev, &vs->conf.chardev, &vsc->dev,
-                               vhost_user_scsi_disconnect,
-                               vhost_user_scsi_event);
+                               vhost_user_scsi_disconnect);
         break;
     case CHR_EVENT_BREAK:
     case CHR_EVENT_MUX_IN:
@@ -359,11 +363,25 @@ static Property vhost_user_scsi_properties[] = {
     DEFINE_PROP_END_OF_LIST(),
 };
 
+static void vhost_user_scsi_reset(VirtIODevice *vdev)
+{
+    VHostUserSCSI *s = VHOST_USER_SCSI(vdev);
+    VHostSCSICommon *vsc = VHOST_SCSI_COMMON(s);
+
+    vhost_dev_free_inflight(vsc->inflight);
+}
+
+static struct vhost_dev *vhost_user_scsi_get_vhost(VirtIODevice *vdev)
+{
+    VHostSCSICommon *vsc = VHOST_SCSI_COMMON(vdev);
+    return &vsc->dev;
+}
+
 static const VMStateDescription vmstate_vhost_scsi = {
     .name = "virtio-scsi",
     .minimum_version_id = 1,
     .version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_VIRTIO_DEVICE,
         VMSTATE_END_OF_LIST()
     },
@@ -384,6 +402,8 @@ static void vhost_user_scsi_class_init(ObjectClass *klass, void *data)
     vdc->set_config = vhost_scsi_common_set_config;
     vdc->set_status = vhost_user_scsi_set_status;
     fwc->get_dev_path = vhost_scsi_common_get_fw_dev_path;
+    vdc->reset = vhost_user_scsi_reset;
+    vdc->get_vhost = vhost_user_scsi_get_vhost;
 }
 
 static void vhost_user_scsi_instance_init(Object *obj)

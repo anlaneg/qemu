@@ -69,13 +69,14 @@ void notifier_with_return_remove(NotifierWithReturn *notifier)
 }
 
 //触发list上的所有notifier
-int notifier_with_return_list_notify(NotifierWithReturnList *list, void *data)
+int notifier_with_return_list_notify(NotifierWithReturnList *list, void *data,
+                                     Error **errp)
 {
     NotifierWithReturn *notifier, *next;
     int ret = 0;
 
     QLIST_FOREACH_SAFE(notifier, &list->notifiers, node, next) {
-        ret = notifier->notify(notifier, data);
+        ret = notifier->notify(notifier, data, errp);
         if (ret != 0) {
             break;//如果任意一个返回非0,则停止并返回
         }

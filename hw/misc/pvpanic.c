@@ -21,14 +21,14 @@
 #include "hw/qdev-properties.h"
 #include "hw/misc/pvpanic.h"
 #include "qom/object.h"
-#include "standard-headers/linux/pvpanic.h"
+#include "standard-headers/misc/pvpanic.h"
 
 static void handle_event(int event)
 {
     static bool logged;
 
     //只支持二种event,如果不认识，则告警
-    if (event & ~(PVPANIC_PANICKED | PVPANIC_CRASH_LOADED) && !logged) {
+    if (event & ~PVPANIC_EVENTS && !logged) {
         qemu_log_mask(LOG_GUEST_ERROR, "pvpanic: unknown event %#x.\n", event);
         logged = true;
     }
@@ -42,6 +42,11 @@ static void handle_event(int event)
     if (event & PVPANIC_CRASH_LOADED) {
         //执行guest系统crashloaed
         qemu_system_guest_crashloaded(NULL);
+        return;
+    }
+
+    if (event & PVPANIC_SHUTDOWN) {
+        qemu_system_guest_pvshutdown();
         return;
     }
 }

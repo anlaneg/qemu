@@ -20,6 +20,22 @@
 #include "exec/address-spaces.h"
 #include "trace.h"
 
+static bool memory_device_is_empty(const MemoryDeviceState *md)
+{
+    const MemoryDeviceClass *mdc = MEMORY_DEVICE_GET_CLASS(md);
+    Error *local_err = NULL;
+    MemoryRegion *mr;
+
+    /* dropping const here is fine as we don't touch the memory region */
+    mr = mdc->get_memory_region((MemoryDeviceState *)md, &local_err);
+    if (local_err) {
+        /* Not empty, we'll report errors later when containing the MR again. */
+        error_free(local_err);
+        return false;
+    }
+    return !mr;
+}
+
 static gint memory_device_addr_sort(gconstpointer a, gconstpointer b)
 {
     const MemoryDeviceState *md_a = MEMORY_DEVICE(a);
@@ -220,12 +236,6 @@ static uint64_t memory_device_get_free_addr(MachineState *ms,
         return 0;
     }
 
-    if (!QEMU_IS_ALIGNED(size, align)) {
-        error_setg(errp, "backend memory size must be multiple of 0x%"
-                   PRIx64, align);
-        return 0;
-    }
-
     if (hint) {
         if (range_init(&new, *hint, size) || !range_contains_range(&as, &new)) {
             error_setg(errp, "can't add memory device [0x%" PRIx64 ":0x%" PRIx64
@@ -248,6 +258,10 @@ static uint64_t memory_device_get_free_addr(MachineState *ms,
         const MemoryDeviceClass *mdc = MEMORY_DEVICE_GET_CLASS(OBJECT(md));
         uint64_t next_addr;
         Range tmp;
+
+        if (memory_device_is_empty(md)) {
+            continue;
+        }
 
         range_init_nofail(&tmp, mdc->get_addr(md),
                           memory_device_get_region_size(md, &error_abort));
@@ -292,6 +306,7 @@ MemoryDeviceInfoList *qmp_memory_device_list(void)
         const MemoryDeviceClass *mdc = MEMORY_DEVICE_GET_CLASS(item->data);
         MemoryDeviceInfo *info = g_new0(MemoryDeviceInfo, 1);
 
+        /* Let's query infotmation even for empty memory devices. */
         mdc->fill_device_info(md, info);
 
         QAPI_LIST_APPEND(tail, info);
@@ -311,7 +326,7 @@ static int memory_device_plugged_size(Object *obj, void *opaque)
         const MemoryDeviceState *md = MEMORY_DEVICE(obj);
         const MemoryDeviceClass *mdc = MEMORY_DEVICE_GET_CLASS(obj);
 
-        if (dev->realized) {
+        if (dev->realized && !memory_device_is_empty(md)) {
             *size += mdc->get_plugged_size(md, &error_abort);
         }
     }
@@ -330,12 +345,17 @@ uint64_t get_plugged_memory_size(void)
 }
 
 void memory_device_pre_plug(MemoryDeviceState *md, MachineState *ms,
-                            const uint64_t *legacy_align, Error **errp)
+                            Error **errp)
 {
     const MemoryDeviceClass *mdc = MEMORY_DEVICE_GET_CLASS(md);
     Error *local_err = NULL;
     uint64_t addr, align = 0;
     MemoryRegion *mr;
+
+    /* We support empty memory devices even without device memory. */
+    if (memory_device_is_empty(md)) {
+        return;
+    }
 
     if (!ms->device_memory) {
         error_setg(errp, "the configuration is not prepared for memory devices"
@@ -354,14 +374,24 @@ void memory_device_pre_plug(MemoryDeviceState *md, MachineState *ms,
         goto out;
     }
 
-    if (legacy_align) {
-        align = *legacy_align;
-    } else {
-        if (mdc->get_min_alignment) {
-            align = mdc->get_min_alignment(md);
-        }
-        align = MAX(align, memory_region_get_alignment(mr));
+    /*
+     * We always want the memory region size to be multiples of the memory
+     * region alignment: for example, DIMMs with 1G+1byte size don't make
+     * any sense. Note that we don't check that the size is multiples
+     * of any additional alignment requirements the memory device might
+     * have when it comes to the address in physical address space.
+     */
+    if (!QEMU_IS_ALIGNED(memory_region_size(mr),
+                         memory_region_get_alignment(mr))) {
+        error_setg(errp, "backend memory size must be multiple of 0x%"
+                   PRIx64, memory_region_get_alignment(mr));
+        return;
     }
+
+    if (mdc->get_min_alignment) {
+        align = mdc->get_min_alignment(md);
+    }
+    align = MAX(align, memory_region_get_alignment(mr));
     addr = mdc->get_addr(md);
     addr = memory_device_get_free_addr(ms, !addr ? NULL : &addr, align,
                                        memory_region_size(mr), &local_err);
@@ -380,9 +410,16 @@ out:
 void memory_device_plug(MemoryDeviceState *md, MachineState *ms)
 {
     const MemoryDeviceClass *mdc = MEMORY_DEVICE_GET_CLASS(md);
-    const unsigned int memslots = memory_device_get_memslots(md);
-    const uint64_t addr = mdc->get_addr(md);
+    unsigned int memslots;
+    uint64_t addr;
     MemoryRegion *mr;
+
+    if (memory_device_is_empty(md)) {
+        return;
+    }
+
+    memslots = memory_device_get_memslots(md);
+    addr = mdc->get_addr(md);
 
     /*
      * We expect that a previous call to memory_device_pre_plug() succeeded, so
@@ -407,6 +444,10 @@ void memory_device_unplug(MemoryDeviceState *md, MachineState *ms)
     const MemoryDeviceClass *mdc = MEMORY_DEVICE_GET_CLASS(md);
     const unsigned int memslots = memory_device_get_memslots(md);
     MemoryRegion *mr;
+
+    if (memory_device_is_empty(md)) {
+        return;
+    }
 
     /*
      * We expect that a previous call to memory_device_pre_plug() succeeded, so
