@@ -49,17 +49,10 @@ typedef struct CoroutinePoolBatch {
     /* Batches are kept in a list */
     QSLIST_ENTRY(CoroutinePoolBatch) next;
 
-<<<<<<< HEAD
-typedef QSLIST_HEAD(, Coroutine) CoroutineQSList;
-QEMU_DEFINE_STATIC_CO_TLS(CoroutineQSList, alloc_pool);/*per线程的协程pool*/
-QEMU_DEFINE_STATIC_CO_TLS(unsigned int, alloc_pool_size);/*per线程的pool size*/
-QEMU_DEFINE_STATIC_CO_TLS(Notifier, coroutine_pool_cleanup_notifier);
-=======
     /* This batch holds up to @COROUTINE_POOL_BATCH_MAX_SIZE coroutines */
     QSLIST_HEAD(, Coroutine) list;
     unsigned int size;
 } CoroutinePoolBatch;
->>>>>>> upstream/master
 
 typedef QSLIST_HEAD(, CoroutinePoolBatch) CoroutinePool;
 

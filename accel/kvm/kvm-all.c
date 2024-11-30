@@ -2453,107 +2453,21 @@ uint32_t kvm_dirty_ring_size(void)
     return kvm_state->kvm_dirty_ring_size;
 }
 
-<<<<<<< HEAD
-//kvm初始化
-static int kvm_init(MachineState *ms)
-=======
 static int do_kvm_create_vm(MachineState *ms, int type)
->>>>>>> upstream/master
 {
     KVMState *s;
     int ret;
 
     s = KVM_STATE(ms->accelerator);
 
-<<<<<<< HEAD
-    /*
-     * On systems where the kernel can support different base page
-     * sizes, host page size may be different from TARGET_PAGE_SIZE,
-     * even with KVM.  TARGET_PAGE_SIZE is assumed to be the minimum
-     * page size for the system though.
-     */
-    assert(TARGET_PAGE_SIZE <= qemu_real_host_page_size());
-
-    s->sigmask_len = 8;
-    accel_blocker_init();
-
-#ifdef KVM_CAP_SET_GUEST_DEBUG
-    QTAILQ_INIT(&s->kvm_sw_breakpoints);
-#endif
-    QLIST_INIT(&s->kvm_parked_vcpus);
-    /*打开设备/dev/kvm*/
-    s->fd = qemu_open_old("/dev/kvm", O_RDWR);
-    if (s->fd == -1) {
-        fprintf(stderr, "Could not access KVM kernel module: %m\n");
-        ret = -errno;
-        goto err;
-    }
-
-    /*获得kvm api版本*/
-    ret = kvm_ioctl(s, KVM_GET_API_VERSION, 0);
-    if (ret < KVM_API_VERSION) {
-    	//不支持小于此version的kvm
-        if (ret >= 0) {
-            ret = -EINVAL;
-        }
-        fprintf(stderr, "kvm version too old\n");
-        goto err;
-    }
-
-    if (ret > KVM_API_VERSION) {
-    	//不支持大于此version的kvm
-        ret = -EINVAL;
-        fprintf(stderr, "kvm version not supported\n");
-        goto err;
-    }
-
-    //x86情况下，此值为1
-    kvm_immediate_exit = kvm_check_extension(s, KVM_CAP_IMMEDIATE_EXIT);
-    s->nr_slots = kvm_check_extension(s, KVM_CAP_NR_MEMSLOTS);
-
-    /* If unspecified, use the default value */
-    if (!s->nr_slots) {
-    	//如果未指定，则使用默认值32
-        s->nr_slots = 32;
-    }
-
-    s->nr_as = kvm_check_extension(s, KVM_CAP_MULTI_ADDRESS_SPACE);
-    if (s->nr_as <= 1) {
-        s->nr_as = 1;
-    }
-    s->as = g_new0(struct KVMAs, s->nr_as);
-
-    if (object_property_find(OBJECT(current_machine), "kvm-type")) {
-        g_autofree char *kvm_type = object_property_get_str(OBJECT(current_machine),
-                                                            "kvm-type",
-                                                            &error_abort);
-        type = mc->kvm_type(ms, kvm_type);
-    } else if (mc->kvm_type) {
-        type = mc->kvm_type(ms, NULL);
-    } else {
-        type = kvm_arch_get_default_type(ms);
-    }
-
-    if (type < 0) {
-        ret = -EINVAL;
-        goto err;
-    }
-
-=======
->>>>>>> upstream/master
     do {
     	//执行vm创建
         ret = kvm_ioctl(s, KVM_CREATE_VM, type);
     } while (ret == -EINTR);
 
     if (ret < 0) {
-<<<<<<< HEAD
     	//创建vm失败
-        fprintf(stderr, "ioctl(KVM_CREATE_VM) failed: %d %s\n", -ret,
-                strerror(-ret));
-=======
         error_report("ioctl(KVM_CREATE_VM) failed: %s", strerror(-ret));
->>>>>>> upstream/master
 
 #ifdef TARGET_S390X
         if (ret == -EINVAL) {
@@ -2573,13 +2487,9 @@ static int do_kvm_create_vm(MachineState *ms, int type)
 #endif
     }
 
-<<<<<<< HEAD
     /*记录vm对应的fd*/
-    s->vmfd = ret;
-=======
     return ret;
 }
->>>>>>> upstream/master
 
 static int find_kvm_machine_type(MachineState *ms)
 {
@@ -2600,30 +2510,10 @@ static int find_kvm_machine_type(MachineState *ms)
     return type;
 }
 
-<<<<<<< HEAD
-    missing_cap = kvm_check_extension_list(s, kvm_required_capabilites);
-    if (!missing_cap) {
-        /*kvm_required_capabilites列出的功能均支持，查看arch指定折cap是否支持*/
-        missing_cap =
-            kvm_check_extension_list(s, kvm_arch_required_capabilities);
-    }
-    if (missing_cap) {
-        /*存在水支持的扩展，报错*/
-        ret = -EINVAL;
-        fprintf(stderr, "kvm does not support %s\n%s",
-                missing_cap->name, upgrade_note);
-        goto err;
-    }
-
-    s->coalesced_mmio = kvm_check_extension(s, KVM_CAP_COALESCED_MMIO);
-    s->coalesced_pio = s->coalesced_mmio &&
-                       kvm_check_extension(s, KVM_CAP_COALESCED_PIO);
-=======
 static int kvm_setup_dirty_ring(KVMState *s)
 {
     uint64_t dirty_log_manual_caps;
     int ret;
->>>>>>> upstream/master
 
     /*
      * Enable KVM dirty ring if supported, otherwise fall back to
@@ -3412,12 +3302,8 @@ int kvm_cpu_exec(CPUState *cpu)
     return ret;
 }
 
-<<<<<<< HEAD
 /*针对kvm的fd，执行ioctl*/
-int kvm_ioctl(KVMState *s, int type, ...)
-=======
 int kvm_ioctl(KVMState *s, unsigned long type, ...)
->>>>>>> upstream/master
 {
     int ret;
     void *arg;
