@@ -1414,16 +1414,19 @@ static bool virtio_pci_queue_enabled(DeviceState *d, int n)
     return virtio_queue_enabled_legacy(vdev, n);
 }
 
+/*向virtio_pci中添加PCI_CAP_ID_VNDR类型的cap*/
 static int virtio_pci_add_mem_cap(VirtIOPCIProxy *proxy,
                                    struct virtio_pci_cap *cap)
 {
     PCIDevice *dev = &proxy->pci_dev;
     int offset;
 
-    offset = pci_add_capability(dev, PCI_CAP_ID_VNDR, 0,
+    /*向virtio-pci添加capability*/
+    offset = pci_add_capability(dev, PCI_CAP_ID_VNDR/*vendor的特别数据*/, 0,
                                 cap->cap_len, &error_abort);
 
     assert(cap->cap_len >= sizeof *cap);
+    /*复制cap内容到dev->config(前两个字节在上面的函数中已写入)*/
     memcpy(dev->config + offset + PCI_CAP_FLAGS, &cap->cap_len,
            cap->cap_len - PCI_CAP_FLAGS);
 
@@ -1579,7 +1582,7 @@ static uint64_t virtio_pci_common_read(void *opaque, hwaddr addr,
 
 //virtio_pci硬件信息设置函数
 static void virtio_pci_common_write(void *opaque, hwaddr addr/*设备地址*/,
-                                    uint64_t val, unsigned size)
+                                    uint64_t val/*要设置的值*/, unsigned size)
 {
     VirtIOPCIProxy *proxy = opaque;
     VirtIODevice *vdev = virtio_bus_get_device(&proxy->bus);
@@ -1618,6 +1621,7 @@ static void virtio_pci_common_write(void *opaque, hwaddr addr/*设备地址*/,
                               vdev->config_vector, val);
         break;
     case VIRTIO_PCI_COMMON_STATUS:
+    	/*guest设置status*/
         if (!(val & VIRTIO_CONFIG_S_DRIVER_OK)) {
             virtio_pci_stop_ioeventfd(proxy);
         }
@@ -1629,6 +1633,7 @@ static void virtio_pci_common_write(void *opaque, hwaddr addr/*设备地址*/,
         }
 
         if (vdev->status == 0) {
+        	/*被写入0时,执行硬件reset*/
             virtio_pci_reset(DEVICE(proxy));
         }
 
@@ -1640,7 +1645,7 @@ static void virtio_pci_common_write(void *opaque, hwaddr addr/*设备地址*/,
         }
         break;
     case VIRTIO_PCI_COMMON_Q_SIZE:
-    	//指定队列大小
+    	//指定队列长度
         proxy->vqs[vdev->queue_sel].num = val;
         virtio_queue_set_num(vdev, vdev->queue_sel,
                              proxy->vqs[vdev->queue_sel].num);
@@ -1700,6 +1705,7 @@ static void virtio_pci_common_write(void *opaque, hwaddr addr/*设备地址*/,
         proxy->vqs[vdev->queue_sel].used[1] = val;
         break;
     case VIRTIO_PCI_COMMON_Q_RESET:
+    	/*对Q执行reset*/
         if (val == 1) {
             proxy->vqs[vdev->queue_sel].reset = 1;
 
@@ -1831,8 +1837,8 @@ static void virtio_pci_modern_regions_init(VirtIOPCIProxy *proxy,
                                            const char *vdev_name)
 {
     static const MemoryRegionOps common_ops = {
-        .read = virtio_pci_common_read,
-        .write = virtio_pci_common_write,/*注册virtio-pci设备的write函数回调*/
+        .read = virtio_pci_common_read,/*注册virtio-pci设备common结构体的read函数回调*/
+        .write = virtio_pci_common_write,/*注册virtio-pci设备common结构体的write函数回调*/
         .impl = {
             .min_access_size = 1,
             .max_access_size = 4,
@@ -1878,7 +1884,7 @@ static void virtio_pci_modern_regions_init(VirtIOPCIProxy *proxy,
     g_autoptr(GString) name = g_string_new(NULL);
 
     g_string_printf(name, "virtio-pci-common-%s", vdev_name);
-    //注册io region
+    //注册common结构体的io region
     memory_region_init_io(&proxy->common.mr, OBJECT(proxy),
                           &common_ops,
                           proxy,
@@ -1919,11 +1925,11 @@ static void virtio_pci_modern_region_map(VirtIOPCIProxy *proxy,
                                          VirtIOPCIRegion *region,
                                          struct virtio_pci_cap *cap,
                                          MemoryRegion *mr,
-                                         uint8_t bar)
+                                         uint8_t bar/*配置结构体所在的bar*/)
 {
     memory_region_add_subregion(mr, region->offset, &region->mr);
 
-    cap->cfg_type = region->type;
+    cap->cfg_type = region->type;/*设置配置结构体类型*/
     cap->bar = bar;
     cap->offset = cpu_to_le32(region->offset);
     cap->length = cpu_to_le32(region->size);
@@ -1967,6 +1973,7 @@ static void virtio_pci_pre_plugged(DeviceState *d, Error **errp)
     VirtIODevice *vdev = virtio_bus_get_device(&proxy->bus);
 
     if (virtio_pci_modern(proxy)) {
+    	/*通过版本1.0指明modern*/
         virtio_add_feature(&vdev->host_features, VIRTIO_F_VERSION_1);
     }
 
@@ -1978,7 +1985,7 @@ static void virtio_pci_device_plugged(DeviceState *d, Error **errp)
 {
     VirtIOPCIProxy *proxy = VIRTIO_PCI(d);
     VirtioBusState *bus = &proxy->bus;
-    bool legacy = virtio_pci_legacy(proxy);
+    bool legacy = virtio_pci_legacy(proxy);/*是否为legacy设备*/
     bool modern;
     bool modern_pio = proxy->flags & VIRTIO_PCI_FLAG_MODERN_PIO_NOTIFY;
     uint8_t *config;
@@ -2051,10 +2058,10 @@ static void virtio_pci_device_plugged(DeviceState *d, Error **errp)
 
     if (modern) {
         struct virtio_pci_cap cap = {
-            .cap_len = sizeof cap,
+            .cap_len = sizeof cap,/*指定为结构体长度*/
         };
         struct virtio_pci_notify_cap notify = {
-            .cap.cap_len = sizeof notify,
+            .cap.cap_len = sizeof notify,/*notify结构体长度*/
             .notify_off_multiplier =
                 cpu_to_le32(virtio_pci_queue_mem_mult(proxy)),
         };
@@ -2069,8 +2076,10 @@ static void virtio_pci_device_plugged(DeviceState *d, Error **errp)
 
         struct virtio_pci_cfg_cap *cfg_mask;
 
+        /*注册memory regions*/
         virtio_pci_modern_regions_init(proxy, vdev->name);
 
+        /*添加COMMON等结构体,使之在PCI CONFIG中形成CAP LISTS*/
         virtio_pci_modern_mem_region_map(proxy, &proxy->common, &cap);
         virtio_pci_modern_mem_region_map(proxy, &proxy->isr, &cap);
         virtio_pci_modern_mem_region_map(proxy, &proxy->device, &cap);
@@ -2213,6 +2222,7 @@ static void virtio_pci_realize(PCIDevice *pci_dev, Error **errp)
     }
 
     if (!virtio_pci_modern(proxy) && !virtio_pci_legacy(proxy)) {
+    	/*modern与legacy均没有开启*/
         error_setg(errp, "device cannot work as neither modern nor legacy mode"
                    " is enabled");
         error_append_hint(errp, "Set either disable-modern or disable-legacy"
@@ -2310,6 +2320,7 @@ static void virtio_pci_exit(PCIDevice *pci_dev)
     }
 }
 
+/*执行virtio-pci reset模拟*/
 static void virtio_pci_reset(DeviceState *qdev)
 {
     VirtIOPCIProxy *proxy = VIRTIO_PCI(qdev);
@@ -2638,8 +2649,8 @@ static void virtio_pci_bus_class_init(ObjectClass *klass, void *data)
     k->set_guest_notifiers = virtio_pci_set_guest_notifiers;
     k->set_host_notifier_mr = virtio_pci_set_host_notifier_mr;
     k->vmstate_change = virtio_pci_vmstate_change;
-    k->pre_plugged = virtio_pci_pre_plugged;
-    k->device_plugged = virtio_pci_device_plugged;
+    k->pre_plugged = virtio_pci_pre_plugged;/*virtio-pci插入前处理*/
+    k->device_plugged = virtio_pci_device_plugged;/*virtio-pci插入处理*/
     k->device_unplugged = virtio_pci_device_unplugged;
     k->query_nvectors = virtio_pci_query_nvectors;
     k->ioeventfd_enabled = virtio_pci_ioeventfd_enabled;

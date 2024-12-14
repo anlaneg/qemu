@@ -60,7 +60,7 @@ struct PCIDevice {
     bool has_power;
 
     /* PCI config space */
-    uint8_t *config;
+    uint8_t *config;/*pci设备的配置空间*/
 
     /*
      * Used to enable config checks on load. Note that writable bits are
@@ -211,6 +211,7 @@ static inline int pci_is_vf(const PCIDevice *d)
 
 static inline uint32_t pci_config_size(const PCIDevice *d)
 {
+	/*如果是pcie,配置长度为4096,如果是PCI则为256*/
     return pci_is_express(d) ? PCIE_CONFIG_SPACE_SIZE : PCI_CONFIG_SPACE_SIZE;
 }
 

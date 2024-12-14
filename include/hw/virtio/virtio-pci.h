@@ -156,7 +156,7 @@ struct VirtIOPCIProxy {
     uint32_t modern_mem_bar_idx;
     int config_cap;
     uint32_t flags;
-    bool disable_modern;
+    bool disable_modern;/*是否禁用modern*/
     bool ignore_backend_features;
     OnOffAuto disable_legacy;
     /* Transitional device id */
@@ -175,6 +175,7 @@ struct VirtIOPCIProxy {
 
 static inline bool virtio_pci_modern(VirtIOPCIProxy *proxy)
 {
+	/*如果不禁用modern,则为modern virtio-pci*/
     return !proxy->disable_modern;
 }
 

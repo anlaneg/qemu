@@ -113,8 +113,10 @@ static char *sysfs_find_group_file(const char *device, Error **errp)
     char *path = NULL;
 
     sysfs_link = g_strdup_printf("/sys/bus/pci/devices/%s/iommu_group", device);
+    /*例如:/sys/bus/pci/devices/0000:00:0a.0/iommu_group -> ../../../kernel/iommu_groups/3*/
     sysfs_group = g_file_read_link(sysfs_link, &gerr);
     if (gerr) {
+    	/*没有IOMMU GROUP*/
         error_setg(errp, "Failed to find iommu group sysfs path: %s",
                    gerr->message);
         goto out;
@@ -125,6 +127,7 @@ static char *sysfs_find_group_file(const char *device, Error **errp)
         goto out;
     }
 
+    /*取得vfio group路径*/
     path = g_strdup_printf("/dev/vfio/%s", p + 1);
 out:
     g_free(sysfs_link);
@@ -309,15 +312,19 @@ static int qemu_vfio_init_pci(QEMUVFIOState *s, const char *device,
     s->container = open("/dev/vfio/vfio", O_RDWR);
 
     if (s->container == -1) {
+    	/*打开字符设备失败*/
         error_setg_errno(errp, errno, "Failed to open /dev/vfio/vfio");
         return -errno;
     }
+
+    /*检查API版本号*/
     if (ioctl(s->container, VFIO_GET_API_VERSION) != VFIO_API_VERSION) {
         error_setg(errp, "Invalid VFIO version");
         ret = -EINVAL;
         goto fail_container;
     }
 
+    /*检查是否支持TYPE1 IOMMU*/
     if (!ioctl(s->container, VFIO_CHECK_EXTENSION, VFIO_TYPE1_IOMMU)) {
         error_setg_errno(errp, errno, "VFIO IOMMU Type1 is not supported");
         ret = -EINVAL;
@@ -333,6 +340,7 @@ static int qemu_vfio_init_pci(QEMUVFIOState *s, const char *device,
 
     s->group = open(group_file, O_RDWR);
     if (s->group == -1) {
+    	/*VFIO GROUP文件不存在*/
         error_setg_errno(errp, errno, "Failed to open VFIO group file: %s",
                          group_file);
         g_free(group_file);

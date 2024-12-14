@@ -1024,7 +1024,7 @@ static void pci_config_alloc(PCIDevice *pci_dev)
 {
     int config_size = pci_config_size(pci_dev);
 
-    pci_dev->config = g_malloc0(config_size);
+    pci_dev->config = g_malloc0(config_size);/*申请config所需要的内存*/
     pci_dev->cmask = g_malloc0(config_size);
     pci_dev->wmask = g_malloc0(config_size);
     pci_dev->w1cmask = g_malloc0(config_size);
@@ -2450,13 +2450,14 @@ static void pci_del_option_rom(PCIDevice *pdev)
  * code.
  */
 int pci_add_capability(PCIDevice *pdev, uint8_t cap_id,
-                       uint8_t offset, uint8_t size,
+                       uint8_t offset/*如果不指出offset,则自动选择offset*/, uint8_t size,
                        Error **errp)
 {
     uint8_t *config;
     int i, overlapping_cap;
 
     if (!offset) {
+    	/*自动选择offset*/
         offset = pci_find_space(pdev, size);
         /* out of PCI config space is programming error */
         assert(offset);
@@ -2480,8 +2481,8 @@ int pci_add_capability(PCIDevice *pdev, uint8_t cap_id,
     }
 
     config = pdev->config + offset;
-    config[PCI_CAP_LIST_ID] = cap_id;
-    config[PCI_CAP_LIST_NEXT] = pdev->config[PCI_CAPABILITY_LIST];
+    config[PCI_CAP_LIST_ID] = cap_id;/*指出这个cap id*/
+    config[PCI_CAP_LIST_NEXT] = pdev->config[PCI_CAPABILITY_LIST];/*指出下一个cap id对应的offset*/
     pdev->config[PCI_CAPABILITY_LIST] = offset;
     pdev->config[PCI_STATUS] |= PCI_STATUS_CAP_LIST;
     memset(pdev->used + offset, 0xFF, QEMU_ALIGN_UP(size, 4));
