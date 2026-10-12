@@ -69,7 +69,7 @@ static int open_cdev_robust(dev_t cdev)
     return open_cdev_internal(devpath, cdev);
 }
 
-int open_cdev(const char *devpath, dev_t cdev)
+int open_cdev(const char *devpath/*字符设备路径*/, dev_t cdev)
 {
     int fd;
 

@@ -4134,6 +4134,7 @@ static void virtio_net_class_init(ObjectClass *klass, void *data)
     vdc->queue_enable = virtio_net_queue_enable;
     vdc->set_status = virtio_net_set_status;
     vdc->guest_notifier_mask = virtio_net_guest_notifier_mask;
+    /*通过调用此函数等待给guest通知的时机成熟，此函数返回，则需要注入中断*/
     vdc->guest_notifier_pending = virtio_net_guest_notifier_pending;
     vdc->legacy_features |= (0x1 << VIRTIO_NET_F_GSO);
     vdc->pre_load_queues = virtio_net_pre_load_queues;

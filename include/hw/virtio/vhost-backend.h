@@ -183,8 +183,11 @@ typedef struct VhostOps {
     vhost_set_vring_num_op vhost_set_vring_num;
     vhost_set_vring_base_op vhost_set_vring_base;
     vhost_get_vring_base_op vhost_get_vring_base;
+    /*qemu利用此eventfd向vhost通知，使其知道可以执行rx收包了*/
     vhost_set_vring_kick_op vhost_set_vring_kick;
+    /*vhost tx时通过此函数设置的eventfd通知qemu*/
     vhost_set_vring_call_op vhost_set_vring_call;
+    /*vhost通过此函数设置的evnetfd通知qemu，发生错误了*/
     vhost_set_vring_err_op vhost_set_vring_err;
     vhost_set_vring_busyloop_timeout_op vhost_set_vring_busyloop_timeout;
     vhost_new_worker_op vhost_new_worker;

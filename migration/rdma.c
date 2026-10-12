@@ -1044,7 +1044,7 @@ err_resolve_create_id:
 static int qemu_rdma_alloc_pd_cq(RDMAContext *rdma, Error **errp)
 {
     /* allocate pd */
-    rdma->pd = ibv_alloc_pd(rdma->verbs);
+    rdma->pd = ibv_alloc_pd(rdma->verbs);/*创建pd*/
     if (!rdma->pd) {
         error_setg(errp, "failed to allocate protection domain");
         return -1;
@@ -3426,7 +3426,7 @@ static int qemu_rdma_accept(RDMAContext *rdma)
         goto err_rdma_dest_wait;
     }
 
-    ret = qemu_rdma_alloc_qp(rdma);
+    ret = qemu_rdma_alloc_qp(rdma);/*创建qp*/
     if (ret < 0) {
         error_report("rdma migration: error allocating qp!");
         goto err_rdma_dest_wait;

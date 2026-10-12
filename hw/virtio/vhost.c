@@ -1369,7 +1369,7 @@ int vhost_virtqueue_start(struct vhost_dev *dev,
     if (k->query_guest_notifiers &&
         k->query_guest_notifiers(qbus->parent) &&
         virtio_queue_vector(vdev, idx) == VIRTIO_NO_VECTOR) {
-        /*设置vring call为NULL*/
+        /*设置vring call为NULL（即vhost tx方向收包不用通知到qemu)*/
         file.fd = -1;
         r = dev->vhost_ops->vhost_set_vring_call(dev, &file);
         if (r) {
@@ -1482,7 +1482,7 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
 	//取virtqueue的索引
     int vhost_vq_index = dev->vhost_ops->vhost_get_vq_index(dev, n);
     struct vhost_vring_file file = {
-        .index = vhost_vq_index,
+        .index = vhost_vq_index,/*哪个队列*/
     };
     //创建eventfd
     int r = event_notifier_init(&vq->masked_notifier, 0);
@@ -1490,8 +1490,10 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
         return r;
     }
 
+    /*取得此eventfd对应的fd*/
     file.fd = event_notifier_get_wfd(&vq->masked_notifier);
-    r = dev->vhost_ops->vhost_set_vring_call(dev, &file);//发送vring call消息
+    //向kernel注入tx kick用eventfd
+    r = dev->vhost_ops->vhost_set_vring_call(dev, &file);
     if (r) {
         VHOST_OPS_DEBUG(r, "vhost_set_vring_call failed");
         goto fail_call;
@@ -1499,6 +1501,8 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
 
     vq->dev = dev;
 
+    /*如果有此回调，则初始化化向kernel注入error eventfd,即在kernel vhost发现
+     * 错误时，通过此eventfd通知qemu*/
     if (dev->vhost_ops->vhost_set_vring_err) {
         r = event_notifier_init(&vq->error_notifier, 0);
         if (r < 0) {
@@ -1512,6 +1516,7 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
             goto fail_err;
         }
 
+        /*设置此错误通知的响应回调，此情况下网卡要进入出错状态*/
         event_notifier_set_handler(&vq->error_notifier,
                                    vhost_virtqueue_error_notifier);
     }
@@ -1808,7 +1813,7 @@ bool vhost_virtqueue_pending(struct vhost_dev *hdev, int n)
     //取n号vq
     struct vhost_virtqueue *vq = hdev->vqs + n - hdev->vq_index;
     assert(n >= hdev->vq_index && n < hdev->vq_index + hdev->nvqs);
-    //等待接收vq队列通知
+    //等待接收vq队列通知(如返回即意味着：vhost tx方向知会qemu要向guest发收包中断）
     return event_notifier_test_and_clear(&vq->masked_notifier);
 }
 

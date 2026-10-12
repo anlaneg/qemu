@@ -33,7 +33,9 @@ struct vhost_virtqueue {
     unsigned avail_size;
     unsigned long long used_phys;
     unsigned used_size;
+    /*vq向kernel注入的vring call event(用于kernel通知qemu，以便向guest注入中断)*/
     EventNotifier masked_notifier;
+    /*vq向kernel注入的event(用于kernel通知qemu发生错误了）*/
     EventNotifier error_notifier;
     EventNotifier masked_config_notifier;
     struct vhost_dev *dev;

@@ -1145,8 +1145,9 @@ static void virtio_pci_vector_poll(PCIDevice *dev,
         }
         if (k->guest_notifier_pending) {
             if (k->guest_notifier_pending(vdev, queue_no)) {
-                /*设置中断触发*/
-                msix_set_pending(dev, vector);
+                /*上面函数返回，需设置中断触发,准备给guest注入中断*/
+            	/*https://blog.csdn.net/home19900111/article/details/128610752*/
+                msix_set_pending(dev, vector/*要触发的中断号*/);
             }
         } else if (event_notifier_test_and_clear(notifier)) {
             msix_set_pending(dev, vector);

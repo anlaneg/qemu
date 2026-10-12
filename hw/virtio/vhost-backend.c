@@ -149,19 +149,22 @@ static int vhost_kernel_get_vring_base(struct vhost_dev *dev,
 static int vhost_kernel_set_vring_kick(struct vhost_dev *dev,
                                        struct vhost_vring_file *file)
 {
+	/*设置vring的rx通知(即qemu收到guest的kick,通知vhost,使vhost（如收到中断样）自接口收包）
+	 * vhost_vring_file file*/
     return vhost_kernel_call(dev, VHOST_SET_VRING_KICK, file);
 }
 
 static int vhost_kernel_set_vring_call(struct vhost_dev *dev,
                                        struct vhost_vring_file *file)
 {
-    /*设置vring的通知file*/
+    /*设置vring的tx通知(即vhost调用qemu,使qemu向guest注入中断）vhost_vring_file file*/
     return vhost_kernel_call(dev, VHOST_SET_VRING_CALL, file);
 }
 
 static int vhost_kernel_set_vring_err(struct vhost_dev *dev,
                                       struct vhost_vring_file *file)
 {
+	/*设置vring的错误通知（即vhost发现出错了，通过此eventfd通知qemu)*/
     return vhost_kernel_call(dev, VHOST_SET_VRING_ERR, file);
 }
 
@@ -355,7 +358,7 @@ const VhostOps kernel_ops = {
         .vhost_set_vring_base = vhost_kernel_set_vring_base,
         .vhost_get_vring_base = vhost_kernel_get_vring_base,
         .vhost_set_vring_kick = vhost_kernel_set_vring_kick,
-        //向下设置通知用的文件，例如eventfd
+        //设置kernel向上通知用的文件(kernel向上kick qemu,让qemu给guest kernel注入中断）
         .vhost_set_vring_call = vhost_kernel_set_vring_call,
         .vhost_set_vring_err = vhost_kernel_set_vring_err,
         .vhost_set_vring_busyloop_timeout =

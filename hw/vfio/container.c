@@ -295,10 +295,12 @@ bool vfio_get_info_dma_avail(struct vfio_iommu_type1_info *info,
     hdr = vfio_get_iommu_type1_info_cap(info,
                                         VFIO_IOMMU_TYPE1_INFO_DMA_AVAIL);
     if (!hdr) {
+    	/*没有找到此header*/
         return false;
     }
 
     if (avail != NULL) {
+    	/*填充获得的avail*/
         cap = (void *) hdr;
         *avail = cap->avail;
     }
@@ -448,6 +450,7 @@ static int vfio_get_iommu_info(VFIOContainer *container,
 again:
     (*info)->argsz = argsz;
 
+    /*向kernel请求iommu info*/
     if (ioctl(container->fd, VFIO_IOMMU_GET_INFO, *info)) {
         g_free(*info);
         *info = NULL;
@@ -455,6 +458,7 @@ again:
     }
 
     if (((*info)->argsz > argsz)) {
+    	/*提供的参数空间不足，扩大申请空间再尝试*/
         argsz = (*info)->argsz;
         *info = g_realloc(*info, argsz);
         goto again;
@@ -522,13 +526,14 @@ static bool vfio_legacy_setup(VFIOContainerBase *bcontainer, Error **errp)
     }
 
     if (info->flags & VFIO_IOMMU_INFO_PGSIZES) {
+    	/*获得页大小*/
         bcontainer->pgsizes = info->iova_pgsizes;
     } else {
         bcontainer->pgsizes = qemu_real_host_page_size();
     }
 
     if (!vfio_get_info_dma_avail(info, &bcontainer->dma_max_mappings)) {
-        bcontainer->dma_max_mappings = 65535;
+        bcontainer->dma_max_mappings = 65535;/*info无此数据，设置默认值*/
     }
 
     vfio_get_info_iova_range(info, bcontainer);
